@@ -1,26 +1,37 @@
 /*
  * ============================================================
  * WebBktx CPU
+ * Experimental x86-32 Execution Engine
  *
- * Version: 0.7B
- *
- * Experimental 32-bit x86 CPU
+ * Version: 0.8 MAX
  *
  * Features:
- *   - 8 general-purpose registers
- *   - EIP
- *   - EFLAGS
- *   - stack
- *   - memory access
- *   - CPU reset
- *   - instruction stepping
- *   - execution cycle counter
- *   - basic arithmetic helpers
- *   - flags
- *   - safe execution limit
+ *   - 32-bit general purpose registers
+ *   - EIP / EFLAGS
+ *   - 64-bit-style cycle counter
+ *   - stack operations
+ *   - arithmetic flags
+ *   - logical flags
+ *   - CALL / RET
+ *   - JMP
+ *   - conditional jumps
+ *   - CMP / TEST
+ *   - MOV
+ *   - ADD / SUB
+ *   - INC / DEC
+ *   - AND / OR / XOR
+ *   - PUSH / POP
+ *   - NOP
+ *   - HLT
+ *   - decoder integration
+ *   - instruction tracing
+ *   - execution limits
+ *   - breakpoints
+ *   - CPU snapshots
  *
- * Instructions are decoded by decoder.js.
- *
+ * NOTE:
+ * This is an experimental x86 CPU layer.
+ * It is NOT a complete Xbox CPU/emulation environment.
  * ============================================================
  */
 
@@ -28,17 +39,53 @@
 
 
 /* ============================================================
-   FLAGS
+   VERSION
+============================================================ */
+
+const WEBBKTX_CPU_VERSION = "0.8 MAX";
+
+
+/* ============================================================
+   EFLAGS
 ============================================================ */
 
 const X86_FLAGS = {
 
-    CF: 1 << 0,
-    ZF: 1 << 6,
-    SF: 1 << 7,
-    OF: 1 << 11
+    CF: 0x00000001,
+
+    PF: 0x00000004,
+
+    AF: 0x00000010,
+
+    ZF: 0x00000040,
+
+    SF: 0x00000080,
+
+    IF: 0x00000200,
+
+    DF: 0x00000400,
+
+    OF: 0x00000800
 
 };
+
+
+/* ============================================================
+   REGISTER NAMES
+============================================================ */
+
+const REGISTER_NAMES = [
+
+    "EAX",
+    "ECX",
+    "EDX",
+    "EBX",
+    "ESP",
+    "EBP",
+    "ESI",
+    "EDI"
+
+];
 
 
 /* ============================================================
@@ -62,9 +109,11 @@ class WebBktxCPU {
             memory;
 
 
-        /* ----------------------------------------------------
-           GENERAL PURPOSE REGISTERS
-        ---------------------------------------------------- */
+        /*
+         * ----------------------------------------------------
+         * General purpose registers
+         * ----------------------------------------------------
+         */
 
         this.EAX = 0;
         this.EBX = 0;
@@ -78,27 +127,38 @@ class WebBktxCPU {
         this.ESP = 0;
 
 
-        /* ----------------------------------------------------
-           PROGRAM COUNTER
-        ---------------------------------------------------- */
+        /*
+         * ----------------------------------------------------
+         * Program state
+         * ----------------------------------------------------
+         */
 
         this.EIP = 0;
 
-
-        /* ----------------------------------------------------
-           FLAGS
-        ---------------------------------------------------- */
-
-        this.EFLAGS = 0;
+        this.EFLAGS =
+            0x00000002;
 
 
-        /* ----------------------------------------------------
-           EXECUTION STATE
-        ---------------------------------------------------- */
+        /*
+         * ----------------------------------------------------
+         * Execution state
+         * ----------------------------------------------------
+         */
 
         this.running = false;
 
         this.halted = false;
+
+        this.faulted = false;
+
+        this.lastError = null;
+
+
+        /*
+         * ----------------------------------------------------
+         * Counters
+         * ----------------------------------------------------
+         */
 
         this.cycles = 0;
 
@@ -106,8 +166,9 @@ class WebBktxCPU {
 
 
         /*
-         * Maximum number of instructions allowed
-         * during one run().
+         * ----------------------------------------------------
+         * Limits
+         * ----------------------------------------------------
          */
 
         this.maxInstructions =
@@ -115,17 +176,54 @@ class WebBktxCPU {
 
 
         /*
-         * Decoder will be attached later.
+         * ----------------------------------------------------
+         * Decoder
+         * ----------------------------------------------------
          */
 
         this.decoder = null;
 
 
         /*
-         * Optional debugging callback.
+         * ----------------------------------------------------
+         * Debugging
+         * ----------------------------------------------------
+         */
+
+        this.traceEnabled = false;
+
+        this.trace = [];
+
+        this.maxTraceEntries =
+            1000;
+
+
+        /*
+         * ----------------------------------------------------
+         * Breakpoints
+         * ----------------------------------------------------
+         */
+
+        this.breakpoints =
+            new Set();
+
+
+        /*
+         * ----------------------------------------------------
+         * Callbacks
+         * ----------------------------------------------------
          */
 
         this.onInstruction = null;
+
+        this.onBreakpoint = null;
+
+        this.onHalt = null;
+
+        this.onFault = null;
+
+
+        this.reset();
 
     }
 
@@ -146,26 +244,44 @@ class WebBktxCPU {
 
         this.EBP = 0;
 
+
         /*
-         * Put the stack near the end of RAM.
+         * Stack starts near top of RAM.
          */
 
         this.ESP =
-            this.memory.size - 4;
+            (
+                this.memory.size -
+                4
+            ) >>> 0;
 
 
         this.EIP = 0;
 
-        this.EFLAGS = 0;
+
+        /*
+         * Bit 1 of EFLAGS is normally always set.
+         */
+
+        this.EFLAGS =
+            0x00000002;
 
 
         this.running = false;
 
         this.halted = false;
 
+        this.faulted = false;
+
+        this.lastError = null;
+
+
         this.cycles = 0;
 
         this.instructionsExecuted = 0;
+
+
+        this.trace.length = 0;
 
     }
 
@@ -183,28 +299,34 @@ class WebBktxCPU {
         switch (register) {
 
             case "EAX":
-                return this.EAX;
+                return this.EAX >>> 0;
 
             case "EBX":
-                return this.EBX;
+                return this.EBX >>> 0;
 
             case "ECX":
-                return this.ECX;
+                return this.ECX >>> 0;
 
             case "EDX":
-                return this.EDX;
+                return this.EDX >>> 0;
 
             case "ESI":
-                return this.ESI;
+                return this.ESI >>> 0;
 
             case "EDI":
-                return this.EDI;
+                return this.EDI >>> 0;
 
             case "EBP":
-                return this.EBP;
+                return this.EBP >>> 0;
 
             case "ESP":
-                return this.ESP;
+                return this.ESP >>> 0;
+
+            case "EIP":
+                return this.EIP >>> 0;
+
+            case "EFLAGS":
+                return this.EFLAGS >>> 0;
 
             default:
 
@@ -217,17 +339,13 @@ class WebBktxCPU {
     }
 
 
-    setRegister(
-        name,
-        value
-    ) {
+    setRegister(name, value) {
 
         const register =
             String(name).toUpperCase();
 
-
         const normalized =
-            value >>> 0;
+            Number(value) >>> 0;
 
 
         switch (register) {
@@ -264,6 +382,14 @@ class WebBktxCPU {
                 this.ESP = normalized;
                 break;
 
+            case "EIP":
+
+                this.setEIP(
+                    normalized
+                );
+
+                break;
+
             default:
 
                 throw new Error(
@@ -274,10 +400,6 @@ class WebBktxCPU {
 
     }
 
-
-    /* ========================================================
-       REGISTER SNAPSHOT
-    ======================================================== */
 
     getRegisters() {
 
@@ -305,22 +427,45 @@ class WebBktxCPU {
 
 
     /* ========================================================
-       FLAG HELPERS
+       EIP
+    ======================================================== */
+
+    setEIP(address) {
+
+        const value =
+            Number(address) >>> 0;
+
+
+        /*
+         * We allow addresses outside the physical
+         * RAM range to support future virtual mapping,
+         * but instruction fetching itself remains
+         * protected by the memory subsystem.
+         */
+
+        this.EIP =
+            value;
+
+    }
+
+
+    /* ========================================================
+       FLAGS
     ======================================================== */
 
     getFlag(flag) {
 
         return (
-            (this.EFLAGS & flag) !== 0
+            (
+                this.EFLAGS &
+                flag
+            ) !== 0
         );
 
     }
 
 
-    setFlag(
-        flag,
-        enabled
-    ) {
+    setFlag(flag, enabled) {
 
         if (enabled) {
 
@@ -333,44 +478,67 @@ class WebBktxCPU {
         }
 
 
+        /*
+         * EFLAGS bit 1 stays set.
+         */
+
+        this.EFLAGS |= 0x02;
+
         this.EFLAGS >>>= 0;
 
     }
 
 
-    clearFlags() {
+    clearArithmeticFlags() {
 
-        this.EFLAGS = 0;
+        this.EFLAGS &= ~(
+            X86_FLAGS.CF |
+            X86_FLAGS.PF |
+            X86_FLAGS.AF |
+            X86_FLAGS.ZF |
+            X86_FLAGS.SF |
+            X86_FLAGS.OF
+        );
+
+
+        this.EFLAGS |= 0x02;
+
+        this.EFLAGS >>>= 0;
 
     }
 
 
     /* ========================================================
-       UPDATE FLAGS
+       PARITY
     ======================================================== */
 
-    updateLogicFlags(
-        result
-    ) {
+    parity8(value) {
 
-        result >>>= 0;
+        value &= 0xFF;
 
-
-        this.setFlag(
-            X86_FLAGS.ZF,
-            result === 0
-        );
+        let parity = 0;
 
 
-        this.setFlag(
-            X86_FLAGS.SF,
-            (result & 0x80000000) !== 0
-        );
+        while (value) {
+
+            parity ^= value & 1;
+
+            value >>>
+                1;
+
+        }
 
 
-        /*
-         * Logical operations clear CF and OF.
-         */
+        return parity === 0;
+
+    }
+
+
+    updateLogicFlags(result) {
+
+        result >>>
+            = 0;
+
 
         this.setFlag(
             X86_FLAGS.CF,
@@ -383,33 +551,6 @@ class WebBktxCPU {
             false
         );
 
-    }
-
-
-    updateAddFlags(
-        a,
-        b,
-        result
-    ) {
-
-        a >>>= 0;
-        b >>>= 0;
-        result >>>= 0;
-
-
-        /*
-         * Carry.
-         */
-
-        this.setFlag(
-            X86_FLAGS.CF,
-            result < a
-        );
-
-
-        /*
-         * Zero.
-         */
 
         this.setFlag(
             X86_FLAGS.ZF,
@@ -417,24 +558,95 @@ class WebBktxCPU {
         );
 
 
-        /*
-         * Sign.
-         */
-
         this.setFlag(
             X86_FLAGS.SF,
-            (result & 0x80000000) !== 0
+            (
+                result &
+                0x80000000
+            ) !== 0
         );
 
 
-        /*
-         * Signed overflow.
-         */
+        this.setFlag(
+            X86_FLAGS.PF,
+            this.parity8(result)
+        );
+
+    }
+
+
+    /* ========================================================
+       ADD FLAGS
+    ======================================================== */
+
+    updateAddFlags(
+        a,
+        b,
+        result
+    ) {
+
+        a >>>=
+            0;
+
+        b >>>=
+            0;
+
+        result >>>
+            = 0;
+
+
+        this.setFlag(
+            X86_FLAGS.CF,
+            result < a
+        );
+
+
+        this.setFlag(
+            X86_FLAGS.ZF,
+            result === 0
+        );
+
+
+        this.setFlag(
+            X86_FLAGS.SF,
+            (
+                result &
+                0x80000000
+            ) !== 0
+        );
+
+
+        this.setFlag(
+            X86_FLAGS.PF,
+            this.parity8(result)
+        );
+
+
+        this.setFlag(
+            X86_FLAGS.AF,
+            (
+                (
+                    a ^
+                    b ^
+                    result
+                ) &
+                0x10
+            ) !== 0
+        );
+
 
         const overflow =
             (
-                ((a ^ result) & 0x80000000) !== 0 &&
-                ((b ^ result) & 0x80000000) !== 0
+                (
+                    (~(
+                        a ^ b
+                    )) &
+                    (
+                        a ^
+                        result
+                    ) &
+                    0x80000000
+                ) !== 0
             );
 
 
@@ -446,20 +658,25 @@ class WebBktxCPU {
     }
 
 
+    /* ========================================================
+       SUB FLAGS
+    ======================================================== */
+
     updateSubFlags(
         a,
         b,
         result
     ) {
 
-        a >>>= 0;
-        b >>>= 0;
-        result >>>= 0;
+        a >>>=
+            0;
 
+        b >>>=
+            0;
 
-        /*
-         * Borrow / carry.
-         */
+        result >>>
+            = 0;
+
 
         this.setFlag(
             X86_FLAGS.CF,
@@ -475,18 +692,45 @@ class WebBktxCPU {
 
         this.setFlag(
             X86_FLAGS.SF,
-            (result & 0x80000000) !== 0
+            (
+                result &
+                0x80000000
+            ) !== 0
         );
 
 
-        /*
-         * Signed overflow.
-         */
+        this.setFlag(
+            X86_FLAGS.PF,
+            this.parity8(result)
+        );
+
+
+        this.setFlag(
+            X86_FLAGS.AF,
+            (
+                (
+                    a ^
+                    b ^
+                    result
+                ) &
+                0x10
+            ) !== 0
+        );
+
 
         const overflow =
             (
-                ((a ^ b) & 0x80000000) !== 0 &&
-                ((a ^ result) & 0x80000000) !== 0
+                (
+                    (
+                        a ^
+                        b
+                    ) &
+                    (
+                        a ^
+                        result
+                    ) &
+                    0x80000000
+                ) !== 0
             );
 
 
@@ -502,17 +746,20 @@ class WebBktxCPU {
        ARITHMETIC
     ======================================================== */
 
-    add32(
-        a,
-        b
-    ) {
+    add32(a, b) {
 
-        a >>>= 0;
-        b >>>= 0;
+        a >>>=
+            0;
+
+        b >>>=
+            0;
 
 
         const result =
-            (a + b) >>> 0;
+            (
+                a +
+                b
+            ) >>> 0;
 
 
         this.updateAddFlags(
@@ -527,17 +774,20 @@ class WebBktxCPU {
     }
 
 
-    sub32(
-        a,
-        b
-    ) {
+    sub32(a, b) {
 
-        a >>>= 0;
-        b >>>= 0;
+        a >>>=
+            0;
+
+        b >>>=
+            0;
 
 
         const result =
-            (a - b) >>> 0;
+            (
+                a -
+                b
+            ) >>> 0;
 
 
         this.updateSubFlags(
@@ -554,29 +804,31 @@ class WebBktxCPU {
 
     inc32(value) {
 
-        value >>>= 0;
-
-
-        const result =
-            (value + 1) >>> 0;
-
-
-        /*
-         * INC does not modify CF.
-         */
-
         const oldCF =
             this.getFlag(
                 X86_FLAGS.CF
             );
 
 
+        const result =
+            (
+                (
+                    value >>> 0
+                ) +
+                1
+            ) >>> 0;
+
+
         this.updateAddFlags(
-            value,
+            value >>> 0,
             1,
             result
         );
 
+
+        /*
+         * INC does not change CF.
+         */
 
         this.setFlag(
             X86_FLAGS.CF,
@@ -591,29 +843,31 @@ class WebBktxCPU {
 
     dec32(value) {
 
-        value >>>= 0;
-
-
-        const result =
-            (value - 1) >>> 0;
-
-
-        /*
-         * DEC does not modify CF.
-         */
-
         const oldCF =
             this.getFlag(
                 X86_FLAGS.CF
             );
 
 
+        const result =
+            (
+                (
+                    value >>> 0
+                ) -
+                1
+            ) >>> 0;
+
+
         this.updateSubFlags(
-            value,
+            value >>> 0,
             1,
             result
         );
 
+
+        /*
+         * DEC does not change CF.
+         */
 
         this.setFlag(
             X86_FLAGS.CF,
@@ -627,16 +881,20 @@ class WebBktxCPU {
 
 
     /* ========================================================
-       LOGICAL OPERATIONS
+       LOGICAL
     ======================================================== */
 
-    xor32(
-        a,
-        b
-    ) {
+    xor32(a, b) {
 
         const result =
-            (a ^ b) >>> 0;
+            (
+                (
+                    a >>> 0
+                ) ^
+                (
+                    b >>> 0
+                )
+            ) >>> 0;
 
 
         this.updateLogicFlags(
@@ -649,13 +907,17 @@ class WebBktxCPU {
     }
 
 
-    and32(
-        a,
-        b
-    ) {
+    and32(a, b) {
 
         const result =
-            (a & b) >>> 0;
+            (
+                (
+                    a >>> 0
+                ) &
+                (
+                    b >>> 0
+                )
+            ) >>> 0;
 
 
         this.updateLogicFlags(
@@ -668,13 +930,17 @@ class WebBktxCPU {
     }
 
 
-    or32(
-        a,
-        b
-    ) {
+    or32(a, b) {
 
         const result =
-            (a | b) >>> 0;
+            (
+                (
+                    a >>> 0
+                ) |
+                (
+                    b >>> 0
+                )
+            ) >>> 0;
 
 
         this.updateLogicFlags(
@@ -693,13 +959,21 @@ class WebBktxCPU {
 
     push32(value) {
 
-        /*
-         * x86 stack grows downward.
-         */
+        if (
+            this.ESP < 4
+        ) {
+
+            throw new Error(
+                "Stack underflow."
+            );
+
+        }
+
 
         this.ESP =
             (
-                this.ESP - 4
+                this.ESP -
+                4
             ) >>> 0;
 
 
@@ -713,6 +987,18 @@ class WebBktxCPU {
 
     pop32() {
 
+        if (
+            this.ESP + 4 >
+            this.memory.size
+        ) {
+
+            throw new Error(
+                "Stack overflow."
+            );
+
+        }
+
+
         const value =
             this.memory.read32(
                 this.ESP
@@ -721,7 +1007,8 @@ class WebBktxCPU {
 
         this.ESP =
             (
-                this.ESP + 4
+                this.ESP +
+                4
             ) >>> 0;
 
 
@@ -730,9 +1017,7 @@ class WebBktxCPU {
     }
 
 
-    peekStack32(
-        offset = 0
-    ) {
+    peekStack32(offset = 0) {
 
         const address =
             (
@@ -743,19 +1028,19 @@ class WebBktxCPU {
 
         return this.memory.read32(
             address
-        );
+        ) >>> 0;
 
     }
 
 
     /* ========================================================
-       MEMORY HELPERS
+       MEMORY
     ======================================================== */
 
     read8(address) {
 
         return this.memory.read8(
-            address >>> 0
+            Number(address) >>> 0
         );
 
     }
@@ -764,7 +1049,7 @@ class WebBktxCPU {
     read16(address) {
 
         return this.memory.read16(
-            address >>> 0
+            Number(address) >>> 0
         );
 
     }
@@ -773,45 +1058,36 @@ class WebBktxCPU {
     read32(address) {
 
         return this.memory.read32(
-            address >>> 0
+            Number(address) >>> 0
         );
 
     }
 
 
-    write8(
-        address,
-        value
-    ) {
+    write8(address, value) {
 
         this.memory.write8(
-            address >>> 0,
+            Number(address) >>> 0,
             value
         );
 
     }
 
 
-    write16(
-        address,
-        value
-    ) {
+    write16(address, value) {
 
         this.memory.write16(
-            address >>> 0,
+            Number(address) >>> 0,
             value
         );
 
     }
 
 
-    write32(
-        address,
-        value
-    ) {
+    write32(address, value) {
 
         this.memory.write32(
-            address >>> 0,
+            Number(address) >>> 0,
             value
         );
 
@@ -822,18 +1098,120 @@ class WebBktxCPU {
        DECODER
     ======================================================== */
 
-    attachDecoder(
-        decoder
-    ) {
+    attachDecoder(decoder) {
+
+        if (!decoder) {
+
+            throw new Error(
+                "Cannot attach empty decoder."
+            );
+
+        }
+
 
         this.decoder =
             decoder;
+
+
+        return true;
 
     }
 
 
     /* ========================================================
-       SINGLE CPU STEP
+       BREAKPOINTS
+    ======================================================== */
+
+    addBreakpoint(address) {
+
+        this.breakpoints.add(
+            Number(address) >>> 0
+        );
+
+    }
+
+
+    removeBreakpoint(address) {
+
+        this.breakpoints.delete(
+            Number(address) >>> 0
+        );
+
+    }
+
+
+    clearBreakpoints() {
+
+        this.breakpoints.clear();
+
+    }
+
+
+    hasBreakpoint(address) {
+
+        return this.breakpoints.has(
+            Number(address) >>> 0
+        );
+
+    }
+
+
+    /* ========================================================
+       TRACE
+    ======================================================== */
+
+    clearTrace() {
+
+        this.trace.length = 0;
+
+    }
+
+
+    enableTrace(enabled = true) {
+
+        this.traceEnabled =
+            Boolean(enabled);
+
+    }
+
+
+    addTrace(entry) {
+
+        if (!this.traceEnabled) {
+
+            return;
+
+        }
+
+
+        this.trace.push(
+            entry
+        );
+
+
+        if (
+            this.trace.length >
+            this.maxTraceEntries
+        ) {
+
+            this.trace.shift();
+
+        }
+
+    }
+
+
+    getTrace() {
+
+        return [
+            ...this.trace
+        ];
+
+    }
+
+
+    /* ========================================================
+       SINGLE STEP
     ======================================================== */
 
     step() {
@@ -844,8 +1222,27 @@ class WebBktxCPU {
 
                 executed: false,
 
+                halted: true,
+
                 reason:
                     "CPU HALTED"
+
+            };
+
+        }
+
+
+        if (this.faulted) {
+
+            return {
+
+                executed: false,
+
+                faulted: true,
+
+                reason:
+                    this.lastError ||
+                    "CPU FAULT"
 
             };
 
@@ -861,56 +1258,172 @@ class WebBktxCPU {
         }
 
 
-        const oldEIP =
+        const address =
             this.EIP >>> 0;
 
 
         /*
-         * Decoder is expected to return
-         * an instruction object.
+         * Breakpoint.
          */
 
-        const instruction =
-            this.decoder.decode(
-                this,
-                this.EIP
-            );
+        if (
+            this.hasBreakpoint(address)
+        ) {
+
+            this.running =
+                false;
 
 
-        if (!instruction) {
+            if (
+                typeof this.onBreakpoint ===
+                "function"
+            ) {
 
-            throw new Error(
-                `Decoder returned no instruction ` +
-                `at 0x${oldEIP.toString(16)}`
-            );
+                this.onBreakpoint(
+                    address
+                );
+
+            }
+
+
+            return {
+
+                executed: false,
+
+                breakpoint: true,
+
+                address
+
+            };
 
         }
 
 
-        /*
-         * Execute decoded instruction.
-         */
+        let instruction;
+
+
+        try {
+
+            instruction =
+                this.decoder.decode(
+                    this,
+                    address
+                );
+
+        } catch (error) {
+
+            this.raiseFault(
+                error
+            );
+
+            throw error;
+
+        }
+
+
+        if (!instruction) {
+
+            const error =
+                new Error(
+                    `Decoder returned no instruction at 0x${
+                        address.toString(16)
+                    }`
+                );
+
+
+            this.raiseFault(
+                error
+            );
+
+
+            throw error;
+
+        }
+
 
         if (
             typeof instruction.execute !==
             "function"
         ) {
 
-            throw new Error(
-                "Decoded instruction has no execute() method."
+            const error =
+                new Error(
+                    "Decoded instruction has no execute() method."
+                );
+
+
+            this.raiseFault(
+                error
             );
+
+
+            throw error;
 
         }
 
 
-        instruction.execute(
-            this
-        );
+        /*
+         * Execute.
+         */
+
+        try {
+
+            instruction.execute(
+                this
+            );
+
+        } catch (error) {
+
+            this.raiseFault(
+                error
+            );
+
+            throw error;
+
+        }
 
 
         this.cycles++;
 
         this.instructionsExecuted++;
+
+
+        const result = {
+
+            executed: true,
+
+            address,
+
+            opcode:
+                instruction.opcode ??
+                null,
+
+            mnemonic:
+                instruction.mnemonic ??
+                instruction.name ??
+                "UNKNOWN",
+
+            instruction,
+
+            registers:
+                this.getRegisters(),
+
+            cycles:
+                this.cycles,
+
+            halted:
+                this.halted
+
+        };
+
+
+        /*
+         * Trace.
+         */
+
+        this.addTrace(
+            result
+        );
 
 
         /*
@@ -923,35 +1436,30 @@ class WebBktxCPU {
         ) {
 
             this.onInstruction(
-                {
-
-                    address:
-                        oldEIP,
-
-                    instruction,
-
-                    registers:
-                        this.getRegisters(),
-
-                    cycles:
-                        this.cycles
-
-                }
+                result
             );
 
         }
 
 
-        return {
+        /*
+         * HLT callback.
+         */
 
-            executed: true,
+        if (
+            this.halted &&
+            typeof this.onHalt ===
+            "function"
+        ) {
 
-            address:
-                oldEIP,
+            this.onHalt(
+                result
+            );
 
-            instruction
+        }
 
-        };
+
+        return result;
 
     }
 
@@ -979,12 +1487,17 @@ class WebBktxCPU {
         }
 
 
-        this.running = true;
+        this.running =
+            true;
 
-        this.halted = false;
+
+        this.halted =
+            false;
 
 
         let executed = 0;
+
+        let last = null;
 
 
         try {
@@ -992,10 +1505,24 @@ class WebBktxCPU {
             while (
                 this.running &&
                 !this.halted &&
-                executed < maxInstructions
+                !this.faulted &&
+                executed <
+                maxInstructions
             ) {
 
-                this.step();
+                last =
+                    this.step();
+
+
+                if (
+                    last &&
+                    last.breakpoint
+                ) {
+
+                    break;
+
+                }
+
 
                 executed++;
 
@@ -1003,7 +1530,8 @@ class WebBktxCPU {
 
         } finally {
 
-            this.running = false;
+            this.running =
+                false;
 
         }
 
@@ -1022,7 +1550,12 @@ class WebBktxCPU {
                 this.getRegisters(),
 
             halted:
-                this.halted
+                this.halted,
+
+            faulted:
+                this.faulted,
+
+            last
 
         };
 
@@ -1035,7 +1568,8 @@ class WebBktxCPU {
 
     stop() {
 
-        this.running = false;
+        this.running =
+            false;
 
     }
 
@@ -1046,53 +1580,69 @@ class WebBktxCPU {
 
     halt() {
 
-        this.halted = true;
+        this.halted =
+            true;
 
-        this.running = false;
+        this.running =
+            false;
 
     }
 
 
     /* ========================================================
-       SET ENTRY POINT
+       FAULT
     ======================================================== */
 
-    setEIP(address) {
+    raiseFault(error) {
+
+        this.faulted =
+            true;
+
+        this.running =
+            false;
+
+        this.lastError =
+            error instanceof Error
+                ? error.message
+                : String(error);
+
 
         if (
-            !Number.isInteger(address) ||
-            address < 0 ||
-            address >= this.memory.size
+            typeof this.onFault ===
+            "function"
         ) {
 
-            throw new RangeError(
-                `Invalid EIP: 0x${
-                    address.toString(16)
-                }`
+            this.onFault(
+                error
             );
 
         }
 
-
-        this.EIP =
-            address >>> 0;
-
     }
 
 
     /* ========================================================
-       CPU STATUS
+       CPU STATE
     ======================================================== */
 
     getStatus() {
 
         return {
 
+            version:
+                WEBBKTX_CPU_VERSION,
+
             running:
                 this.running,
 
             halted:
                 this.halted,
+
+            faulted:
+                this.faulted,
+
+            error:
+                this.lastError,
 
             cycles:
                 this.cycles,
@@ -1103,30 +1653,87 @@ class WebBktxCPU {
             registers:
                 this.getRegisters(),
 
-            flags:
-                {
+            flags: {
 
-                    CF:
-                        this.getFlag(
-                            X86_FLAGS.CF
-                        ),
+                CF:
+                    this.getFlag(
+                        X86_FLAGS.CF
+                    ),
 
-                    ZF:
-                        this.getFlag(
-                            X86_FLAGS.ZF
-                        ),
+                PF:
+                    this.getFlag(
+                        X86_FLAGS.PF
+                    ),
 
-                    SF:
-                        this.getFlag(
-                            X86_FLAGS.SF
-                        ),
+                AF:
+                    this.getFlag(
+                        X86_FLAGS.AF
+                    ),
 
-                    OF:
-                        this.getFlag(
-                            X86_FLAGS.OF
-                        )
+                ZF:
+                    this.getFlag(
+                        X86_FLAGS.ZF
+                    ),
 
-                }
+                SF:
+                    this.getFlag(
+                        X86_FLAGS.SF
+                    ),
+
+                OF:
+                    this.getFlag(
+                        X86_FLAGS.OF
+                    )
+
+            }
+
+        };
+
+    }
+
+
+    getState() {
+
+        return this.getStatus();
+
+    }
+
+
+    /* ========================================================
+       SNAPSHOT
+    ======================================================== */
+
+    snapshot() {
+
+        return {
+
+            EAX: this.EAX >>> 0,
+            EBX: this.EBX >>> 0,
+            ECX: this.ECX >>> 0,
+            EDX: this.EDX >>> 0,
+
+            ESI: this.ESI >>> 0,
+            EDI: this.EDI >>> 0,
+
+            EBP: this.EBP >>> 0,
+            ESP: this.ESP >>> 0,
+
+            EIP: this.EIP >>> 0,
+
+            EFLAGS:
+                this.EFLAGS >>> 0,
+
+            cycles:
+                this.cycles,
+
+            instructionsExecuted:
+                this.instructionsExecuted,
+
+            halted:
+                this.halted,
+
+            faulted:
+                this.faulted
 
         };
 
@@ -1143,20 +1750,13 @@ class WebBktxCPU {
 
 
         /*
-         * Basic register test.
+         * ADD
          */
-
-        this.EAX =
-            10;
-
-        this.EBX =
-            20;
-
 
         const add =
             this.add32(
-                this.EAX,
-                this.EBX
+                10,
+                20
             );
 
 
@@ -1168,14 +1768,11 @@ class WebBktxCPU {
 
                 passed: false,
 
-                test:
-                    "ADD",
+                test: "ADD",
 
-                expected:
-                    30,
+                expected: 30,
 
-                received:
-                    add
+                received: add
 
             };
 
@@ -1183,7 +1780,7 @@ class WebBktxCPU {
 
 
         /*
-         * Subtraction.
+         * SUB
          */
 
         const sub =
@@ -1201,14 +1798,11 @@ class WebBktxCPU {
 
                 passed: false,
 
-                test:
-                    "SUB",
+                test: "SUB",
 
-                expected:
-                    30,
+                expected: 30,
 
-                received:
-                    sub
+                received: sub
 
             };
 
@@ -1216,7 +1810,40 @@ class WebBktxCPU {
 
 
         /*
-         * Stack test.
+         * XOR
+         */
+
+        const xor =
+            this.xor32(
+                0xFF00,
+                0x0F00
+            );
+
+
+        if (
+            xor !== 0xF000
+        ) {
+
+            return {
+
+                passed: false,
+
+                test: "XOR",
+
+                expected:
+                    "0xF000",
+
+                received:
+                    "0x" +
+                    xor.toString(16)
+
+            };
+
+        }
+
+
+        /*
+         * Stack.
          */
 
         const oldESP =
@@ -1241,16 +1868,14 @@ class WebBktxCPU {
 
                 passed: false,
 
-                test:
-                    "STACK",
+                test: "STACK",
 
                 expected:
                     "0x12345678",
 
                 received:
                     "0x" +
-                    stackValue
-                        .toString(16)
+                    stackValue.toString(16)
 
             };
 
@@ -1258,7 +1883,8 @@ class WebBktxCPU {
 
 
         if (
-            this.ESP !== oldESP
+            this.ESP !==
+            oldESP
         ) {
 
             return {
@@ -1280,7 +1906,7 @@ class WebBktxCPU {
 
 
         /*
-         * Memory test.
+         * Memory.
          */
 
         const testAddress =
@@ -1308,16 +1934,68 @@ class WebBktxCPU {
 
                 passed: false,
 
-                test:
-                    "MEMORY",
+                test: "MEMORY",
 
                 expected:
                     "0xDEADBEEF",
 
                 received:
                     "0x" +
-                    memoryValue
-                        .toString(16)
+                    memoryValue.toString(16)
+
+            };
+
+        }
+
+
+        /*
+         * INC / DEC
+         */
+
+        const inc =
+            this.inc32(
+                9
+            );
+
+
+        if (
+            inc !== 10
+        ) {
+
+            return {
+
+                passed: false,
+
+                test: "INC",
+
+                expected: 10,
+
+                received: inc
+
+            };
+
+        }
+
+
+        const dec =
+            this.dec32(
+                10
+            );
+
+
+        if (
+            dec !== 9
+        ) {
+
+            return {
+
+                passed: false,
+
+                test: "DEC",
+
+                expected: 9,
+
+                received: dec
 
             };
 
@@ -1329,19 +2007,25 @@ class WebBktxCPU {
             passed: true,
 
             cpu:
-                "WebBktx x86 CPU 0.7B",
-
-            registers:
-                this.getRegisters(),
-
-            stack:
-                "PASS",
+                WEBBKTX_CPU_VERSION,
 
             arithmetic:
                 "PASS",
 
+            logic:
+                "PASS",
+
+            stack:
+                "PASS",
+
             memory:
-                "PASS"
+                "PASS",
+
+            incDec:
+                "PASS",
+
+            registers:
+                this.getRegisters()
 
         };
 
@@ -1362,6 +2046,11 @@ window.WebBktxCPUFlags =
     X86_FLAGS;
 
 
+window.WebBktxCPUVersion =
+    WEBBKTX_CPU_VERSION;
+
+
 console.log(
-    "WebBktx CPU 0.7B loaded."
+    `%cWebBktx CPU ${WEBBKTX_CPU_VERSION} loaded.`,
+    "font-weight:bold"
 );
