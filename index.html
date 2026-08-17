@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>WebBktx</title>
+
+    <link rel="stylesheet" href="style.css">
+    <link rel="manifest" href="manifest.json">
+</head>
+
+<body>
+
+    <div id="loadingScreen">
+        <h1>WebBktx</h1>
+        <p>Xbox Emulator for Web</p>
+
+        <div class="loader">
+            <div id="progress"></div>
+        </div>
+
+        <p id="loadingText">Ładowanie modułów...</p>
+    </div>
+
+
+    <div id="mainScreen" class="hidden">
+
+        <h1>WebBktx</h1>
+        <p>Xbox Emulator for Web</p>
+
+        <div class="box">
+
+            <h2>Wirtualna płyta</h2>
+
+            <p>
+                Wybierz lokalny plik gry.
+                Plik nie jest wysyłany na serwer.
+            </p>
+
+            <input
+                type="file"
+                id="gameFile"
+                accept=".iso,.xiso,.xbe"
+            >
+
+            <p id="fileInfo">
+                Nie wybrano pliku.
+            </p>
+
+            <button id="startButton" disabled>
+                ▶ START
+            </button>
+
+        </div>
+
+    </div>
+
+
+    <script src="app.js"></script>
+
+</body>
+</html>
