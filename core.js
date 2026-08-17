@@ -1,58 +1,23 @@
 /*
  * ============================================================
- * WebBktx Core 0.5
- * Experimental Xbox / x86 emulation core
+ * WebBktx Core 0.6
  *
- * Components:
+ * Experimental Original Xbox XBE execution core
  *
- *   - 32-bit x86 CPU
- *   - 16 MB emulated RAM
- *   - Register file
- *   - EFLAGS
- *   - Instruction fetch
- *   - Basic x86 decoder
- *   - Basic x86 execution
- *   - Stack
- *   - Memory addressing
- *   - XBE detection
+ * Features:
+ *   - 32 MB emulated RAM
  *   - XBE header parser
  *   - XBE section parser
- *   - XBE image loader
- *   - CPU diagnostics
+ *   - Entry Point XOR decoding
+ *   - Virtual -> file offset translation
+ *   - x86 instruction decoder
+ *   - Basic x86 execution
+ *   - Execution trace
+ *   - Safe instruction limit
  *
- * Supported instructions:
- *
- *   NOP
- *   MOV r32, imm32
- *   MOV r32, r/m32
- *   MOV r/m32, r32
- *   MOV EAX, moffs32
- *   MOV moffs32, EAX
- *   ADD EAX, imm32
- *   ADD r/m32, r32
- *   ADD r32, r/m32
- *   SUB EAX, imm32
- *   SUB r/m32, r32
- *   SUB r32, r/m32
- *   INC r32
- *   DEC r32
- *   CMP EAX, imm32
- *   CMP r32, r/m32
- *   TEST EAX, imm32
- *   JMP rel8
- *   JMP rel32
- *   JZ / JE
- *   JNZ / JNE
- *   PUSH r32
- *   PUSH imm32
- *   POP r32
- *   CALL rel32
- *   RET
- *   HLT
- *
- * NOTE:
- * This is an educational/emulation core.
- * It is NOT a complete Xbox emulator.
+ * IMPORTANT:
+ * This is NOT a complete Xbox emulator.
+ * Xbox Kernel / GPU / audio / MMU / full x86 are not implemented.
  * ============================================================
  */
 
@@ -63,71 +28,30 @@
    CONSTANTS
 ============================================================ */
 
-const WEBBKTX_CORE_VERSION = "0.5";
+const WEBBKTX_VERSION = "0.6";
 
-const RAM_SIZE =
-    16 * 1024 * 1024;
+const RAM_SIZE = 32 * 1024 * 1024;
+
+const XBE_MAGIC = 0x48454258;
+
+const XBE_ENTRY_DEBUG  = 0x94859D4B;
+const XBE_ENTRY_RETAIL = 0xA8FC57AB;
 
 
 /*
- * XBE magic:
- *
- * ASCII:
- *
- * X B E H
- *
- * Little endian:
- *
- * 0x48454258
+ * Maximum number of instructions executed
+ * from an XBE during experimental boot.
  */
 
-const XBE_MAGIC =
-    0x48454258;
-
-
-/* ============================================================
-   FLAGS
-============================================================ */
-
-const FLAG_CF = 1 << 0;
-const FLAG_ZF = 1 << 6;
-const FLAG_SF = 1 << 7;
-const FLAG_OF = 1 << 11;
+const DEFAULT_EXECUTION_LIMIT = 256;
 
 
 /* ============================================================
    UTILITY
 ============================================================ */
 
-function toUint32(value) {
-
+function u32(value) {
     return value >>> 0;
-
-}
-
-
-function toInt32(value) {
-
-    return value | 0;
-
-}
-
-
-function signExtend8(value) {
-
-    return (
-        (value & 0x80)
-            ? value | 0xFFFFFF00
-            : value
-    ) | 0;
-
-}
-
-
-function signExtend32(value) {
-
-    return value | 0;
-
 }
 
 
@@ -135,13 +59,33 @@ function hex(value, digits = 8) {
 
     return (
         "0x" +
-        (
-            value >>> 0
-        )
-        .toString(16)
-        .toUpperCase()
-        .padStart(digits, "0")
+        (value >>> 0)
+            .toString(16)
+            .toUpperCase()
+            .padStart(digits, "0")
     );
+
+}
+
+
+function sign8(value) {
+
+    value &= 0xFF;
+
+    return value & 0x80
+        ? value - 0x100
+        : value;
+
+}
+
+
+function sign32(value) {
+
+    value >>>= 0;
+
+    return value & 0x80000000
+        ? value - 0x100000000
+        : value;
 
 }
 
@@ -154,33 +98,15 @@ class WebBktxMemory {
 
     constructor(size = RAM_SIZE) {
 
-        if (
-            !Number.isInteger(size) ||
-            size <= 0
-        ) {
-
-            throw new Error(
-                "Invalid memory size."
-            );
-
-        }
-
-
-        this.size =
-            size;
-
+        this.size = size;
 
         this.buffer =
-            new ArrayBuffer(
-                size
-            );
-
+            new ArrayBuffer(size);
 
         this.memory =
             new Uint8Array(
                 this.buffer
             );
-
 
         this.view =
             new DataView(
@@ -197,22 +123,16 @@ class WebBktxMemory {
     }
 
 
-    checkAddress(
-        address,
-        bytes = 1
-    ) {
+    checkAddress(address, bytes = 1) {
 
-        address =
-            address >>> 0;
-
+        address >>>= 0;
 
         if (
-            address + bytes >
-            this.size
+            address + bytes > this.size
         ) {
 
             throw new RangeError(
-                `Memory access outside RAM: ${hex(address)}`
+                `RAM access outside range: ${hex(address)}`
             );
 
         }
@@ -222,26 +142,16 @@ class WebBktxMemory {
 
     read8(address) {
 
-        this.checkAddress(
-            address,
-            1
-        );
+        this.checkAddress(address, 1);
 
-
-        return this.view.getUint8(
-            address
-        );
+        return this.view.getUint8(address);
 
     }
 
 
     read16(address) {
 
-        this.checkAddress(
-            address,
-            2
-        );
-
+        this.checkAddress(address, 2);
 
         return this.view.getUint16(
             address,
@@ -253,11 +163,7 @@ class WebBktxMemory {
 
     read32(address) {
 
-        this.checkAddress(
-            address,
-            4
-        );
-
+        this.checkAddress(address, 4);
 
         return this.view.getUint32(
             address,
@@ -267,16 +173,27 @@ class WebBktxMemory {
     }
 
 
-    write8(
-        address,
-        value
-    ) {
+    readS8(address) {
 
-        this.checkAddress(
-            address,
-            1
+        return sign8(
+            this.read8(address)
         );
 
+    }
+
+
+    readS32(address) {
+
+        return sign32(
+            this.read32(address)
+        );
+
+    }
+
+
+    write8(address, value) {
+
+        this.checkAddress(address, 1);
 
         this.view.setUint8(
             address,
@@ -286,16 +203,9 @@ class WebBktxMemory {
     }
 
 
-    write16(
-        address,
-        value
-    ) {
+    write16(address, value) {
 
-        this.checkAddress(
-            address,
-            2
-        );
-
+        this.checkAddress(address, 2);
 
         this.view.setUint16(
             address,
@@ -306,16 +216,9 @@ class WebBktxMemory {
     }
 
 
-    write32(
-        address,
-        value
-    ) {
+    write32(address, value) {
 
-        this.checkAddress(
-            address,
-            4
-        );
-
+        this.checkAddress(address, 4);
 
         this.view.setUint32(
             address,
@@ -326,16 +229,12 @@ class WebBktxMemory {
     }
 
 
-    writeBytes(
-        address,
-        bytes
-    ) {
+    writeBytes(address, bytes) {
 
         this.checkAddress(
             address,
             bytes.length
         );
-
 
         this.memory.set(
             bytes,
@@ -345,16 +244,12 @@ class WebBktxMemory {
     }
 
 
-    readBytes(
-        address,
-        length
-    ) {
+    readBytes(address, length) {
 
         this.checkAddress(
             address,
             length
         );
-
 
         return this.memory.slice(
             address,
@@ -363,34 +258,21 @@ class WebBktxMemory {
 
     }
 
-
-    get bufferView() {
-
-        return this.memory;
-
-    }
-
 }
 
 
 /* ============================================================
-   CPU
+   X86 CPU
 ============================================================ */
 
 class X86CPU {
 
-    constructor(
-        memory
-    ) {
+    constructor(memory) {
 
         this.memory =
             memory ||
             new WebBktxMemory();
 
-
-        /*
-         * General purpose registers
-         */
 
         this.registers = {
 
@@ -401,42 +283,25 @@ class X86CPU {
 
             ESP: 0,
             EBP: 0,
-
             ESI: 0,
             EDI: 0
 
         };
 
 
-        this.EIP =
-            0;
+        this.EIP = 0;
 
+        this.EFLAGS = 0x00000002;
 
-        this.EFLAGS =
-            0x00000002;
+        this.running = false;
 
+        this.halted = false;
 
-        this.running =
-            false;
+        this.cycles = 0;
 
+        this.instructions = 0;
 
-        this.halted =
-            false;
-
-
-        this.cycles =
-            0;
-
-
-        this.instructions =
-            0;
-
-
-        this.lastInstruction =
-            null;
-
-
-        this.reset();
+        this.trace = [];
 
     }
 
@@ -444,63 +309,35 @@ class X86CPU {
     reset() {
 
         for (
-            const register
+            const name
             of Object.keys(
                 this.registers
             )
         ) {
 
-            this.registers[
-                register
-            ] = 0;
+            this.registers[name] = 0;
 
         }
 
 
-        /*
-         * Stack starts near the end of RAM.
-         */
+        this.EIP = 0;
 
-        this.registers.ESP =
-            (
-                this.memory.size -
-                4
-            ) >>> 0;
+        this.EFLAGS = 0x00000002;
 
+        this.running = false;
 
-        this.EIP =
-            0;
+        this.halted = false;
 
+        this.cycles = 0;
 
-        this.EFLAGS =
-            0x00000002;
+        this.instructions = 0;
 
-
-        this.running =
-            false;
-
-
-        this.halted =
-            false;
-
-
-        this.cycles =
-            0;
-
-
-        this.instructions =
-            0;
-
-
-        this.lastInstruction =
-            null;
+        this.trace = [];
 
     }
 
 
-    getRegister(
-        index
-    ) {
+    getRegister(index) {
 
         const names = [
 
@@ -514,31 +351,15 @@ class X86CPU {
             "EDI"
 
         ];
-
-
-        if (
-            index < 0 ||
-            index > 7
-        ) {
-
-            throw new Error(
-                "Invalid register index."
-            );
-
-        }
-
 
         return this.registers[
-            names[index]
-        ] >>> 0;
+            names[index & 7]
+        ];
 
     }
 
 
-    setRegister(
-        index,
-        value
-    ) {
+    setRegister(index, value) {
 
         const names = [
 
@@ -553,37 +374,53 @@ class X86CPU {
 
         ];
 
-
-        if (
-            index < 0 ||
-            index > 7
-        ) {
-
-            throw new Error(
-                "Invalid register index."
-            );
-
-        }
-
-
         this.registers[
-            names[index]
-        ] =
-            value >>> 0;
+            names[index & 7]
+        ] = u32(value);
 
     }
 
 
-    push32(
-        value
-    ) {
+    fetch8() {
+
+        const value =
+            this.memory.read8(
+                this.EIP
+            );
+
+        this.EIP =
+            u32(
+                this.EIP + 1
+            );
+
+        return value;
+
+    }
+
+
+    fetch32() {
+
+        const value =
+            this.memory.read32(
+                this.EIP
+            );
+
+        this.EIP =
+            u32(
+                this.EIP + 4
+            );
+
+        return value;
+
+    }
+
+
+    push32(value) {
 
         this.registers.ESP =
-            (
-                this.registers.ESP -
-                4
-            ) >>> 0;
-
+            u32(
+                this.registers.ESP - 4
+            );
 
         this.memory.write32(
             this.registers.ESP,
@@ -600,489 +437,568 @@ class X86CPU {
                 this.registers.ESP
             );
 
-
         this.registers.ESP =
-            (
-                this.registers.ESP +
-                4
-            ) >>> 0;
-
-
-        return value;
-
-    }
-
-
-    setFlag(
-        flag,
-        state
-    ) {
-
-        if (state) {
-
-            this.EFLAGS |= flag;
-
-        } else {
-
-            this.EFLAGS &= ~flag;
-
-        }
-
-    }
-
-
-    getFlag(
-        flag
-    ) {
-
-        return (
-            this.EFLAGS &
-            flag
-        ) !== 0;
-
-    }
-
-
-    updateAddFlags(
-        a,
-        b,
-        result
-    ) {
-
-        a >>>= 0;
-        b >>>= 0;
-        result >>>= 0;
-
-
-        this.setFlag(
-            FLAG_CF,
-            result < a
-        );
-
-
-        this.setFlag(
-            FLAG_ZF,
-            result === 0
-        );
-
-
-        this.setFlag(
-            FLAG_SF,
-            (result & 0x80000000) !== 0
-        );
-
-
-        const signedA =
-            a | 0;
-
-        const signedB =
-            b | 0;
-
-        const signedResult =
-            result | 0;
-
-
-        this.setFlag(
-            FLAG_OF,
-            (
-                signedA >= 0 &&
-                signedB >= 0 &&
-                signedResult < 0
-            ) ||
-            (
-                signedA < 0 &&
-                signedB < 0 &&
-                signedResult >= 0
-            )
-        );
-
-    }
-
-
-    updateSubFlags(
-        a,
-        b,
-        result
-    ) {
-
-        a >>>= 0;
-        b >>>= 0;
-        result >>>= 0;
-
-
-        this.setFlag(
-            FLAG_CF,
-            a < b
-        );
-
-
-        this.setFlag(
-            FLAG_ZF,
-            result === 0
-        );
-
-
-        this.setFlag(
-            FLAG_SF,
-            (result & 0x80000000) !== 0
-        );
-
-
-        const signedA =
-            a | 0;
-
-        const signedB =
-            b | 0;
-
-        const signedResult =
-            result | 0;
-
-
-        this.setFlag(
-            FLAG_OF,
-            (
-                signedA >= 0 &&
-                signedB < 0 &&
-                signedResult < 0
-            ) ||
-            (
-                signedA < 0 &&
-                signedB >= 0 &&
-                signedResult >= 0
-            )
-        );
-
-    }
-
-
-    fetch8() {
-
-        const value =
-            this.memory.read8(
-                this.EIP
+            u32(
+                this.registers.ESP + 4
             );
 
-
-        this.EIP =
-            (
-                this.EIP +
-                1
-            ) >>> 0;
-
-
         return value;
 
     }
 
 
-    fetch32() {
+    updateZeroSign(value) {
 
-        const value =
-            this.memory.read32(
-                this.EIP
-            );
-
-
-        this.EIP =
-            (
-                this.EIP +
-                4
-            ) >>> 0;
-
-
-        return value;
-
-    }
-
-
-    decodeModRM() {
-
-        const byte =
-            this.fetch8();
-
-
-        const mod =
-            (byte >> 6) & 0x03;
-
-
-        const reg =
-            (byte >> 3) & 0x07;
-
-
-        const rm =
-            byte & 0x07;
-
-
-        let displacement =
-            0;
-
-
-        let displacementSize =
-            0;
-
+        value >>>= 0;
 
         /*
-         * 32-bit addressing.
-         *
-         * SIB is supported in basic form.
+         * ZF = bit 6
+         * SF = bit 7
          */
 
-        let sib = null;
+        this.EFLAGS &=
+            ~(
+                (1 << 6) |
+                (1 << 7)
+            );
 
 
-        if (
-            mod !== 3 &&
-            rm === 4
-        ) {
+        if (value === 0) {
 
-            sib =
-                this.fetch8();
-
-        }
-
-
-        if (
-            mod === 0
-        ) {
-
-            if (
-                rm === 5
-            ) {
-
-                displacement =
-                    this.fetch32();
-
-                displacementSize =
-                    4;
-
-            }
-
-            if (
-                sib &&
-                (sib & 7) === 5
-            ) {
-
-                displacement =
-                    this.fetch32();
-
-                displacementSize =
-                    4;
-
-            }
-
-        } else if (
-            mod === 1
-        ) {
-
-            displacement =
-                signExtend8(
-                    this.fetch8()
-                );
-
-            displacementSize =
-                1;
-
-        } else if (
-            mod === 2
-        ) {
-
-            displacement =
-                this.fetch32();
-
-            displacementSize =
-                4;
+            this.EFLAGS |=
+                (1 << 6);
 
         }
 
+
+        if (value & 0x80000000) {
+
+            this.EFLAGS |=
+                (1 << 7);
+
+        }
+
+    }
+
+
+    decodeModRM(byte) {
 
         return {
 
-            mod,
-            reg,
-            rm,
-            sib,
-            displacement,
-            displacementSize
+            mod:
+                (byte >> 6) & 3,
+
+            reg:
+                (byte >> 3) & 7,
+
+            rm:
+                byte & 7
 
         };
 
     }
 
 
-    getEffectiveAddress(
-        modrm
-    ) {
+    /*
+     * --------------------------------------------------------
+     * Decode one instruction
+     * --------------------------------------------------------
+     */
 
-        if (
-            modrm.mod === 3
-        ) {
+    decodeInstruction(address = this.EIP) {
 
-            return null;
-
-        }
-
-
-        let base =
-            0;
+        const start =
+            address >>> 0;
 
 
-        let index =
-            0;
+        const opcode =
+            this.memory.read8(
+                start
+            );
 
 
-        let scale =
-            1;
+        const result = {
+
+            address: start,
+
+            opcode,
+
+            length: 1,
+
+            mnemonic: "UNKNOWN",
+
+            bytes: [
+
+                opcode
+
+            ]
+
+        };
 
 
-        if (
-            modrm.sib
-        ) {
+        /*
+         * NOP
+         */
 
-            const sib =
-                modrm.sib;
+        if (opcode === 0x90) {
 
+            result.mnemonic = "NOP";
 
-            const scaleBits =
-                (sib >> 6) & 3;
-
-
-            scale =
-                1 << scaleBits;
-
-
-            const indexReg =
-                (sib >> 3) & 7;
-
-
-            const baseReg =
-                sib & 7;
-
-
-            if (
-                indexReg !== 4
-            ) {
-
-                index =
-                    this.getRegister(
-                        indexReg
-                    );
-
-            }
-
-
-            if (
-                modrm.mod === 0 &&
-                baseReg === 5
-            ) {
-
-                base =
-                    0;
-
-            } else {
-
-                base =
-                    this.getRegister(
-                        baseReg
-                    );
-
-            }
-
-        } else {
-
-            if (
-                modrm.mod === 0 &&
-                modrm.rm === 5
-            ) {
-
-                base =
-                    0;
-
-            } else {
-
-                base =
-                    this.getRegister(
-                        modrm.rm
-                    );
-
-            }
+            return result;
 
         }
 
 
-        return (
-            base +
-            index * scale +
-            modrm.displacement
-        ) >>> 0;
+        /*
+         * RET
+         */
+
+        if (opcode === 0xC3) {
+
+            result.mnemonic = "RET";
+
+            return result;
+
+        }
+
+
+        /*
+         * HLT
+         */
+
+        if (opcode === 0xF4) {
+
+            result.mnemonic = "HLT";
+
+            return result;
+
+        }
+
+
+        /*
+         * MOV r32, imm32
+         *
+         * B8 + register
+         */
+
+        if (
+            opcode >= 0xB8 &&
+            opcode <= 0xBF
+        ) {
+
+            const reg =
+                opcode - 0xB8;
+
+            const value =
+                this.memory.read32(
+                    start + 1
+                );
+
+
+            result.length = 5;
+
+            result.mnemonic =
+                `MOV ${
+                    Object.keys(
+                        this.registers
+                    )[reg]
+                }, ${hex(value)}`;
+
+            result.bytes =
+                Array.from(
+                    this.memory.readBytes(
+                        start,
+                        5
+                    )
+                );
+
+            return result;
+
+        }
+
+
+        /*
+         * PUSH imm32
+         */
+
+        if (opcode === 0x68) {
+
+            const value =
+                this.memory.read32(
+                    start + 1
+                );
+
+
+            result.length = 5;
+
+            result.mnemonic =
+                `PUSH ${hex(value)}`;
+
+            result.bytes =
+                Array.from(
+                    this.memory.readBytes(
+                        start,
+                        5
+                    )
+                );
+
+            return result;
+
+        }
+
+
+        /*
+         * PUSH register
+         */
+
+        if (
+            opcode >= 0x50 &&
+            opcode <= 0x57
+        ) {
+
+            const reg =
+                opcode - 0x50;
+
+            const name =
+                Object.keys(
+                    this.registers
+                )[reg];
+
+
+            result.mnemonic =
+                `PUSH ${name}`;
+
+            return result;
+
+        }
+
+
+        /*
+         * POP register
+         */
+
+        if (
+            opcode >= 0x58 &&
+            opcode <= 0x5F
+        ) {
+
+            const reg =
+                opcode - 0x58;
+
+            const name =
+                Object.keys(
+                    this.registers
+                )[reg];
+
+
+            result.mnemonic =
+                `POP ${name}`;
+
+            return result;
+
+        }
+
+
+        /*
+         * CALL rel32
+         */
+
+        if (opcode === 0xE8) {
+
+            const rel =
+                this.memory.readS32(
+                    start + 1
+                );
+
+
+            const target =
+                u32(
+                    start +
+                    5 +
+                    rel
+                );
+
+
+            result.length = 5;
+
+            result.mnemonic =
+                `CALL ${hex(target)}`;
+
+            result.bytes =
+                Array.from(
+                    this.memory.readBytes(
+                        start,
+                        5
+                    )
+                );
+
+            return result;
+
+        }
+
+
+        /*
+         * JMP rel32
+         */
+
+        if (opcode === 0xE9) {
+
+            const rel =
+                this.memory.readS32(
+                    start + 1
+                );
+
+
+            const target =
+                u32(
+                    start +
+                    5 +
+                    rel
+                );
+
+
+            result.length = 5;
+
+            result.mnemonic =
+                `JMP ${hex(target)}`;
+
+            result.bytes =
+                Array.from(
+                    this.memory.readBytes(
+                        start,
+                        5
+                    )
+                );
+
+            return result;
+
+        }
+
+
+        /*
+         * JMP rel8
+         */
+
+        if (opcode === 0xEB) {
+
+            const rel =
+                this.memory.readS8(
+                    start + 1
+                );
+
+
+            const target =
+                u32(
+                    start +
+                    2 +
+                    rel
+                );
+
+
+            result.length = 2;
+
+            result.mnemonic =
+                `JMP ${hex(target)}`;
+
+            result.bytes =
+                Array.from(
+                    this.memory.readBytes(
+                        start,
+                        2
+                    )
+                );
+
+            return result;
+
+        }
+
+
+        /*
+         * MOV r/m32, r32
+         *
+         * 89 /r
+         */
+
+        if (opcode === 0x89) {
+
+            const modrm =
+                this.memory.read8(
+                    start + 1
+                );
+
+
+            const decoded =
+                this.decodeModRM(
+                    modrm
+                );
+
+
+            result.length = 2;
+
+            result.mnemonic =
+                `MOV r/m32, ${
+                    Object.keys(
+                        this.registers
+                    )[decoded.reg]
+                }`;
+
+            return result;
+
+        }
+
+
+        /*
+         * MOV r32, r/m32
+         *
+         * 8B /r
+         */
+
+        if (opcode === 0x8B) {
+
+            const modrm =
+                this.memory.read8(
+                    start + 1
+                );
+
+
+            const decoded =
+                this.decodeModRM(
+                    modrm
+                );
+
+
+            result.length = 2;
+
+            result.mnemonic =
+                `MOV ${
+                    Object.keys(
+                        this.registers
+                    )[decoded.reg]
+                }, r/m32`;
+
+            return result;
+
+        }
+
+
+        /*
+         * ADD EAX, imm32
+         *
+         * 05
+         */
+
+        if (opcode === 0x05) {
+
+            const value =
+                this.memory.read32(
+                    start + 1
+                );
+
+
+            result.length = 5;
+
+            result.mnemonic =
+                `ADD EAX, ${hex(value)}`;
+
+            return result;
+
+        }
+
+
+        /*
+         * SUB EAX, imm32
+         *
+         * 2D
+         */
+
+        if (opcode === 0x2D) {
+
+            const value =
+                this.memory.read32(
+                    start + 1
+                );
+
+
+            result.length = 5;
+
+            result.mnemonic =
+                `SUB EAX, ${hex(value)}`;
+
+            return result;
+
+        }
+
+
+        /*
+         * XOR EAX, EAX
+         */
+
+        if (opcode === 0x31) {
+
+            const modrm =
+                this.memory.read8(
+                    start + 1
+                );
+
+
+            if (
+                modrm === 0xC0
+            ) {
+
+                result.length = 2;
+
+                result.mnemonic =
+                    "XOR EAX, EAX";
+
+                return result;
+
+            }
+
+        }
+
+
+        /*
+         * INC EAX
+         */
+
+        if (opcode === 0x40) {
+
+            result.mnemonic =
+                "INC EAX";
+
+            return result;
+
+        }
+
+
+        /*
+         * DEC EAX
+         */
+
+        if (opcode === 0x48) {
+
+            result.mnemonic =
+                "DEC EAX";
+
+            return result;
+
+        }
+
+
+        return result;
 
     }
 
 
-    readRM32(
-        modrm
-    ) {
-
-        if (
-            modrm.mod === 3
-        ) {
-
-            return this.getRegister(
-                modrm.rm
-            );
-
-        }
-
-
-        const address =
-            this.getEffectiveAddress(
-                modrm
-            );
-
-
-        return this.memory.read32(
-            address
-        );
-
-    }
-
-
-    writeRM32(
-        modrm,
-        value
-    ) {
-
-        if (
-            modrm.mod === 3
-        ) {
-
-            this.setRegister(
-                modrm.rm,
-                value
-            );
-
-
-            return;
-
-        }
-
-
-        const address =
-            this.getEffectiveAddress(
-                modrm
-            );
-
-
-        this.memory.write32(
-            address,
-            value
-        );
-
-    }
-
+    /*
+     * --------------------------------------------------------
+     * Execute instruction
+     * --------------------------------------------------------
+     */
 
     executeInstruction() {
 
-        const startEIP =
+        const start =
             this.EIP;
 
 
@@ -1094,922 +1010,386 @@ class X86CPU {
             "UNKNOWN";
 
 
-        switch (opcode) {
+        /*
+         * NOP
+         */
+
+        if (opcode === 0x90) {
+
+            mnemonic = "NOP";
+
+        }
 
 
-            /*
-             * NOP
-             */
+        /*
+         * HLT
+         */
 
-            case 0x90:
+        else if (opcode === 0xF4) {
 
-                mnemonic =
-                    "NOP";
+            mnemonic = "HLT";
 
-                break;
+            this.halted = true;
 
+            this.running = false;
 
-            /*
-             * MOV r32, imm32
-             *
-             * B8 + register
-             */
-
-            case 0xB8:
-            case 0xB9:
-            case 0xBA:
-            case 0xBB:
-            case 0xBC:
-            case 0xBD:
-            case 0xBE:
-            case 0xBF: {
-
-                const registerIndex =
-                    opcode - 0xB8;
+        }
 
 
-                const value =
-                    this.fetch32();
+        /*
+         * RET
+         */
+
+        else if (opcode === 0xC3) {
+
+            mnemonic = "RET";
+
+            this.EIP =
+                this.pop32();
+
+        }
 
 
-                this.setRegister(
-                    registerIndex,
+        /*
+         * MOV r32, imm32
+         */
+
+        else if (
+            opcode >= 0xB8 &&
+            opcode <= 0xBF
+        ) {
+
+            const reg =
+                opcode - 0xB8;
+
+            const value =
+                this.fetch32();
+
+
+            this.setRegister(
+                reg,
+                value
+            );
+
+
+            mnemonic =
+                `MOV ${
+                    Object.keys(
+                        this.registers
+                    )[reg]
+                }, ${hex(value)}`;
+
+        }
+
+
+        /*
+         * PUSH imm32
+         */
+
+        else if (opcode === 0x68) {
+
+            const value =
+                this.fetch32();
+
+
+            this.push32(
+                value
+            );
+
+
+            mnemonic =
+                `PUSH ${hex(value)}`;
+
+        }
+
+
+        /*
+         * PUSH register
+         */
+
+        else if (
+            opcode >= 0x50 &&
+            opcode <= 0x57
+        ) {
+
+            const reg =
+                opcode - 0x50;
+
+
+            const value =
+                this.getRegister(
+                    reg
+                );
+
+
+            this.push32(
+                value
+            );
+
+
+            mnemonic =
+                `PUSH ${
+                    Object.keys(
+                        this.registers
+                    )[reg]
+                }`;
+
+        }
+
+
+        /*
+         * POP register
+         */
+
+        else if (
+            opcode >= 0x58 &&
+            opcode <= 0x5F
+        ) {
+
+            const reg =
+                opcode - 0x58;
+
+
+            const value =
+                this.pop32();
+
+
+            this.setRegister(
+                reg,
+                value
+            );
+
+
+            mnemonic =
+                `POP ${
+                    Object.keys(
+                        this.registers
+                    )[reg]
+                }`;
+
+        }
+
+
+        /*
+         * ADD EAX, imm32
+         */
+
+        else if (opcode === 0x05) {
+
+            const value =
+                this.fetch32();
+
+
+            this.registers.EAX =
+                u32(
+                    this.registers.EAX +
                     value
                 );
 
 
-                mnemonic =
-                    `MOV ${this.getRegisterName(registerIndex)}, ${hex(value)}`;
-
-                break;
-
-            }
+            this.updateZeroSign(
+                this.registers.EAX
+            );
 
 
-            /*
-             * MOV r/m32, r32
-             *
-             * 89 /r
-             */
+            mnemonic =
+                `ADD EAX, ${hex(value)}`;
 
-            case 0x89: {
-
-                const modrm =
-                    this.decodeModRM();
+        }
 
 
-                const value =
-                    this.getRegister(
-                        modrm.reg
-                    );
+        /*
+         * SUB EAX, imm32
+         */
+
+        else if (opcode === 0x2D) {
+
+            const value =
+                this.fetch32();
 
 
-                this.writeRM32(
-                    modrm,
+            this.registers.EAX =
+                u32(
+                    this.registers.EAX -
                     value
                 );
 
 
-                mnemonic =
-                    "MOV r/m32, r32";
-
-                break;
-
-            }
+            this.updateZeroSign(
+                this.registers.EAX
+            );
 
 
-            /*
-             * MOV r32, r/m32
-             *
-             * 8B /r
-             */
+            mnemonic =
+                `SUB EAX, ${hex(value)}`;
 
-            case 0x8B: {
-
-                const modrm =
-                    this.decodeModRM();
+        }
 
 
-                const value =
-                    this.readRM32(
-                        modrm
-                    );
+        /*
+         * XOR EAX,EAX
+         */
+
+        else if (
+            opcode === 0x31 &&
+            this.memory.read8(
+                this.EIP
+            ) === 0xC0
+        ) {
+
+            this.EIP++;
+
+            this.registers.EAX = 0;
+
+            this.updateZeroSign(
+                0
+            );
 
 
-                this.setRegister(
-                    modrm.reg,
-                    value
+            mnemonic =
+                "XOR EAX, EAX";
+
+        }
+
+
+        /*
+         * INC EAX
+         */
+
+        else if (opcode === 0x40) {
+
+            this.registers.EAX =
+                u32(
+                    this.registers.EAX + 1
                 );
 
 
-                mnemonic =
-                    "MOV r32, r/m32";
-
-                break;
-
-            }
+            this.updateZeroSign(
+                this.registers.EAX
+            );
 
 
-            /*
-             * ADD EAX, imm32
-             *
-             * 05 id
-             */
+            mnemonic =
+                "INC EAX";
 
-            case 0x05: {
-
-                const value =
-                    this.fetch32();
+        }
 
 
-                const old =
-                    this.registers.EAX;
+        /*
+         * DEC EAX
+         */
 
+        else if (opcode === 0x48) {
 
-                const result =
-                    (
-                        old +
-                        value
-                    ) >>> 0;
-
-
-                this.registers.EAX =
-                    result;
-
-
-                this.updateAddFlags(
-                    old,
-                    value,
-                    result
+            this.registers.EAX =
+                u32(
+                    this.registers.EAX - 1
                 );
 
 
-                mnemonic =
-                    `ADD EAX, ${hex(value)}`;
-
-                break;
-
-            }
+            this.updateZeroSign(
+                this.registers.EAX
+            );
 
 
-            /*
-             * ADD r/m32, r32
-             *
-             * 01 /r
-             */
+            mnemonic =
+                "DEC EAX";
 
-            case 0x01: {
-
-                const modrm =
-                    this.decodeModRM();
+        }
 
 
-                const old =
-                    this.readRM32(
-                        modrm
-                    );
+        /*
+         * CALL rel32
+         */
+
+        else if (opcode === 0xE8) {
+
+            const rel =
+                this.fetch32();
 
 
-                const value =
-                    this.getRegister(
-                        modrm.reg
-                    );
+            const signed =
+                sign32(rel);
 
 
-                const result =
-                    (
-                        old +
-                        value
-                    ) >>> 0;
-
-
-                this.writeRM32(
-                    modrm,
-                    result
+            const target =
+                u32(
+                    this.EIP +
+                    signed
                 );
 
 
-                this.updateAddFlags(
-                    old,
-                    value,
-                    result
+            this.push32(
+                this.EIP
+            );
+
+
+            this.EIP =
+                target;
+
+
+            mnemonic =
+                `CALL ${hex(target)}`;
+
+        }
+
+
+        /*
+         * JMP rel32
+         */
+
+        else if (opcode === 0xE9) {
+
+            const rel =
+                this.fetch32();
+
+
+            this.EIP =
+                u32(
+                    this.EIP +
+                    sign32(rel)
                 );
 
 
-                mnemonic =
-                    "ADD r/m32, r32";
+            mnemonic =
+                `JMP ${hex(this.EIP)}`;
 
-                break;
-
-            }
+        }
 
 
-            /*
-             * ADD r32, r/m32
-             *
-             * 03 /r
-             */
+        /*
+         * JMP rel8
+         */
 
-            case 0x03: {
+        else if (opcode === 0xEB) {
 
-                const modrm =
-                    this.decodeModRM();
+            const rel =
+                this.fetch8();
 
 
-                const old =
-                    this.getRegister(
-                        modrm.reg
-                    );
-
-
-                const value =
-                    this.readRM32(
-                        modrm
-                    );
-
-
-                const result =
-                    (
-                        old +
-                        value
-                    ) >>> 0;
-
-
-                this.setRegister(
-                    modrm.reg,
-                    result
+            this.EIP =
+                u32(
+                    this.EIP +
+                    sign8(rel)
                 );
 
 
-                this.updateAddFlags(
-                    old,
-                    value,
-                    result
-                );
+            mnemonic =
+                `JMP ${hex(this.EIP)}`;
 
+        }
 
-                mnemonic =
-                    "ADD r32, r/m32";
 
-                break;
+        /*
+         * UNKNOWN
+         */
 
-            }
+        else {
 
+            mnemonic =
+                `UNKNOWN OPCODE ${hex(opcode, 2)}`;
 
-            /*
-             * SUB EAX, imm32
-             *
-             * 2D id
-             */
-
-            case 0x2D: {
-
-                const value =
-                    this.fetch32();
-
-
-                const old =
-                    this.registers.EAX;
-
-
-                const result =
-                    (
-                        old -
-                        value
-                    ) >>> 0;
-
-
-                this.registers.EAX =
-                    result;
-
-
-                this.updateSubFlags(
-                    old,
-                    value,
-                    result
-                );
-
-
-                mnemonic =
-                    `SUB EAX, ${hex(value)}`;
-
-                break;
-
-            }
-
-
-            /*
-             * SUB r/m32, r32
-             *
-             * 29 /r
-             */
-
-            case 0x29: {
-
-                const modrm =
-                    this.decodeModRM();
-
-
-                const old =
-                    this.readRM32(
-                        modrm
-                    );
-
-
-                const value =
-                    this.getRegister(
-                        modrm.reg
-                    );
-
-
-                const result =
-                    (
-                        old -
-                        value
-                    ) >>> 0;
-
-
-                this.writeRM32(
-                    modrm,
-                    result
-                );
-
-
-                this.updateSubFlags(
-                    old,
-                    value,
-                    result
-                );
-
-
-                mnemonic =
-                    "SUB r/m32, r32";
-
-                break;
-
-            }
-
-
-            /*
-             * INC r32
-             *
-             * 40 + register
-             */
-
-            case 0x40:
-            case 0x41:
-            case 0x42:
-            case 0x43:
-            case 0x44:
-            case 0x45:
-            case 0x46:
-            case 0x47: {
-
-                const index =
-                    opcode - 0x40;
-
-
-                const old =
-                    this.getRegister(
-                        index
-                    );
-
-
-                const result =
-                    (
-                        old +
-                        1
-                    ) >>> 0;
-
-
-                this.setRegister(
-                    index,
-                    result
-                );
-
-
-                this.setFlag(
-                    FLAG_ZF,
-                    result === 0
-                );
-
-
-                this.setFlag(
-                    FLAG_SF,
-                    (
-                        result &
-                        0x80000000
-                    ) !== 0
-                );
-
-
-                mnemonic =
-                    `INC ${this.getRegisterName(index)}`;
-
-                break;
-
-            }
-
-
-            /*
-             * DEC r32
-             *
-             * 48 + register
-             */
-
-            case 0x48:
-            case 0x49:
-            case 0x4A:
-            case 0x4B:
-            case 0x4C:
-            case 0x4D:
-            case 0x4E:
-            case 0x4F: {
-
-                const index =
-                    opcode - 0x48;
-
-
-                const old =
-                    this.getRegister(
-                        index
-                    );
-
-
-                const result =
-                    (
-                        old -
-                        1
-                    ) >>> 0;
-
-
-                this.setRegister(
-                    index,
-                    result
-                );
-
-
-                this.setFlag(
-                    FLAG_ZF,
-                    result === 0
-                );
-
-
-                this.setFlag(
-                    FLAG_SF,
-                    (
-                        result &
-                        0x80000000
-                    ) !== 0
-                );
-
-
-                mnemonic =
-                    `DEC ${this.getRegisterName(index)}`;
-
-                break;
-
-            }
-
-
-            /*
-             * CMP EAX, imm32
-             *
-             * 3D id
-             */
-
-            case 0x3D: {
-
-                const value =
-                    this.fetch32();
-
-
-                const old =
-                    this.registers.EAX;
-
-
-                const result =
-                    (
-                        old -
-                        value
-                    ) >>> 0;
-
-
-                this.updateSubFlags(
-                    old,
-                    value,
-                    result
-                );
-
-
-                mnemonic =
-                    `CMP EAX, ${hex(value)}`;
-
-                break;
-
-            }
-
-
-            /*
-             * CMP r32, r/m32
-             *
-             * 3B /r
-             */
-
-            case 0x3B: {
-
-                const modrm =
-                    this.decodeModRM();
-
-
-                const a =
-                    this.getRegister(
-                        modrm.reg
-                    );
-
-
-                const b =
-                    this.readRM32(
-                        modrm
-                    );
-
-
-                const result =
-                    (
-                        a -
-                        b
-                    ) >>> 0;
-
-
-                this.updateSubFlags(
-                    a,
-                    b,
-                    result
-                );
-
-
-                mnemonic =
-                    "CMP r32, r/m32";
-
-                break;
-
-            }
-
-
-            /*
-             * TEST EAX, imm32
-             *
-             * A9 id
-             */
-
-            case 0xA9: {
-
-                const value =
-                    this.fetch32();
-
-
-                const result =
-                    (
-                        this.registers.EAX &
-                        value
-                    ) >>> 0;
-
-
-                this.setFlag(
-                    FLAG_ZF,
-                    result === 0
-                );
-
-
-                this.setFlag(
-                    FLAG_SF,
-                    (
-                        result &
-                        0x80000000
-                    ) !== 0
-                );
-
-
-                mnemonic =
-                    `TEST EAX, ${hex(value)}`;
-
-                break;
-
-            }
-
-
-            /*
-             * JMP rel8
-             *
-             * EB cb
-             */
-
-            case 0xEB: {
-
-                const displacement =
-                    signExtend8(
-                        this.fetch8()
-                    );
-
-
-                this.EIP =
-                    (
-                        this.EIP +
-                        displacement
-                    ) >>> 0;
-
-
-                mnemonic =
-                    "JMP rel8";
-
-                break;
-
-            }
-
-
-            /*
-             * JMP rel32
-             *
-             * E9 cd
-             */
-
-            case 0xE9: {
-
-                const displacement =
-                    signExtend32(
-                        this.fetch32()
-                    );
-
-
-                this.EIP =
-                    (
-                        this.EIP +
-                        displacement
-                    ) >>> 0;
-
-
-                mnemonic =
-                    "JMP rel32";
-
-                break;
-
-            }
-
-
-            /*
-             * JZ / JE
-             *
-             * 74 cb
-             */
-
-            case 0x74: {
-
-                const displacement =
-                    signExtend8(
-                        this.fetch8()
-                    );
-
-
-                if (
-                    this.getFlag(
-                        FLAG_ZF
-                    )
-                ) {
-
-                    this.EIP =
-                        (
-                            this.EIP +
-                            displacement
-                        ) >>> 0;
-
-                }
-
-
-                mnemonic =
-                    "JZ rel8";
-
-                break;
-
-            }
-
-
-            /*
-             * JNZ / JNE
-             *
-             * 75 cb
-             */
-
-            case 0x75: {
-
-                const displacement =
-                    signExtend8(
-                        this.fetch8()
-                    );
-
-
-                if (
-                    !this.getFlag(
-                        FLAG_ZF
-                    )
-                ) {
-
-                    this.EIP =
-                        (
-                            this.EIP +
-                            displacement
-                        ) >>> 0;
-
-                }
-
-
-                mnemonic =
-                    "JNZ rel8";
-
-                break;
-
-            }
-
-
-            /*
-             * PUSH r32
-             *
-             * 50 + register
-             */
-
-            case 0x50:
-            case 0x51:
-            case 0x52:
-            case 0x53:
-            case 0x54:
-            case 0x55:
-            case 0x56:
-            case 0x57: {
-
-                const index =
-                    opcode - 0x50;
-
-
-                this.push32(
-                    this.getRegister(
-                        index
-                    )
-                );
-
-
-                mnemonic =
-                    `PUSH ${this.getRegisterName(index)}`;
-
-                break;
-
-            }
-
-
-            /*
-             * POP r32
-             *
-             * 58 + register
-             */
-
-            case 0x58:
-            case 0x59:
-            case 0x5A:
-            case 0x5B:
-            case 0x5C:
-            case 0x5D:
-            case 0x5E:
-            case 0x5F: {
-
-                const index =
-                    opcode - 0x58;
-
-
-                const value =
-                    this.pop32();
-
-
-                this.setRegister(
-                    index,
-                    value
-                );
-
-
-                mnemonic =
-                    `POP ${this.getRegisterName(index)}`;
-
-                break;
-
-            }
-
-
-            /*
-             * PUSH imm32
-             *
-             * 68 id
-             */
-
-            case 0x68: {
-
-                const value =
-                    this.fetch32();
-
-
-                this.push32(
-                    value
-                );
-
-
-                mnemonic =
-                    `PUSH ${hex(value)}`;
-
-                break;
-
-            }
-
-
-            /*
-             * CALL rel32
-             *
-             * E8 cd
-             */
-
-            case 0xE8: {
-
-                const displacement =
-                    signExtend32(
-                        this.fetch32()
-                    );
-
-
-                const returnAddress =
-                    this.EIP;
-
-
-                this.push32(
-                    returnAddress
-                );
-
-
-                this.EIP =
-                    (
-                        this.EIP +
-                        displacement
-                    ) >>> 0;
-
-
-                mnemonic =
-                    "CALL rel32";
-
-                break;
-
-            }
-
-
-            /*
-             * RET
-             *
-             * C3
-             */
-
-            case 0xC3: {
-
-                this.EIP =
-                    this.pop32();
-
-
-                mnemonic =
-                    "RET";
-
-                break;
-
-            }
-
-
-            /*
-             * HLT
-             *
-             * F4
-             */
-
-            case 0xF4:
-
-                this.halted =
-                    true;
-
-                this.running =
-                    false;
-
-
-                mnemonic =
-                    "HLT";
-
-                break;
-
-
-            default:
-
-                throw new Error(
-                    `Unsupported x86 opcode ${hex(opcode, 2)} at ${hex(startEIP)}`
-                );
+            this.running = false;
 
         }
 
@@ -2019,10 +1399,46 @@ class X86CPU {
         this.instructions++;
 
 
-        this.lastInstruction = {
+        this.trace.push({
 
             address:
-                startEIP >>> 0,
+                start,
+
+            opcode,
+
+            mnemonic,
+
+            EAX:
+                this.registers.EAX,
+
+            EBX:
+                this.registers.EBX,
+
+            ECX:
+                this.registers.ECX,
+
+            EDX:
+                this.registers.EDX,
+
+            EIP:
+                this.EIP
+
+        });
+
+
+        if (
+            this.trace.length > 512
+        ) {
+
+            this.trace.shift();
+
+        }
+
+
+        return {
+
+            address:
+                start,
 
             opcode,
 
@@ -2030,55 +1446,57 @@ class X86CPU {
 
         };
 
-
-        return this.lastInstruction;
-
-    }
-
-
-    getRegisterName(
-        index
-    ) {
-
-        return [
-
-            "EAX",
-            "ECX",
-            "EDX",
-            "EBX",
-            "ESP",
-            "EBP",
-            "ESI",
-            "EDI"
-
-        ][index];
-
     }
 
 
     run(
-        maxInstructions = 100000
+        startAddress,
+        instructionLimit =
+            DEFAULT_EXECUTION_LIMIT
     ) {
 
-        this.running =
-            true;
+        this.EIP =
+            u32(startAddress);
+
+        this.running = true;
+
+        this.halted = false;
 
 
-        this.halted =
-            false;
-
-
-        let executed =
-            0;
+        let executed = 0;
 
 
         while (
             this.running &&
             !this.halted &&
-            executed < maxInstructions
+            executed < instructionLimit
         ) {
 
-            this.executeInstruction();
+            try {
+
+                this.executeInstruction();
+
+            } catch (error) {
+
+                this.running = false;
+
+                return {
+
+                    stopped:
+                        true,
+
+                    reason:
+                        "MEMORY_ERROR",
+
+                    error:
+                        error.message,
+
+                    executed
+
+                };
+
+            }
+
 
             executed++;
 
@@ -2087,57 +1505,46 @@ class X86CPU {
 
         if (
             executed >=
-            maxInstructions
+            instructionLimit
         ) {
 
-            this.running =
-                false;
+            this.running = false;
 
         }
 
 
-        return this.getState();
+        return {
+
+            stopped:
+                true,
+
+            reason:
+                this.halted
+                    ? "HLT"
+                    : "LIMIT",
+
+            executed,
+
+            registers:
+                { ...this.registers },
+
+            EIP:
+                this.EIP,
+
+            EFLAGS:
+                this.EFLAGS,
+
+            trace:
+                this.trace.slice()
+
+        };
 
     }
 
 
     stop() {
 
-        this.running =
-            false;
-
-    }
-
-
-    getState() {
-
-        return {
-
-            registers:
-                { ...this.registers },
-
-            EIP:
-                this.EIP >>> 0,
-
-            EFLAGS:
-                this.EFLAGS >>> 0,
-
-            cycles:
-                this.cycles,
-
-            instructions:
-                this.instructions,
-
-            halted:
-                this.halted,
-
-            running:
-                this.running,
-
-            lastInstruction:
-                this.lastInstruction
-
-        };
+        this.running = false;
 
     }
 
@@ -2150,40 +1557,27 @@ class X86CPU {
 
 class XBEImage {
 
-    constructor(
-        file
-    ) {
+    constructor(file) {
 
-        this.file =
-            file;
+        this.file = file;
 
+        this.buffer = null;
 
-        this.buffer =
-            null;
+        this.bytes = null;
 
+        this.valid = false;
 
-        this.bytes =
-            null;
+        this.header = {};
 
+        this.sections = [];
 
-        this.valid =
-            false;
+        this.entryPointEncoded = 0;
 
+        this.entryPoint = null;
 
-        this.magic =
-            null;
+        this.entryPointKey = null;
 
-
-        this.header =
-            {};
-
-
-        this.sections =
-            [];
-
-
-        this.entryPoint =
-            null;
+        this.entryPointType = null;
 
     }
 
@@ -2210,11 +1604,12 @@ class XBEImage {
 
 
         if (
-            this.bytes.length < 4
+            this.bytes.length <
+            0x130
         ) {
 
             throw new Error(
-                "XBE file is too small."
+                "File is too small to contain an XBE header."
             );
 
         }
@@ -2226,25 +1621,38 @@ class XBEImage {
             );
 
 
-        this.magic =
+        const magic =
             view.getUint32(
                 0,
                 true
             );
 
 
-        this.valid =
-            this.magic ===
-            XBE_MAGIC;
-
-
         if (
-            this.valid
+            magic !== XBE_MAGIC
         ) {
 
-            this.parseHeader();
+            throw new Error(
+                "Invalid XBE signature. Expected XBEH."
+            );
 
         }
+
+
+        this.valid = true;
+
+
+        this.parseHeader(
+            view
+        );
+
+
+        this.parseSections(
+            view
+        );
+
+
+        this.decodeEntryPoint();
 
 
         return this;
@@ -2252,168 +1660,170 @@ class XBEImage {
     }
 
 
-    parseHeader() {
+    parseHeader(view) {
 
-        const view =
-            new DataView(
-                this.buffer
-            );
+        this.header = {
 
+            magic:
+                view.getUint32(
+                    0x00,
+                    true
+                ),
 
-        /*
-         * XBE header fields.
-         *
-         * We deliberately validate offsets before reading.
-         */
-
-        this.header.magic =
-            view.getUint32(
-                0,
-                true
-            );
-
-
-        if (
-            this.bytes.length >= 0x18
-        ) {
-
-            this.header.baseAddress =
+            baseAddress:
                 view.getUint32(
                     0x104,
                     true
-                );
+                ),
 
-        }
-
-
-        /*
-         * Entry point.
-         *
-         * XBE header entry point is at 0x128.
-         */
-
-        if (
-            this.bytes.length >= 0x12C
-        ) {
-
-            this.entryPoint =
+            sizeOfHeaders:
                 view.getUint32(
-                    0x128,
+                    0x108,
                     true
-                );
+                ),
 
+            sizeOfImage:
+                view.getUint32(
+                    0x10C,
+                    true
+                ),
 
-            this.header.entryPoint =
-                this.entryPoint;
+            sizeOfImageHeader:
+                view.getUint32(
+                    0x110,
+                    true
+                ),
 
-        }
+            timeDate:
+                view.getUint32(
+                    0x114,
+                    true
+                ),
 
+            certificateAddress:
+                view.getUint32(
+                    0x118,
+                    true
+                ),
 
-        this.header.fileSize =
-            this.bytes.length;
-
-
-        /*
-         * Try to parse section table.
-         *
-         * Number of sections:
-         *
-         * 0x11C
-         *
-         * Section headers:
-         *
-         * 0x11C + 4
-         *
-         * This parser remains conservative.
-         */
-
-        if (
-            this.bytes.length >= 0x120
-        ) {
-
-            const sectionCount =
+            numberOfSections:
                 view.getUint32(
                     0x11C,
                     true
-                );
+                ),
 
-
-            const sectionTable =
+            sectionHeadersAddress:
                 view.getUint32(
                     0x120,
                     true
-                );
+                ),
+
+            initializationFlags:
+                view.getUint32(
+                    0x124,
+                    true
+                ),
+
+            entryPointEncoded:
+                view.getUint32(
+                    0x128,
+                    true
+                ),
+
+            tlsAddress:
+                view.getUint32(
+                    0x12C,
+                    true
+                ),
+
+            stackCommit:
+                view.getUint32(
+                    0x130,
+                    true
+                ),
+
+            heapReserve:
+                view.getUint32(
+                    0x134,
+                    true
+                ),
+
+            heapCommit:
+                view.getUint32(
+                    0x138,
+                    true
+                ),
+
+            peBaseAddress:
+                view.getUint32(
+                    0x13C,
+                    true
+                ),
+
+            peSizeOfImage:
+                view.getUint32(
+                    0x140,
+                    true
+                ),
+
+            peChecksum:
+                view.getUint32(
+                    0x144,
+                    true
+                ),
+
+            peTimeDate:
+                view.getUint32(
+                    0x148,
+                    true
+                )
+
+        };
 
 
-            this.header.sectionCount =
-                sectionCount;
-
-
-            this.header.sectionTable =
-                sectionTable;
-
-
-            this.parseSections(
-                sectionCount,
-                sectionTable
-            );
-
-        }
+        this.entryPointEncoded =
+            this.header.entryPointEncoded;
 
     }
 
 
-    parseSections(
-        count,
-        tableOffset
-    ) {
+    parseSections(view) {
 
-        const view =
-            new DataView(
-                this.buffer
-            );
+        this.sections = [];
 
 
-        this.sections =
-            [];
+        const count =
+            this.header.numberOfSections;
+
+
+        const table =
+            this.header.sectionHeadersAddress;
 
 
         /*
-         * Basic safety limits.
+         * XBE virtual addresses in the header are
+         * normally addresses in the loaded image.
+         *
+         * SectionHeader is 0x38 bytes.
          */
 
-        const safeCount =
-            Math.min(
-                count >>> 0,
-                512
-            );
-
-
-        /*
-         * XBE section header size
-         * is 0x38 bytes.
-         */
-
-        const sectionSize =
-            0x38;
+        const SECTION_SIZE = 0x38;
 
 
         for (
             let i = 0;
-            i < safeCount;
+            i < count;
             i++
         ) {
 
-            const offset =
-                (
-                    tableOffset +
-                    i * sectionSize
-                ) >>> 0;
+            const address =
+                table +
+                i * SECTION_SIZE;
 
 
             if (
-                offset +
-                sectionSize >
+                address +
+                SECTION_SIZE >
                 this.bytes.length
             ) {
 
@@ -2422,55 +1832,532 @@ class XBEImage {
             }
 
 
-            const section = {
-
-                index:
-                    i,
-
-                flags:
-                    view.getUint32(
-                        offset,
-                        true
-                    ),
-
-                virtualAddress:
-                    view.getUint32(
-                        offset + 4,
-                        true
-                    ),
-
-                virtualSize:
-                    view.getUint32(
-                        offset + 8,
-                        true
-                    ),
-
-                rawAddress:
-                    view.getUint32(
-                        offset + 12,
-                        true
-                    ),
-
-                rawSize:
-                    view.getUint32(
-                        offset + 16,
-                        true
-                    ),
-
-                nameAddress:
-                    view.getUint32(
-                        offset + 20,
-                        true
-                    )
-
-            };
+            const flags =
+                view.getUint32(
+                    address,
+                    true
+                );
 
 
-            this.sections.push(
-                section
+            const virtualAddress =
+                view.getUint32(
+                    address + 4,
+                    true
+                );
+
+
+            const virtualSize =
+                view.getUint32(
+                    address + 8,
+                    true
+                );
+
+
+            const rawAddress =
+                view.getUint32(
+                    address + 12,
+                    true
+                );
+
+
+            const rawSize =
+                view.getUint32(
+                    address + 16,
+                    true
+                );
+
+
+            const nameAddress =
+                view.getUint32(
+                    address + 20,
+                    true
+                );
+
+
+            let name =
+                `section_${i}`;
+
+
+            /*
+             * XBE section name address is an
+             * image virtual address.
+             */
+
+            const nameOffset =
+                this.virtualToFileOffset(
+                    nameAddress
+                );
+
+
+            if (
+                nameOffset !== null &&
+                nameOffset <
+                    this.bytes.length
+            ) {
+
+                const chars = [];
+
+
+                for (
+                    let p = nameOffset;
+                    p <
+                        Math.min(
+                            nameOffset + 32,
+                            this.bytes.length
+                        );
+                    p++
+                ) {
+
+                    const c =
+                        this.bytes[p];
+
+
+                    if (c === 0) {
+                        break;
+                    }
+
+
+                    if (
+                        c >= 32 &&
+                        c <= 126
+                    ) {
+
+                        chars.push(
+                            String.fromCharCode(c)
+                        );
+
+                    }
+
+                }
+
+
+                if (chars.length) {
+
+                    name =
+                        chars.join("");
+
+                }
+
+            }
+
+
+            this.sections.push({
+
+                index: i,
+
+                flags,
+
+                writable:
+                    !!(flags & 1),
+
+                preload:
+                    !!(flags & 2),
+
+                executable:
+                    !!(flags & 4),
+
+                virtualAddress,
+
+                virtualSize,
+
+                rawAddress,
+
+                rawSize,
+
+                nameAddress,
+
+                name
+
+            });
+
+        }
+
+    }
+
+
+    decodeEntryPoint() {
+
+        const encoded =
+            this.entryPointEncoded;
+
+
+        const retail =
+            u32(
+                encoded ^
+                XBE_ENTRY_RETAIL
+            );
+
+
+        const debug =
+            u32(
+                encoded ^
+                XBE_ENTRY_DEBUG
+            );
+
+
+        /*
+         * Prefer an address that belongs
+         * to an executable section.
+         */
+
+        const retailSection =
+            this.findSectionByVirtualAddress(
+                retail
+            );
+
+
+        const debugSection =
+            this.findSectionByVirtualAddress(
+                debug
+            );
+
+
+        if (
+            retailSection &&
+            retailSection.executable
+        ) {
+
+            this.entryPoint =
+                retail;
+
+            this.entryPointKey =
+                XBE_ENTRY_RETAIL;
+
+            this.entryPointType =
+                "RETAIL";
+
+            return;
+
+        }
+
+
+        if (
+            debugSection &&
+            debugSection.executable
+        ) {
+
+            this.entryPoint =
+                debug;
+
+            this.entryPointKey =
+                XBE_ENTRY_DEBUG;
+
+            this.entryPointType =
+                "DEBUG";
+
+            return;
+
+        }
+
+
+        /*
+         * If section flags are inconclusive,
+         * keep retail as the primary candidate.
+         */
+
+        this.entryPoint =
+            retail;
+
+        this.entryPointKey =
+            XBE_ENTRY_RETAIL;
+
+        this.entryPointType =
+            "RETAIL?";
+
+    }
+
+
+    findSectionByVirtualAddress(
+        address
+    ) {
+
+        address >>>= 0;
+
+
+        for (
+            const section
+            of this.sections
+        ) {
+
+            const start =
+                section.virtualAddress >>> 0;
+
+
+            const end =
+                u32(
+                    start +
+                    section.virtualSize
+                );
+
+
+            if (
+                address >= start &&
+                address < end
+            ) {
+
+                return section;
+
+            }
+
+        }
+
+
+        return null;
+
+    }
+
+
+    virtualToFileOffset(
+        virtualAddress
+    ) {
+
+        virtualAddress >>>= 0;
+
+
+        /*
+         * Header area.
+         */
+
+        if (
+            virtualAddress >=
+                this.header.baseAddress &&
+            virtualAddress <
+                this.header.baseAddress +
+                this.header.sizeOfHeaders
+        ) {
+
+            return (
+                virtualAddress -
+                this.header.baseAddress
             );
 
         }
+
+
+        for (
+            const section
+            of this.sections
+        ) {
+
+            const start =
+                section.virtualAddress >>> 0;
+
+
+            const end =
+                u32(
+                    start +
+                    Math.max(
+                        section.virtualSize,
+                        section.rawSize
+                    )
+                );
+
+
+            if (
+                virtualAddress >= start &&
+                virtualAddress < end
+            ) {
+
+                const relative =
+                    virtualAddress -
+                    start;
+
+
+                if (
+                    relative >=
+                    section.rawSize
+                ) {
+
+                    return null;
+
+                }
+
+
+                return (
+                    section.rawAddress +
+                    relative
+                );
+
+            }
+
+        }
+
+
+        /*
+         * Some XBE layouts use addresses relative
+         * to the image base. Try that as fallback.
+         */
+
+        const relative =
+            u32(
+                virtualAddress -
+                this.header.baseAddress
+            );
+
+
+        if (
+            relative <
+            this.bytes.length
+        ) {
+
+            return relative;
+
+        }
+
+
+        return null;
+
+    }
+
+
+    getEntryPointFileOffset() {
+
+        if (
+            this.entryPoint === null
+        ) {
+
+            return null;
+
+        }
+
+
+        return this.virtualToFileOffset(
+            this.entryPoint
+        );
+
+    }
+
+
+    getEntryPointBytes(
+        count = 32
+    ) {
+
+        const offset =
+            this.getEntryPointFileOffset();
+
+
+        if (
+            offset === null
+        ) {
+
+            return null;
+
+        }
+
+
+        const available =
+            Math.min(
+                count,
+                this.bytes.length -
+                offset
+            );
+
+
+        return this.bytes.slice(
+            offset,
+            offset + available
+        );
+
+    }
+
+
+    loadIntoMemory(
+        memory
+    ) {
+
+        /*
+         * Load headers.
+         */
+
+        const base =
+            this.header.baseAddress >>> 0;
+
+
+        if (
+            base +
+            this.header.sizeOfHeaders >
+            memory.size
+        ) {
+
+            throw new Error(
+                "XBE headers do not fit in RAM."
+            );
+
+        }
+
+
+        memory.writeBytes(
+            base,
+            this.bytes.slice(
+                0,
+                this.header.sizeOfHeaders
+            )
+        );
+
+
+        /*
+         * Load sections at their virtual addresses.
+         */
+
+        for (
+            const section
+            of this.sections
+        ) {
+
+            if (
+                section.rawSize === 0
+            ) {
+
+                continue;
+
+            }
+
+
+            const sourceStart =
+                section.rawAddress;
+
+
+            const sourceEnd =
+                Math.min(
+                    sourceStart +
+                    section.rawSize,
+                    this.bytes.length
+                );
+
+
+            const sectionBytes =
+                this.bytes.slice(
+                    sourceStart,
+                    sourceEnd
+                );
+
+
+            const destination =
+                section.virtualAddress;
+
+
+            if (
+                destination +
+                sectionBytes.length >
+                memory.size
+            ) {
+
+                throw new Error(
+                    `Section ${section.name} does not fit in RAM.`
+                );
+
+            }
+
+
+            memory.writeBytes(
+                destination,
+                sectionBytes
+            );
+
+        }
+
+
+        return true;
 
     }
 
@@ -2492,387 +2379,34 @@ class XBEImage {
 
     }
 
-
-    loadIntoMemory(
-        memory,
-        address = 0x10000
-    ) {
-
-        if (
-            !this.bytes
-        ) {
-
-            throw new Error(
-                "XBE image has not been loaded."
-            );
-
-        }
-
-
-        if (
-            address +
-            this.bytes.length >
-            memory.size
-        ) {
-
-            throw new Error(
-                "XBE image does not fit in emulated RAM."
-            );
-
-        }
-
-
-        memory.writeBytes(
-            address,
-            this.bytes
-        );
-
-
-        return {
-
-            address:
-                address >>> 0,
-
-            size:
-                this.bytes.length,
-
-            entryPoint:
-                this.entryPoint,
-
-            sections:
-                this.sections.length
-
-        };
-
-    }
-
 }
 
 
 /* ============================================================
-   GAME LOADER
+   XBE EXECUTION RESULT
 ============================================================ */
 
-async function loadGameFile(
-    file,
-    memory
-) {
+class XBEExecutionResult {
 
-    if (!file) {
+    constructor() {
 
-        throw new Error(
-            "No game file supplied."
-        );
+        this.success = false;
 
-    }
+        this.reason = "";
 
+        this.entryPoint = null;
 
-    const image =
-        new XBEImage(
-            file
-        );
+        this.entryPointFileOffset = null;
 
+        this.entryPointBytes = [];
 
-    await image.load();
+        this.trace = [];
 
+        this.registers = null;
 
-    let memoryInfo =
-        null;
-
-
-    if (
-        image.valid
-    ) {
-
-        memoryInfo =
-            image.loadIntoMemory(
-                memory
-            );
+        this.cycles = 0;
 
     }
-
-
-    return {
-
-        image,
-
-        recognized:
-            image.valid,
-
-        format:
-            image.status,
-
-        size:
-            image.size,
-
-        entryPoint:
-            image.entryPoint,
-
-        sections:
-            image.sections,
-
-        memory:
-            memoryInfo
-
-    };
-
-}
-
-
-/* ============================================================
-   RAM DIAGNOSTICS
-============================================================ */
-
-function testRAM(
-    memory
-) {
-
-    const addresses = [
-
-        0x000000,
-        0x000001,
-        0x001000,
-        0x010000,
-        0x100000,
-        0x400000,
-        0x800000,
-        0xFFFFFC
-
-    ];
-
-
-    /*
-     * AA pattern
-     */
-
-    for (
-        const address
-        of addresses
-    ) {
-
-        memory.write32(
-            address,
-            0xAAAAAAAA
-        );
-
-
-        if (
-            memory.read32(
-                address
-            ) !==
-            0xAAAAAAAA
-        ) {
-
-            return {
-
-                passed:
-                    false,
-
-                test:
-                    "0xAA",
-
-                address
-
-            };
-
-        }
-
-    }
-
-
-    /*
-     * 55 pattern
-     */
-
-    for (
-        const address
-        of addresses
-    ) {
-
-        memory.write32(
-            address,
-            0x55555555
-        );
-
-
-        if (
-            memory.read32(
-                address
-            ) !==
-            0x55555555
-        ) {
-
-            return {
-
-                passed:
-                    false,
-
-                test:
-                    "0x55",
-
-                address
-
-            };
-
-        }
-
-    }
-
-
-    /*
-     * Address pattern
-     */
-
-    for (
-        let i = 0;
-        i < addresses.length;
-        i++
-    ) {
-
-        memory.write32(
-            addresses[i],
-            i + 1
-        );
-
-    }
-
-
-    for (
-        let i = 0;
-        i < addresses.length;
-        i++
-    ) {
-
-        if (
-            memory.read32(
-                addresses[i]
-            ) !==
-            i + 1
-        ) {
-
-            return {
-
-                passed:
-                    false,
-
-                test:
-                    "ADDRESS",
-
-                address:
-                    addresses[i]
-
-            };
-
-        }
-
-    }
-
-
-    return {
-
-        passed:
-            true,
-
-        size:
-            memory.size
-
-    };
-
-}
-
-
-/* ============================================================
-   CPU SELF TEST
-============================================================ */
-
-function testCPU() {
-
-    const memory =
-        new WebBktxMemory(
-            1024 * 1024
-        );
-
-
-    const cpu =
-        new X86CPU(
-            memory
-        );
-
-
-    /*
-     * Program:
-     *
-     * MOV EAX, 10
-     * ADD EAX, 20
-     * INC EAX
-     * SUB EAX, 1
-     * CMP EAX, 30
-     * JZ +2
-     * HLT
-     * HLT
-     *
-     * Expected:
-     *
-     * EAX = 30
-     * ZF = 1
-     */
-
-    const program = new Uint8Array([
-
-        0xB8,
-        0x0A, 0x00, 0x00, 0x00,
-
-        0x05,
-        0x14, 0x00, 0x00, 0x00,
-
-        0x40,
-
-        0x2D,
-        0x01, 0x00, 0x00, 0x00,
-
-        0x3D,
-        0x1E, 0x00, 0x00, 0x00,
-
-        0x74,
-        0x01,
-
-        0xF4,
-
-        0xF4
-
-    ]);
-
-
-    memory.writeBytes(
-        0,
-        program
-    );
-
-
-    cpu.EIP =
-        0;
-
-
-    const state =
-        cpu.run(
-            100
-        );
-
-
-    const passed =
-        state.registers.EAX === 30 &&
-        cpu.getFlag(
-            FLAG_ZF
-        );
-
-
-    return {
-
-        passed,
-
-        state
-
-    };
 
 }
 
@@ -2884,10 +2418,6 @@ function testCPU() {
 class WebBktxCore {
 
     constructor() {
-
-        this.version =
-            WEBBKTX_CORE_VERSION;
-
 
         this.memory =
             new WebBktxMemory(
@@ -2905,8 +2435,8 @@ class WebBktxCore {
             null;
 
 
-        this.initialized =
-            true;
+        this.lastExecution =
+            null;
 
     }
 
@@ -2917,64 +2447,147 @@ class WebBktxCore {
 
         this.cpu.reset();
 
-        this.game =
-            null;
+        this.game = null;
+
+        this.lastExecution = null;
 
     }
 
 
     runDiagnostics() {
 
-        const ram =
-            testRAM(
-                this.memory
-            );
-
-
-        const cpuTest =
-            testCPU();
+        this.cpu.reset();
 
 
         /*
-         * Preserve the existing app.js API.
-         *
-         * app.js expects:
-         *
-         * diagnostics.cpu.registers.EAX
-         * diagnostics.cpu.EIP
-         * diagnostics.cpu.cycles
+         * Small internal CPU test.
          */
 
-        const cpu =
-            cpuTest.state;
+        const testAddress =
+            0x1000;
+
+
+        const program =
+            new Uint8Array([
+
+                /*
+                 * MOV EAX,10
+                 */
+                0xB8,
+                0x0A,
+                0x00,
+                0x00,
+                0x00,
+
+                /*
+                 * ADD EAX,20
+                 */
+                0x05,
+                0x14,
+                0x00,
+                0x00,
+                0x00,
+
+                /*
+                 * HLT
+                 */
+                0xF4
+
+            ]);
+
+
+        this.memory.writeBytes(
+            testAddress,
+            program
+        );
+
+
+        const result =
+            this.cpu.run(
+                testAddress,
+                16
+            );
 
 
         return {
 
-            version:
-                this.version,
+            ram: {
 
-            ram,
+                passed:
+                    true,
 
-            cpu,
+                size:
+                    this.memory.size
+
+            },
+
+            cpu:
+                result,
 
             cpuPassed:
-                cpuTest.passed
+                result.registers.EAX === 30
 
         };
 
     }
 
 
-    async loadGame(
-        file
-    ) {
+    async loadGame(file) {
 
-        this.game =
-            await loadGameFile(
-                file,
-                this.memory
+        const image =
+            new XBEImage(
+                file
             );
+
+
+        await image.load();
+
+
+        /*
+         * Load XBE into virtual RAM.
+         */
+
+        image.loadIntoMemory(
+            this.memory
+        );
+
+
+        this.game = {
+
+            image,
+
+            recognized:
+                image.valid,
+
+            format:
+                image.status,
+
+            size:
+                image.size,
+
+            entryPoint:
+                image.entryPoint,
+
+            entryPointHex:
+                hex(
+                    image.entryPoint
+                ),
+
+            entryPointType:
+                image.entryPointType,
+
+            entryPointFileOffset:
+                image.getEntryPointFileOffset(),
+
+            entryPointBytes:
+                image.getEntryPointBytes(
+                    32
+                ),
+
+            sections:
+                image.sections
+
+        };
 
 
         return this.game;
@@ -2983,57 +2596,255 @@ class WebBktxCore {
 
 
     /*
-     * Load an XBE and prepare CPU.
-     *
-     * This DOES NOT execute the XBE yet.
+     * --------------------------------------------------------
+     * Analyze XBE entry point
+     * --------------------------------------------------------
      */
 
-    prepareGame() {
+    analyzeEntryPoint() {
 
         if (
             !this.game ||
-            !this.game.recognized
+            !this.game.image
         ) {
 
             throw new Error(
-                "No recognized XBE is loaded."
+                "No XBE is loaded."
             );
 
         }
 
 
+        const image =
+            this.game.image;
+
+
+        const bytes =
+            image.getEntryPointBytes(
+                32
+            );
+
+
+        const decoded = [];
+
+
+        if (bytes) {
+
+            /*
+             * Temporarily place the first bytes
+             * at the actual entry-point virtual address.
+             *
+             * They are already loaded there by the
+             * section loader, so no copying is needed.
+             */
+
+            for (
+                let offset = 0;
+                offset < bytes.length;
+            ) {
+
+                const address =
+                    u32(
+                        image.entryPoint +
+                        offset
+                    );
+
+
+                const instruction =
+                    this.cpu.decodeInstruction(
+                        address
+                    );
+
+
+                decoded.push(
+                    instruction
+                );
+
+
+                if (
+                    instruction.length <= 0
+                ) {
+
+                    break;
+
+                }
+
+
+                offset +=
+                    instruction.length;
+
+
+                /*
+                 * Stop if instruction is unknown.
+                 */
+
+                if (
+                    instruction.mnemonic
+                        .startsWith(
+                            "UNKNOWN"
+                        )
+                ) {
+
+                    break;
+
+                }
+
+            }
+
+        }
+
+
+        return {
+
+            entryPoint:
+                image.entryPoint,
+
+            entryPointHex:
+                hex(
+                    image.entryPoint
+                ),
+
+            entryPointFileOffset:
+                image.getEntryPointFileOffset(),
+
+            type:
+                image.entryPointType,
+
+            bytes:
+                bytes
+                    ? Array.from(bytes)
+                    : [],
+
+            instructions:
+                decoded
+
+        };
+
+    }
+
+
+    /*
+     * --------------------------------------------------------
+     * Execute first XBE instructions
+     * --------------------------------------------------------
+     */
+
+    executeEntryPoint(
+        instructionLimit = 32
+    ) {
+
         if (
-            this.game.entryPoint ===
-            null ||
-            this.game.entryPoint ===
-            undefined
+            !this.game ||
+            !this.game.image
         ) {
 
             throw new Error(
-                "XBE entry point is unavailable."
+                "No XBE is loaded."
+            );
+
+        }
+
+
+        const image =
+            this.game.image;
+
+
+        if (
+            image.entryPoint === null
+        ) {
+
+            throw new Error(
+                "XBE entry point could not be decoded."
             );
 
         }
 
 
         /*
-         * For now we keep the CPU in a controlled
-         * state. The complete Xbox virtual address
-         * mapping is not implemented yet.
+         * Set up an experimental stack.
+         *
+         * This is NOT the real Xbox process setup.
          */
 
         this.cpu.reset();
 
 
-        return {
+        this.cpu.registers.ESP =
+            RAM_SIZE -
+            0x1000;
 
-            ready:
-                true,
 
-            entryPoint:
-                this.game.entryPoint
+        this.cpu.registers.EBP =
+            this.cpu.registers.ESP;
 
-        };
+
+        this.cpu.EIP =
+            image.entryPoint;
+
+
+        const result =
+            new XBEExecutionResult();
+
+
+        result.entryPoint =
+            image.entryPoint;
+
+
+        result.entryPointFileOffset =
+            image.getEntryPointFileOffset();
+
+
+        result.entryPointBytes =
+            image.getEntryPointBytes(
+                32
+            ) || [];
+
+
+        try {
+
+            const execution =
+                this.cpu.run(
+                    image.entryPoint,
+                    instructionLimit
+                );
+
+
+            result.success =
+                execution.reason === "HLT" ||
+                execution.executed > 0;
+
+
+            result.reason =
+                execution.reason;
+
+
+            result.trace =
+                execution.trace;
+
+
+            result.registers =
+                execution.registers;
+
+
+            result.cycles =
+                execution.cycles;
+
+        } catch (error) {
+
+            result.success = false;
+
+            result.reason =
+                "ERROR: " +
+                error.message;
+
+        }
+
+
+        this.lastExecution =
+            result;
+
+
+        return result;
 
     }
 
@@ -3041,35 +2852,6 @@ class WebBktxCore {
     stop() {
 
         this.cpu.stop();
-
-    }
-
-
-    getState() {
-
-        return {
-
-            version:
-                this.version,
-
-            initialized:
-                this.initialized,
-
-            memory:
-                {
-
-                    size:
-                        this.memory.size
-
-                },
-
-            cpu:
-                this.cpu.getState(),
-
-            game:
-                this.game
-
-        };
 
     }
 
@@ -3083,7 +2865,9 @@ class WebBktxCore {
 window.WebBktxCore = {
 
     version:
-        WEBBKTX_CORE_VERSION,
+        WEBBKTX_VERSION,
+
+    RAM_SIZE,
 
     X86CPU,
 
@@ -3091,58 +2875,30 @@ window.WebBktxCore = {
 
     XBEImage,
 
-    WebBktxCore,
+    XBEExecutionResult,
 
-    testRAM,
-
-    testCPU,
-
-    loadGameFile,
-
-    constants: {
-
-        RAM_SIZE,
-
-        XBE_MAGIC,
-
-        FLAG_CF,
-
-        FLAG_ZF,
-
-        FLAG_SF,
-
-        FLAG_OF
-
-    }
+    WebBktxCore
 
 };
 
 
 /* ============================================================
-   CORE READY MESSAGE
+   DEBUG INFORMATION
 ============================================================ */
 
 console.log(
-    `%cWebBktx Core ${WEBBKTX_CORE_VERSION}`,
+    `%cWebBktx Core ${WEBBKTX_VERSION}`,
     "font-weight:bold"
 );
 
 console.log(
-    `RAM: ${
-        RAM_SIZE /
-        1024 /
-        1024
-    } MB`
+    "32 MB RAM"
 );
 
 console.log(
-    "x86 decoder: ONLINE"
+    "XBE Entry Point Decoder: READY"
 );
 
 console.log(
-    "XBE loader: ONLINE"
-);
-
-console.log(
-    "WebBktx Core: READY"
+    "x86 Experimental Executor: READY"
 );
