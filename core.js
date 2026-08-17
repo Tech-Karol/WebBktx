@@ -1,21 +1,23 @@
 /*
  * ============================================================
  * WebBktx Core
- * Experimental Xbox-compatible emulation core
+ * Experimental Original Xbox Emulator
  *
- * Version: 0.3
+ * Version: 0.4
  *
- * Current components:
- *   - 32-bit CPU test core
- *   - 1 MB emulated RAM
- *   - memory read/write
+ * Components:
+ *   - 32-bit x86 test CPU
+ *   - 64 MB emulated RAM
+ *   - Memory read/write
  *   - RAM diagnostics
- *   - instruction execution
- *   - local game file loader
- *   - XBE header detection
+ *   - XBE detection
+ *   - XBE header parsing
+ *   - XBE image loading
+ *   - Local game file support
  *
  * NOTE:
- * This is NOT yet a complete Xbox emulator.
+ * This is an experimental emulator core.
+ * It is NOT yet a complete Xbox emulator.
  * ============================================================
  */
 
@@ -23,58 +25,119 @@
 
 
 /* ============================================================
-   CONSTANTS
+   VERSION
 ============================================================ */
 
-const RAM_SIZE = 1024 * 1024;
-
-const XBE_MAGIC = 0x48454258;
+const WEBBKTX_VERSION = "0.4";
 
 
 /* ============================================================
    MEMORY
 ============================================================ */
 
+/*
+ * 64 MB experimental RAM.
+ *
+ * Later this can be replaced with a more accurate
+ * Xbox memory map.
+ */
+
+const RAM_SIZE =
+    64 * 1024 * 1024;
+
+
+/* ============================================================
+   XBE
+============================================================ */
+
+/*
+ * XBE magic:
+ *
+ * ASCII:
+ * X B E H
+ *
+ * Little endian:
+ * 0x48454258
+ */
+
+const XBE_MAGIC =
+    0x48454258;
+
+
+/* ============================================================
+   MEMORY CLASS
+============================================================ */
+
 class WebBktxMemory {
 
-    constructor(size = RAM_SIZE) {
+    constructor(
+        size = RAM_SIZE
+    ) {
 
-        this.size = size;
+        this.size =
+            size;
+
 
         this.buffer =
-            new ArrayBuffer(size);
+            new ArrayBuffer(
+                size
+            );
+
 
         this.memory =
             new Uint8Array(
                 this.buffer
             );
 
+
         this.view =
             new DataView(
                 this.buffer
             );
+
     }
 
 
     clear() {
 
-        this.memory.fill(0);
+        this.memory.fill(
+            0
+        );
 
     }
 
 
-    checkAddress(address, bytes = 1) {
+    checkAddress(
+        address,
+        bytes = 1
+    ) {
 
         if (
-            !Number.isInteger(address) ||
+            !Number.isInteger(
+                address
+            )
+        ) {
+
+            throw new TypeError(
+                "Memory address must be an integer."
+            );
+
+        }
+
+
+        if (
             address < 0 ||
             address + bytes > this.size
         ) {
 
             throw new RangeError(
-                `RAM address out of range: 0x${
-                    address.toString(16)
-                }`
+
+                "RAM address out of range: 0x" +
+
+                address
+                    .toString(16)
+                    .toUpperCase()
+
             );
 
         }
@@ -82,9 +145,15 @@ class WebBktxMemory {
     }
 
 
-    read8(address) {
+    read8(
+        address
+    ) {
 
-        this.checkAddress(address, 1);
+        this.checkAddress(
+            address,
+            1
+        );
+
 
         return this.view.getUint8(
             address
@@ -93,9 +162,15 @@ class WebBktxMemory {
     }
 
 
-    read16(address) {
+    read16(
+        address
+    ) {
 
-        this.checkAddress(address, 2);
+        this.checkAddress(
+            address,
+            2
+        );
+
 
         return this.view.getUint16(
             address,
@@ -105,9 +180,15 @@ class WebBktxMemory {
     }
 
 
-    read32(address) {
+    read32(
+        address
+    ) {
 
-        this.checkAddress(address, 4);
+        this.checkAddress(
+            address,
+            4
+        );
+
 
         return this.view.getUint32(
             address,
@@ -117,9 +198,16 @@ class WebBktxMemory {
     }
 
 
-    write8(address, value) {
+    write8(
+        address,
+        value
+    ) {
 
-        this.checkAddress(address, 1);
+        this.checkAddress(
+            address,
+            1
+        );
+
 
         this.view.setUint8(
             address,
@@ -129,9 +217,16 @@ class WebBktxMemory {
     }
 
 
-    write16(address, value) {
+    write16(
+        address,
+        value
+    ) {
 
-        this.checkAddress(address, 2);
+        this.checkAddress(
+            address,
+            2
+        );
+
 
         this.view.setUint16(
             address,
@@ -142,9 +237,16 @@ class WebBktxMemory {
     }
 
 
-    write32(address, value) {
+    write32(
+        address,
+        value
+    ) {
 
-        this.checkAddress(address, 4);
+        this.checkAddress(
+            address,
+            4
+        );
+
 
         this.view.setUint32(
             address,
@@ -155,12 +257,16 @@ class WebBktxMemory {
     }
 
 
-    writeBytes(address, bytes) {
+    writeBytes(
+        address,
+        bytes
+    ) {
 
         this.checkAddress(
             address,
             bytes.length
         );
+
 
         this.memory.set(
             bytes,
@@ -170,12 +276,16 @@ class WebBktxMemory {
     }
 
 
-    readBytes(address, length) {
+    readBytes(
+        address,
+        length
+    ) {
 
         this.checkAddress(
             address,
             length
         );
+
 
         return this.memory.slice(
             address,
@@ -200,7 +310,9 @@ class WebBktxMemory {
 
 class X86CPU {
 
-    constructor(memory) {
+    constructor(
+        memory
+    ) {
 
         this.memory =
             memory ||
@@ -237,42 +349,34 @@ class X86CPU {
     reset() {
 
         for (
-            const register
+            const name
             of Object.keys(
                 this.registers
             )
         ) {
 
-            this.registers[
-                register
-            ] = 0;
+            this.registers[name] =
+                0;
 
         }
 
 
-        this.EIP = 0;
+        this.EIP =
+            0;
 
-        this.EFLAGS = 0;
 
-        this.cycles = 0;
+        this.EFLAGS =
+            0;
 
-        this.running = false;
 
-        this.memory.clear();
+        this.cycles =
+            0;
+
+
+        this.running =
+            false;
 
     }
-
-
-    /*
-     * --------------------------------------------------------
-     * Test instruction set
-     * --------------------------------------------------------
-     *
-     * 0x01 = MOV EAX, immediate
-     * 0x02 = ADD EAX, immediate
-     * 0x03 = SUB EAX, immediate
-     *
-     */
 
 
     executeInstruction(
@@ -281,7 +385,8 @@ class X86CPU {
 
         if (
             !instruction ||
-            typeof instruction.opcode !== "number"
+            typeof instruction.opcode !==
+            "number"
         ) {
 
             throw new Error(
@@ -296,6 +401,13 @@ class X86CPU {
         ) {
 
 
+            /*
+             * TEST ISA
+             *
+             * 01:
+             * MOV EAX, immediate
+             */
+
             case 0x01:
 
                 this.registers.EAX =
@@ -303,6 +415,11 @@ class X86CPU {
 
                 break;
 
+
+            /*
+             * 02:
+             * ADD EAX, immediate
+             */
 
             case 0x02:
 
@@ -314,6 +431,11 @@ class X86CPU {
 
                 break;
 
+
+            /*
+             * 03:
+             * SUB EAX, immediate
+             */
 
             case 0x03:
 
@@ -329,9 +451,13 @@ class X86CPU {
             default:
 
                 throw new Error(
+
                     "Unknown test opcode: 0x" +
+
                     instruction.opcode
                         .toString(16)
+                        .toUpperCase()
+
                 );
 
         }
@@ -344,11 +470,14 @@ class X86CPU {
     }
 
 
-    run(program) {
+    run(
+        program
+    ) {
 
         this.reset();
 
-        this.running = true;
+        this.running =
+            true;
 
 
         for (
@@ -356,8 +485,12 @@ class X86CPU {
             of program
         ) {
 
-            if (!this.running) {
+            if (
+                !this.running
+            ) {
+
                 break;
+
             }
 
 
@@ -368,15 +501,22 @@ class X86CPU {
         }
 
 
-        this.running = false;
+        this.running =
+            false;
 
 
         return {
+
             registers:
-                { ...this.registers },
+                {
+                    ...this.registers
+                },
 
             EIP:
                 this.EIP,
+
+            EFLAGS:
+                this.EFLAGS,
 
             cycles:
                 this.cycles
@@ -388,7 +528,8 @@ class X86CPU {
 
     stop() {
 
-        this.running = false;
+        this.running =
+            false;
 
     }
 
@@ -399,23 +540,27 @@ class X86CPU {
    RAM DIAGNOSTICS
 ============================================================ */
 
-function testRAM(memory) {
+function testRAM(
+    memory
+) {
 
     const addresses = [
 
-        0x00000,
-        0x00001,
-        0x00100,
-        0x01000,
-        0x10000,
-        0x80000,
-        0xFFFFF
+        0x000000,
+        0x000001,
+        0x000100,
+        0x001000,
+        0x010000,
+        0x100000,
+        0x400000,
+        0x800000,
+        0xFFFFFF
 
     ];
 
 
     /*
-     * Pattern AA
+     * 0xAA test
      */
 
     for (
@@ -459,7 +604,7 @@ function testRAM(memory) {
 
 
     /*
-     * Pattern 55
+     * 0x55 test
      */
 
     for (
@@ -571,31 +716,46 @@ function testRAM(memory) {
 
 
 /* ============================================================
-   XBE LOADER
+   XBE IMAGE
 ============================================================ */
 
 class XBEImage {
 
-    constructor(file) {
+    constructor(
+        file
+    ) {
 
-        this.file = file;
+        this.file =
+            file;
 
-        this.buffer = null;
 
-        this.bytes = null;
+        this.buffer =
+            null;
 
-        this.valid = false;
 
-        this.magic = null;
+        this.bytes =
+            null;
 
-        this.header = {};
+
+        this.valid =
+            false;
+
+
+        this.magic =
+            null;
+
+
+        this.header =
+            {};
 
     }
 
 
     async load() {
 
-        if (!this.file) {
+        if (
+            !this.file
+        ) {
 
             throw new Error(
                 "No game file supplied."
@@ -625,29 +785,27 @@ class XBEImage {
         }
 
 
-        /*
-         * XBE magic:
-         *
-         * "XBEH"
-         *
-         * Little endian:
-         * 0x48454258
-         */
-
-        this.magic =
+        const view =
             new DataView(
                 this.buffer
-            ).getUint32(
+            );
+
+
+        this.magic =
+            view.getUint32(
                 0,
                 true
             );
 
 
         this.valid =
-            this.magic === XBE_MAGIC;
+            this.magic ===
+            XBE_MAGIC;
 
 
-        if (this.valid) {
+        if (
+            this.valid
+        ) {
 
             this.parseHeader();
 
@@ -667,37 +825,63 @@ class XBEImage {
             );
 
 
-        this.header.magic =
-            view.getUint32(
-                0,
-                true
-            );
-
-
         /*
-         * Keep parsing deliberately conservative.
+         * Basic XBE header information.
          *
-         * The complete XBE format will be implemented
-         * later as part of the loader.
+         * We deliberately keep this parser
+         * conservative for now.
          */
 
+        this.header = {
 
-        this.header.size =
-            this.bytes.length;
+            magic:
+                view.getUint32(
+                    0x00,
+                    true
+                ),
+
+            baseAddress:
+                this.readSafe32(
+                    view,
+                    0x104
+                ),
+
+            size:
+                this.bytes.length
+
+        };
+
+    }
+
+
+    readSafe32(
+        view,
+        offset
+    ) {
+
+        if (
+            offset + 4 >
+            view.byteLength
+        ) {
+
+            return 0;
+
+        }
+
+
+        return view.getUint32(
+            offset,
+            true
+        );
 
     }
 
 
     get status() {
 
-        if (this.valid) {
-
-            return "XBE";
-
-        }
-
-
-        return "UNKNOWN";
+        return this.valid
+            ? "XBE"
+            : "UNKNOWN";
 
     }
 
@@ -711,12 +895,30 @@ class XBEImage {
     }
 
 
+    get magicString() {
+
+        if (
+            !this.valid
+        ) {
+
+            return "UNKNOWN";
+
+        }
+
+
+        return "XBEH";
+
+    }
+
+
     loadIntoMemory(
         memory,
         address = 0x10000
     ) {
 
-        if (!this.bytes) {
+        if (
+            !this.bytes
+        ) {
 
             throw new Error(
                 "XBE image has not been loaded."
@@ -725,6 +927,11 @@ class XBEImage {
         }
 
 
+        /*
+         * The image itself can be larger than
+         * the available emulated RAM.
+         */
+
         if (
             address +
             this.bytes.length >
@@ -732,7 +939,17 @@ class XBEImage {
         ) {
 
             throw new Error(
-                "Game image does not fit in emulated RAM."
+
+                "XBE image is too large for " +
+
+                (
+                    memory.size /
+                    1024 /
+                    1024
+                ) +
+
+                " MB emulated RAM."
+
             );
 
         }
@@ -759,13 +976,24 @@ class XBEImage {
 
 
 /* ============================================================
-   GAME IMAGE LOADER
+   GAME FILE LOADER
 ============================================================ */
 
 async function loadGameFile(
     file,
     memory
 ) {
+
+    if (
+        !memory
+    ) {
+
+        throw new Error(
+            "Memory system unavailable."
+        );
+
+    }
+
 
     const image =
         new XBEImage(
@@ -780,12 +1008,9 @@ async function loadGameFile(
         null;
 
 
-    /*
-     * Only load a recognized XBE
-     * into the experimental RAM.
-     */
-
-    if (image.valid) {
+    if (
+        image.valid
+    ) {
 
         memoryInfo =
             image.loadIntoMemory(
@@ -805,8 +1030,14 @@ async function loadGameFile(
         format:
             image.status,
 
+        magic:
+            image.magicString,
+
         size:
             image.size,
+
+        header:
+            image.header,
 
         memory:
             memoryInfo
@@ -817,12 +1048,16 @@ async function loadGameFile(
 
 
 /* ============================================================
-   CORE
+   WEBBKTX CORE
 ============================================================ */
 
 class WebBktxCore {
 
     constructor() {
+
+        this.version =
+            WEBBKTX_VERSION;
+
 
         this.memory =
             new WebBktxMemory(
@@ -846,7 +1081,10 @@ class WebBktxCore {
 
         this.cpu.reset();
 
-        this.game = null;
+        this.memory.clear();
+
+        this.game =
+            null;
 
     }
 
@@ -877,19 +1115,27 @@ class WebBktxCore {
 
         return {
 
+            version:
+                this.version,
+
             ram,
 
             cpu,
 
             cpuPassed:
-                cpu.registers.EAX === 30
+                cpu.registers.EAX === 30,
+
+            ramSize:
+                this.memory.size
 
         };
 
     }
 
 
-    async loadGame(file) {
+    async loadGame(
+        file
+    ) {
 
         this.game =
             await loadGameFile(
@@ -915,13 +1161,56 @@ class WebBktxCore {
 /* ============================================================
    PUBLIC API
 ============================================================ */
+
 window.WebBktxCore = {
 
-    X86CPU,
-    WebBktxMemory,
-    XBEImage,
-    WebBktxCore,
-    testRAM,
-    loadGameFile
+    version:
+        WEBBKTX_VERSION,
+
+    X86CPU:
+        X86CPU,
+
+    WebBktxMemory:
+        WebBktxMemory,
+
+    XBEImage:
+        XBEImage,
+
+    WebBktxCore:
+        WebBktxCore,
+
+    testRAM:
+        testRAM,
+
+    loadGameFile:
+        loadGameFile
 
 };
+
+
+/* ============================================================
+   CORE BOOT MESSAGE
+============================================================ */
+
+console.log(
+    "[WebBktx] Core loaded successfully."
+);
+
+console.log(
+    "[WebBktx] Version:",
+    WEBBKTX_VERSION
+);
+
+console.log(
+    "[WebBktx] RAM:",
+    (
+        RAM_SIZE /
+        1024 /
+        1024
+    ) + " MB"
+);
+
+console.log(
+    "[WebBktx] Public API:",
+    window.WebBktxCore
+);
