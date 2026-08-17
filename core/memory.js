@@ -2,19 +2,30 @@
  * ============================================================
  * WebBktx Memory
  *
- * Version: 0.7A
+ * Version: 1.0 MAX
  *
- * Emulated memory subsystem
+ * Emulated Xbox memory subsystem
  *
  * Features:
- *   - 16 MB emulated RAM
- *   - 8 / 16 / 32-bit read
- *   - 8 / 16 / 32-bit write
- *   - byte block read/write
- *   - memory clear
- *   - address validation
- *   - memory diagnostics
- *   - hexadecimal memory dump
+ *   - Emulated RAM
+ *   - 32-bit address space handling
+ *   - Read/write 8/16/32
+ *   - Bulk read/write
+ *   - Read-only regions
+ *   - Memory mapped regions
+ *   - Address translation
+ *   - Bounds checking
+ *   - Stack support
+ *   - Zero-filled memory
+ *   - Memory dump
+ *   - Memory statistics
+ *   - Fast Uint8Array backing store
+ *
+ * Compatible with:
+ *   CPU
+ *   XBE Loader
+ *   Kernel
+ *   Core
  *
  * ============================================================
  */
@@ -23,38 +34,203 @@
 
 
 /* ============================================================
-   CONFIGURATION
+   VERSION
 ============================================================ */
 
-const WEBBKTX_RAM_SIZE =
-    16 * 1024 * 1024;
+const WEBBKTX_MEMORY_VERSION = "1.0 MAX";
 
 
 /* ============================================================
-   MEMORY CLASS
+   DEFAULTS
+============================================================ */
+
+const MEMORY_DEFAULT_SIZE =
+    64 * 1024 * 1024;
+
+
+/* ============================================================
+   MEMORY ERRORS
+============================================================ */
+
+class WebBktxMemoryError extends Error {
+
+    constructor(
+        message,
+        address = null
+    ) {
+
+        super(message);
+
+        this.name =
+            "WebBktxMemoryError";
+
+        this.address =
+            address === null
+                ? null
+                : address >>> 0;
+
+    }
+
+}
+
+
+/* ============================================================
+   MEMORY REGION
+============================================================ */
+
+class WebBktxMemoryRegion {
+
+    constructor(
+        options = {}
+    ) {
+
+        this.name =
+            options.name ||
+            "region";
+
+        this.start =
+            options.start >>> 0;
+
+        this.size =
+            options.size >>> 0;
+
+        this.end =
+            (
+                this.start +
+                this.size
+            ) >>> 0;
+
+        this.read =
+            options.read !== false;
+
+        this.write =
+            options.write !== false;
+
+        this.execute =
+            options.execute !== false;
+
+        this.type =
+            options.type ||
+            "RAM";
+
+        this.handler =
+            options.handler ||
+            null;
+
+    }
+
+
+    contains(
+        address
+    ) {
+
+        address >>>= 0;
+
+        return (
+            address >= this.start &&
+            address < this.end
+        );
+
+    }
+
+
+    toJSON() {
+
+        return {
+
+            name:
+                this.name,
+
+            start:
+                "0x" +
+                this.start
+                    .toString(16)
+                    .padStart(8, "0")
+                    .toUpperCase(),
+
+            size:
+                this.size,
+
+            end:
+                "0x" +
+                this.end
+                    .toString(16)
+                    .padStart(8, "0")
+                    .toUpperCase(),
+
+            type:
+                this.type,
+
+            read:
+                this.read,
+
+            write:
+                this.write,
+
+            execute:
+                this.execute
+
+        };
+
+    }
+
+}
+
+
+/* ============================================================
+   MEMORY
 ============================================================ */
 
 class WebBktxMemory {
 
-    constructor(size = WEBBKTX_RAM_SIZE) {
+    constructor(
+        size = MEMORY_DEFAULT_SIZE,
+        options = {}
+    ) {
+
+        /*
+         * Support:
+         *
+         * new WebBktxMemory(size)
+         *
+         * new WebBktxMemory({
+         *     size: ...
+         * })
+         */
 
         if (
-            !Number.isInteger(size) ||
+            typeof size ===
+            "object"
+        ) {
+
+            options =
+                size;
+
+            size =
+                options.size ||
+                MEMORY_DEFAULT_SIZE;
+
+        }
+
+
+        if (
+            !Number.isSafeInteger(size) ||
             size <= 0
         ) {
 
-            throw new Error(
+            throw new WebBktxMemoryError(
                 "Invalid memory size."
             );
 
         }
 
 
-        this.size = size;
+        this.size =
+            size;
 
 
         /*
-         * Main memory buffer.
+         * Main emulated RAM.
          */
 
         this.buffer =
@@ -63,19 +239,11 @@ class WebBktxMemory {
             );
 
 
-        /*
-         * Byte access.
-         */
-
         this.bytes =
             new Uint8Array(
                 this.buffer
             );
 
-
-        /*
-         * Multi-byte access.
-         */
 
         this.view =
             new DataView(
@@ -84,27 +252,88 @@ class WebBktxMemory {
 
 
         /*
-         * Statistics.
+         * Regions.
          */
 
-        this.readOperations = 0;
-
-        this.writeOperations = 0;
-
-    }
+        this.regions =
+            [];
 
 
-    /* ========================================================
-       RESET / CLEAR
-    ======================================================== */
+        /*
+         * Memory statistics.
+         */
 
-    clear() {
+        this.stats = {
 
-        this.bytes.fill(0);
+            reads8: 0,
+            reads16: 0,
+            reads32: 0,
 
-        this.readOperations = 0;
+            writes8: 0,
+            writes16: 0,
+            writes32: 0,
 
-        this.writeOperations = 0;
+            bulkReads: 0,
+            bulkWrites: 0,
+
+            faults: 0
+
+        };
+
+
+        /*
+         * Optional callbacks.
+         */
+
+        this.onRead =
+            typeof options.onRead ===
+            "function"
+                ? options.onRead
+                : null;
+
+
+        this.onWrite =
+            typeof options.onWrite ===
+            "function"
+                ? options.onWrite
+                : null;
+
+
+        /*
+         * Clear RAM initially.
+         */
+
+        this.clear();
+
+
+        /*
+         * Create default RAM region.
+         */
+
+        this.addRegion({
+
+            name:
+                "Xbox RAM",
+
+            start:
+                0,
+
+            size:
+                this.size,
+
+            type:
+                "RAM",
+
+            read:
+                true,
+
+            write:
+                true,
+
+            execute:
+                true
+
+        });
 
     }
 
@@ -113,99 +342,89 @@ class WebBktxMemory {
        ADDRESS VALIDATION
     ======================================================== */
 
-    checkAddress(
-        address,
-        length = 1
+    normalizeAddress(
+        address
     ) {
 
         if (
             !Number.isInteger(address)
         ) {
 
-            throw new TypeError(
-                "Memory address must be an integer."
+            throw new WebBktxMemoryError(
+                "Memory address must be an integer.",
+                address
             );
 
         }
+
+
+        return address >>> 0;
+
+    }
+
+
+    checkRange(
+        address,
+        length = 1
+    ) {
+
+        address =
+            this.normalizeAddress(
+                address
+            );
 
 
         if (
             !Number.isInteger(length) ||
-            length < 1
+            length < 0
         ) {
 
-            throw new TypeError(
-                "Memory access length is invalid."
+            throw new WebBktxMemoryError(
+                "Invalid memory range.",
+                address
             );
 
         }
 
+
+        /*
+         * Avoid 32-bit overflow.
+         */
 
         if (
-            address < 0
+            address >= this.size ||
+            length > this.size - address
         ) {
 
-            throw new RangeError(
-                `Negative memory address: 0x${
-                    address.toString(16)
-                }`
+            this.stats.faults++;
+
+
+            throw new WebBktxMemoryError(
+
+                `Memory access out of range: ` +
+                `0x${address.toString(16)}`,
+
+                address
+
             );
 
         }
 
 
-        if (
-            address + length > this.size
-        ) {
-
-            throw new RangeError(
-                `Memory access outside RAM: ` +
-                `0x${address.toString(16)}`
-            );
-
-        }
+        return true;
 
     }
 
 
     /* ========================================================
-       8-BIT
+       CLEAR
     ======================================================== */
 
-    read8(address) {
-
-        this.checkAddress(
-            address,
-            1
-        );
-
-
-        this.readOperations++;
-
-
-        return this.view.getUint8(
-            address
-        );
-
-    }
-
-
-    write8(
-        address,
-        value
+    clear(
+        value = 0
     ) {
 
-        this.checkAddress(
-            address,
-            1
-        );
-
-
-        this.writeOperations++;
-
-
-        this.view.setUint8(
-            address,
+        this.bytes.fill(
             value & 0xFF
         );
 
@@ -213,44 +432,365 @@ class WebBktxMemory {
 
 
     /* ========================================================
-       16-BIT
+       REGIONS
     ======================================================== */
 
-    read16(address) {
+    addRegion(
+        options
+    ) {
 
-        this.checkAddress(
+        const region =
+            options instanceof
+            WebBktxMemoryRegion
+
+                ? options
+
+                : new WebBktxMemoryRegion(
+                    options
+                );
+
+
+        this.regions.push(
+            region
+        );
+
+
+        return region;
+
+    }
+
+
+    removeRegion(
+        name
+    ) {
+
+        this.regions =
+            this.regions.filter(
+                region =>
+                    region.name !== name
+            );
+
+    }
+
+
+    findRegion(
+        address
+    ) {
+
+        address >>>= 0;
+
+
+        /*
+         * Search backwards so newer mappings
+         * can override older ones.
+         */
+
+        for (
+            let i =
+                this.regions.length - 1;
+
+            i >= 0;
+
+            i--
+        ) {
+
+            const region =
+                this.regions[i];
+
+
+            if (
+                region.contains(
+                    address
+                )
+            ) {
+
+                return region;
+
+            }
+
+        }
+
+
+        return null;
+
+    }
+
+
+    /* ========================================================
+       PERMISSIONS
+    ======================================================== */
+
+    checkRead(
+        address,
+        length
+    ) {
+
+        const region =
+            this.findRegion(
+                address
+            );
+
+
+        if (
+            region &&
+            !region.read
+        ) {
+
+            throw new WebBktxMemoryError(
+                `Read access denied in ${region.name}.`,
+                address
+            );
+
+        }
+
+
+        this.checkRange(
+            address,
+            length
+        );
+
+    }
+
+
+    checkWrite(
+        address,
+        length
+    ) {
+
+        const region =
+            this.findRegion(
+                address
+            );
+
+
+        if (
+            region &&
+            !region.write
+        ) {
+
+            throw new WebBktxMemoryError(
+                `Write access denied in ${region.name}.`,
+                address
+            );
+
+        }
+
+
+        this.checkRange(
+            address,
+            length
+        );
+
+    }
+
+
+    /* ========================================================
+       READ 8
+    ======================================================== */
+
+    read8(
+        address
+    ) {
+
+        address =
+            this.normalizeAddress(
+                address
+            );
+
+
+        this.checkRead(
+            address,
+            1
+        );
+
+
+        this.stats.reads8++;
+
+
+        const value =
+            this.bytes[address];
+
+
+        if (
+            this.onRead
+        ) {
+
+            this.onRead(
+                address,
+                1,
+                value
+            );
+
+        }
+
+
+        return value;
+
+    }
+
+
+    /* ========================================================
+       READ 16
+    ======================================================== */
+
+    read16(
+        address
+    ) {
+
+        address =
+            this.normalizeAddress(
+                address
+            );
+
+
+        this.checkRead(
             address,
             2
         );
 
 
-        this.readOperations++;
+        this.stats.reads16++;
 
 
-        /*
-         * Xbox/x86 is little-endian.
-         */
+        const value =
+            this.view.getUint16(
+                address,
+                true
+            );
 
-        return this.view.getUint16(
-            address,
-            true
-        );
+
+        if (
+            this.onRead
+        ) {
+
+            this.onRead(
+                address,
+                2,
+                value
+            );
+
+        }
+
+
+        return value;
 
     }
 
+
+    /* ========================================================
+       READ 32
+    ======================================================== */
+
+    read32(
+        address
+    ) {
+
+        address =
+            this.normalizeAddress(
+                address
+            );
+
+
+        this.checkRead(
+            address,
+            4
+        );
+
+
+        this.stats.reads32++;
+
+
+        const value =
+            this.view.getUint32(
+                address,
+                true
+            );
+
+
+        if (
+            this.onRead
+        ) {
+
+            this.onRead(
+                address,
+                4,
+                value
+            );
+
+        }
+
+
+        return value >>> 0;
+
+    }
+
+
+    /* ========================================================
+       WRITE 8
+    ======================================================== */
+
+    write8(
+        address,
+        value
+    ) {
+
+        address =
+            this.normalizeAddress(
+                address
+            );
+
+
+        this.checkWrite(
+            address,
+            1
+        );
+
+
+        value &=
+            0xFF;
+
+
+        this.bytes[address] =
+            value;
+
+
+        this.stats.writes8++;
+
+
+        if (
+            this.onWrite
+        ) {
+
+            this.onWrite(
+                address,
+                1,
+                value
+            );
+
+        }
+
+    }
+
+
+    /* ========================================================
+       WRITE 16
+    ======================================================== */
 
     write16(
         address,
         value
     ) {
 
-        this.checkAddress(
+        address =
+            this.normalizeAddress(
+                address
+            );
+
+
+        this.checkWrite(
             address,
             2
         );
-
-
-        this.writeOperations++;
 
 
         this.view.setUint16(
@@ -259,44 +799,48 @@ class WebBktxMemory {
             true
         );
 
+
+        this.stats.writes16++;
+
+
+        if (
+            this.onWrite
+        ) {
+
+            this.onWrite(
+                address,
+                2,
+                value & 0xFFFF
+            );
+
+        }
+
     }
 
 
     /* ========================================================
-       32-BIT
+       WRITE 32
     ======================================================== */
-
-    read32(address) {
-
-        this.checkAddress(
-            address,
-            4
-        );
-
-
-        this.readOperations++;
-
-
-        return this.view.getUint32(
-            address,
-            true
-        );
-
-    }
-
 
     write32(
         address,
         value
     ) {
 
-        this.checkAddress(
+        address =
+            this.normalizeAddress(
+                address
+            );
+
+
+        this.checkWrite(
             address,
             4
         );
 
 
-        this.writeOperations++;
+        value >>>
+            0;
 
 
         this.view.setUint32(
@@ -305,71 +849,27 @@ class WebBktxMemory {
             true
         );
 
-    }
+
+        this.stats.writes32++;
 
 
-    /* ========================================================
-       SIGNED READS
-    ======================================================== */
+        if (
+            this.onWrite
+        ) {
 
-    readS8(address) {
+            this.onWrite(
+                address,
+                4,
+                value >>> 0
+            );
 
-        this.checkAddress(
-            address,
-            1
-        );
-
-
-        this.readOperations++;
-
-
-        return this.view.getInt8(
-            address
-        );
-
-    }
-
-
-    readS16(address) {
-
-        this.checkAddress(
-            address,
-            2
-        );
-
-
-        this.readOperations++;
-
-
-        return this.view.getInt16(
-            address,
-            true
-        );
-
-    }
-
-
-    readS32(address) {
-
-        this.checkAddress(
-            address,
-            4
-        );
-
-
-        this.readOperations++;
-
-
-        return this.view.getInt32(
-            address,
-            true
-        );
+        }
 
     }
 
 
     /* ========================================================
-       BYTE BLOCKS
+       BULK READ
     ======================================================== */
 
     readBytes(
@@ -377,13 +877,19 @@ class WebBktxMemory {
         length
     ) {
 
-        this.checkAddress(
+        address =
+            this.normalizeAddress(
+                address
+            );
+
+
+        this.checkRead(
             address,
             length
         );
 
 
-        this.readOperations++;
+        this.stats.bulkReads++;
 
 
         return this.bytes.slice(
@@ -394,13 +900,24 @@ class WebBktxMemory {
     }
 
 
+    /* ========================================================
+       BULK WRITE
+    ======================================================== */
+
     writeBytes(
         address,
         data
     ) {
 
+        address =
+            this.normalizeAddress(
+                address
+            );
+
+
         if (
-            !(data instanceof Uint8Array)
+            data instanceof
+            ArrayBuffer
         ) {
 
             data =
@@ -411,18 +928,84 @@ class WebBktxMemory {
         }
 
 
-        this.checkAddress(
+        if (
+            !(data instanceof Uint8Array)
+        ) {
+
+            throw new WebBktxMemoryError(
+                "writeBytes requires Uint8Array or ArrayBuffer.",
+                address
+            );
+
+        }
+
+
+        this.checkWrite(
             address,
             data.length
         );
 
 
-        this.writeOperations++;
-
-
         this.bytes.set(
             data,
             address
+        );
+
+
+        this.stats.bulkWrites++;
+
+
+        if (
+            this.onWrite
+        ) {
+
+            this.onWrite(
+                address,
+                data.length,
+                data
+            );
+
+        }
+
+    }
+
+
+    /* ========================================================
+       COPY
+    ======================================================== */
+
+    copy(
+        source,
+        destination,
+        length
+    ) {
+
+        source =
+            this.normalizeAddress(
+                source
+            );
+
+        destination =
+            this.normalizeAddress(
+                destination
+            );
+
+
+        this.checkRead(
+            source,
+            length
+        );
+
+        this.checkWrite(
+            destination,
+            length
+        );
+
+
+        this.bytes.copyWithin(
+            destination,
+            source,
+            source + length
         );
 
     }
@@ -438,7 +1021,13 @@ class WebBktxMemory {
         value = 0
     ) {
 
-        this.checkAddress(
+        address =
+            this.normalizeAddress(
+                address
+            );
+
+
+        this.checkWrite(
             address,
             length
         );
@@ -450,68 +1039,199 @@ class WebBktxMemory {
             address + length
         );
 
-
-        this.writeOperations++;
-
     }
 
 
     /* ========================================================
-       COPY
+       STACK HELPERS
     ======================================================== */
 
-    copy(
-        source,
-        destination,
-        length
+    push32(
+        stackPointer,
+        value
     ) {
 
-        this.checkAddress(
-            source,
-            length
+        stackPointer =
+            (
+                stackPointer -
+                4
+            ) >>> 0;
+
+
+        this.write32(
+            stackPointer,
+            value
         );
 
 
-        this.checkAddress(
-            destination,
-            length
-        );
+        return stackPointer;
+
+    }
 
 
-        const data =
-            this.bytes.slice(
-                source,
-                source + length
+    pop32(
+        stackPointer
+    ) {
+
+        const value =
+            this.read32(
+                stackPointer
             );
 
 
-        this.bytes.set(
-            data,
-            destination
-        );
+        stackPointer =
+            (
+                stackPointer +
+                4
+            ) >>> 0;
 
 
-        this.readOperations++;
+        return {
 
-        this.writeOperations++;
+            value:
+                value >>> 0,
+
+            stackPointer:
+                stackPointer
+
+        };
 
     }
 
 
     /* ========================================================
-       ZERO BLOCK
+       EXECUTABLE CHECK
     ======================================================== */
 
-    zero(
-        address,
-        length
+    isExecutable(
+        address
     ) {
 
-        this.fill(
+        const region =
+            this.findRegion(
+                address
+            );
+
+
+        if (
+            !region
+        ) {
+
+            return false;
+
+        }
+
+
+        return region.execute;
+
+    }
+
+
+    /* ========================================================
+       READ STRING
+    ======================================================== */
+
+    readCString(
+        address,
+        maxLength = 256
+    ) {
+
+        address =
+            this.normalizeAddress(
+                address
+            );
+
+
+        let result = "";
+
+
+        for (
+            let i = 0;
+            i < maxLength;
+            i++
+        ) {
+
+            const value =
+                this.read8(
+                    address + i
+                );
+
+
+            if (
+                value === 0
+            ) {
+
+                break;
+
+            }
+
+
+            result +=
+                String.fromCharCode(
+                    value
+                );
+
+        }
+
+
+        return result;
+
+    }
+
+
+    /* ========================================================
+       WRITE STRING
+    ======================================================== */
+
+    writeCString(
+        address,
+        text,
+        maxLength = null
+    ) {
+
+        address =
+            this.normalizeAddress(
+                address
+            );
+
+
+        const string =
+            String(text);
+
+
+        const limit =
+            maxLength === null
+                ? string.length
+                : Math.min(
+                    string.length,
+                    maxLength
+                );
+
+
+        this.checkWrite(
             address,
-            length,
-            0
+            limit + 1
         );
+
+
+        for (
+            let i = 0;
+            i < limit;
+            i++
+        ) {
+
+            this.bytes[
+                address + i
+            ] =
+                string.charCodeAt(i)
+                & 0xFF;
+
+        }
+
+
+        this.bytes[
+            address + limit
+        ] = 0;
 
     }
 
@@ -522,92 +1242,154 @@ class WebBktxMemory {
 
     dump(
         address,
-        length = 64
+        length = 256
     ) {
 
-        this.checkAddress(
-            address,
-            length
-        );
-
-
-        const data =
-            this.bytes.slice(
+        const bytes =
+            this.readBytes(
                 address,
-                address + length
+                length
             );
 
 
-        const lines = [];
+        const lines =
+            [];
 
 
         for (
-            let offset = 0;
-            offset < data.length;
-            offset += 16
+            let i = 0;
+            i < bytes.length;
+            i += 16
         ) {
 
-            const row =
-                data.slice(
-                    offset,
-                    offset + 16
+            const chunk =
+                bytes.slice(
+                    i,
+                    i + 16
                 );
 
 
             const hex =
-                Array.from(row)
-                    .map(
-                        byte =>
-                            byte
-                                .toString(16)
-                                .padStart(
-                                    2,
-                                    "0"
-                                )
-                                .toUpperCase()
-                    )
-                    .join(" ");
+                Array.from(
+                    chunk
+                )
+                .map(
+                    value =>
+                        value
+                            .toString(16)
+                            .padStart(
+                                2,
+                                "0"
+                            )
+                            .toUpperCase()
+                )
+                .join(" ");
 
 
             const ascii =
-                Array.from(row)
-                    .map(
-                        byte =>
-                            byte >= 32 &&
-                            byte <= 126
-                                ? String.fromCharCode(byte)
-                                : "."
-                    )
-                    .join("");
+                Array.from(
+                    chunk
+                )
+                .map(
+                    value =>
+                        value >= 32 &&
+                        value <= 126
+
+                            ? String.fromCharCode(
+                                value
+                            )
+
+                            : "."
+                )
+                .join("");
 
 
             lines.push(
-                `${(
-                    address + offset
+
+                "0x" +
+                (
+                    address + i
                 )
-                    .toString(16)
-                    .padStart(
-                        8,
-                        "0"
-                    )
-                    .toUpperCase()}  ` +
-                `${hex.padEnd(47, " ")}  ` +
-                `|${ascii}|`
+                .toString(16)
+                .padStart(
+                    8,
+                    "0"
+                )
+                .toUpperCase() +
+
+                "  " +
+
+                hex.padEnd(
+                    47,
+                    " "
+                ) +
+
+                "  " +
+
+                ascii
+
             );
 
         }
 
 
-        return lines.join("\n");
+        return lines.join(
+            "\n"
+        );
 
     }
 
 
     /* ========================================================
-       MEMORY INFORMATION
+       SNAPSHOT
     ======================================================== */
 
-    getInfo() {
+    snapshot() {
+
+        return this.bytes.slice();
+
+    }
+
+
+    restore(
+        snapshot
+    ) {
+
+        if (
+            !(snapshot instanceof Uint8Array)
+        ) {
+
+            throw new WebBktxMemoryError(
+                "Invalid memory snapshot."
+            );
+
+        }
+
+
+        if (
+            snapshot.length !==
+            this.size
+        ) {
+
+            throw new WebBktxMemoryError(
+                "Snapshot size does not match RAM size."
+            );
+
+        }
+
+
+        this.bytes.set(
+            snapshot
+        );
+
+    }
+
+
+    /* ========================================================
+       STATISTICS
+    ======================================================== */
+
+    getStatistics() {
 
         return {
 
@@ -619,11 +1401,32 @@ class WebBktxMemory {
                 1024 /
                 1024,
 
-            readOperations:
-                this.readOperations,
+            reads8:
+                this.stats.reads8,
 
-            writeOperations:
-                this.writeOperations
+            reads16:
+                this.stats.reads16,
+
+            reads32:
+                this.stats.reads32,
+
+            writes8:
+                this.stats.writes8,
+
+            writes16:
+                this.stats.writes16,
+
+            writes32:
+                this.stats.writes32,
+
+            bulkReads:
+                this.stats.bulkReads,
+
+            bulkWrites:
+                this.stats.bulkWrites,
+
+            faults:
+                this.stats.faults
 
         };
 
@@ -631,174 +1434,15 @@ class WebBktxMemory {
 
 
     /* ========================================================
-       TEST
+       STATUS
     ======================================================== */
 
-    selfTest() {
-
-        const testAddress =
-            0x1000;
-
-
-        /*
-         * Save original value.
-         */
-
-        const original =
-            this.read32(
-                testAddress
-            );
-
-
-        /*
-         * 32-bit test.
-         */
-
-        this.write32(
-            testAddress,
-            0x12345678
-        );
-
-
-        const value32 =
-            this.read32(
-                testAddress
-            );
-
-
-        if (
-            value32 !== 0x12345678
-        ) {
-
-            return {
-
-                passed: false,
-
-                test:
-                    "32-BIT",
-
-                expected:
-                    "0x12345678",
-
-                received:
-                    "0x" +
-                    value32
-                        .toString(16)
-                        .padStart(
-                            8,
-                            "0"
-                        )
-
-            };
-
-        }
-
-
-        /*
-         * 16-bit test.
-         */
-
-        this.write16(
-            testAddress,
-            0xABCD
-        );
-
-
-        const value16 =
-            this.read16(
-                testAddress
-            );
-
-
-        if (
-            value16 !== 0xABCD
-        ) {
-
-            return {
-
-                passed: false,
-
-                test:
-                    "16-BIT",
-
-                expected:
-                    "0xABCD",
-
-                received:
-                    "0x" +
-                    value16
-                        .toString(16)
-                        .padStart(
-                            4,
-                            "0"
-                        )
-
-            };
-
-        }
-
-
-        /*
-         * 8-bit test.
-         */
-
-        this.write8(
-            testAddress,
-            0xEF
-        );
-
-
-        const value8 =
-            this.read8(
-                testAddress
-            );
-
-
-        if (
-            value8 !== 0xEF
-        ) {
-
-            return {
-
-                passed: false,
-
-                test:
-                    "8-BIT",
-
-                expected:
-                    "0xEF",
-
-                received:
-                    "0x" +
-                    value8
-                        .toString(16)
-                        .padStart(
-                            2,
-                            "0"
-                        )
-
-            };
-
-        }
-
-
-        /*
-         * Restore original memory.
-         */
-
-        this.write32(
-            testAddress,
-            original
-        );
-
+    getStatus() {
 
         return {
 
-            passed:
-                true,
-
-            test:
-                "MEMORY",
+            version:
+                WEBBKTX_MEMORY_VERSION,
 
             size:
                 this.size,
@@ -806,7 +1450,186 @@ class WebBktxMemory {
             sizeMB:
                 this.size /
                 1024 /
-                1024
+                1024,
+
+            regions:
+                this.regions.map(
+                    region =>
+                        region.toJSON()
+                ),
+
+            statistics:
+                this.getStatistics()
+
+        };
+
+    }
+
+
+    /* ========================================================
+       SELF TEST
+    ======================================================== */
+
+    selfTest() {
+
+        const address =
+            0x1000;
+
+
+        const original =
+            this.read32(
+                address
+            );
+
+
+        this.write32(
+            address,
+            0x12345678
+        );
+
+
+        const value =
+            this.read32(
+                address
+            );
+
+
+        if (
+            value !==
+            0x12345678
+        ) {
+
+            return {
+
+                passed: false,
+
+                test:
+                    "READ/WRITE32",
+
+                expected:
+                    "0x12345678",
+
+                received:
+                    "0x" +
+                    value.toString(16)
+
+            };
+
+        }
+
+
+        this.write16(
+            address,
+            0xABCD
+        );
+
+
+        if (
+            this.read16(address) !==
+            0xABCD
+        ) {
+
+            return {
+
+                passed: false,
+
+                test:
+                    "READ/WRITE16"
+
+            };
+
+        }
+
+
+        this.write8(
+            address,
+            0xEF
+        );
+
+
+        if (
+            this.read8(address) !==
+            0xEF
+        ) {
+
+            return {
+
+                passed: false,
+
+                test:
+                    "READ/WRITE8"
+
+            };
+
+        }
+
+
+        this.writeBytes(
+            address,
+            new Uint8Array([
+                1,
+                2,
+                3,
+                4
+            ])
+        );
+
+
+        const bytes =
+            this.readBytes(
+                address,
+                4
+            );
+
+
+        if (
+            bytes[0] !== 1 ||
+            bytes[1] !== 2 ||
+            bytes[2] !== 3 ||
+            bytes[3] !== 4
+        ) {
+
+            return {
+
+                passed: false,
+
+                test:
+                    "BULK MEMORY"
+
+            };
+
+        }
+
+
+        this.write32(
+            address,
+            original
+        );
+
+
+        return {
+
+            passed: true,
+
+            memory:
+                "WebBktx Memory 1.0 MAX",
+
+            ram:
+                this.size,
+
+            ramMB:
+                this.size /
+                1024 /
+                1024,
+
+            readWrite:
+                "PASS",
+
+            bulk:
+                "PASS",
+
+            regions:
+                this.regions.length
 
         };
 
@@ -816,22 +1639,25 @@ class WebBktxMemory {
 
 
 /* ============================================================
-   GLOBAL EXPORT
+   EXPORT
 ============================================================ */
 
 window.WebBktxMemory =
     WebBktxMemory;
 
 
-window.WebBktxMemoryConfig = {
+window.WebBktxMemoryRegion =
+    WebBktxMemoryRegion;
 
-    RAM_SIZE:
-        WEBBKTX_RAM_SIZE
 
-};
+window.WebBktxMemoryError =
+    WebBktxMemoryError;
 
+
+/* ============================================================
+   READY
+============================================================ */
 
 console.log(
-    `WebBktx Memory 0.7A loaded — ` +
-    `${WEBBKTX_RAM_SIZE / 1024 / 1024} MB RAM`
+    `WebBktx Memory ${WEBBKTX_MEMORY_VERSION} loaded.`
 );
