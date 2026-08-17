@@ -1,46 +1,36 @@
 /*
  * ============================================================
- * WebBktx XBE Loader / Analyzer
+ * WebBktx XBE Loader
  *
- * Version: 0.7D
+ * Version: 1.0
  *
- * Experimental Microsoft Xbox XBE parser
+ * Xbox XBE parser / loader / execution preparation layer
  *
- * Features:
+ * Compatible with:
+ *   - memory.js
+ *   - cpu.js
+ *   - decoder.js
+ *   - core.js
+ *   - future WebBktx Kernel
  *
- *   - XBEH signature detection
- *   - XBE header parsing
- *   - base address
- *   - entry point
- *   - kernel thunk information
- *   - library information
- *   - section table
+ * Supports:
+ *   - XBE signature
+ *   - header parsing
+ *   - section parsing
  *   - section names
- *   - section address mapping
- *   - virtual address -> file offset
- *   - entry point analysis
- *   - code extraction
- *   - safe memory mapping
+ *   - virtual/file address mapping
+ *   - entry point detection
+ *   - entry-point byte extraction
+ *   - XBE -> WebBktx memory loading
+ *   - CPU entry address
+ *   - executable section detection
+ *   - safe bounds checking
+ *   - diagnostics
  *
  * NOTE:
- *
- * This is NOT a complete Xbox kernel loader.
- *
- * XBE execution requires:
- *
- *   Xbox memory model
- *   kernel
- *   imports/thunks
- *   executable sections
- *   page mapping
- *   exception handling
- *   hardware abstraction
- *   GPU
- *   audio
- *   input
- *   DirectX/Xbox APIs
- *
- * Those components will be implemented separately.
+ * This is an XBE loader, not a complete Xbox kernel.
+ * Xbox kernel APIs, GPU, audio, input, DirectX and
+ * hardware services must be implemented separately.
  *
  * ============================================================
  */
@@ -52,95 +42,68 @@
    CONSTANTS
 ============================================================ */
 
-const XBE_MAGIC =
-    0x48454258;
+const WEBBKTX_XBE_VERSION = "1.0";
 
+const XBE_MAGIC = 0x48454258;
 
-/*
- * XBE default virtual base.
- *
- * Most XBE files use:
- *
- * 0x00010000
- *
- * but we always read the actual value
- * from the header.
- */
+const XBE_DEFAULT_BASE = 0x00010000;
 
-const XBE_DEFAULT_BASE =
-    0x00010000;
+const XBE_SECTION_SIZE = 56;
 
 
 /* ============================================================
    HELPERS
 ============================================================ */
 
-function xbeHex(
-    value,
-    digits = 8
-) {
+function xbeHex(value, digits = 8) {
 
     return (
         "0x" +
-        (
-            value >>> 0
-        )
-        .toString(16)
-        .padStart(
-            digits,
-            "0"
-        )
-        .toUpperCase()
+        (value >>> 0)
+            .toString(16)
+            .padStart(digits, "0")
+            .toUpperCase()
     );
 
 }
 
 
-function xbeString(
-    bytes
+function isInteger(value) {
+
+    return Number.isInteger(value);
+
+}
+
+
+function safeRange(
+    offset,
+    size,
+    length
 ) {
 
-    let output = "";
+    return (
+        isInteger(offset) &&
+        isInteger(size) &&
+        offset >= 0 &&
+        size >= 0 &&
+        offset <= length &&
+        size <= length - offset
+    );
+
+}
 
 
-    for (
-        let i = 0;
-        i < bytes.length;
-        i++
-    ) {
+function bytesToHex(bytes) {
 
-        const c =
-            bytes[i];
-
-
-        if (
-            c === 0
-        ) {
-
-            break;
-
-        }
-
-
-        if (
-            c >= 32 &&
-            c <= 126
-        ) {
-
-            output +=
-                String.fromCharCode(c);
-
-        } else {
-
-            output +=
-                ".";
-
-        }
-
-    }
-
-
-    return output;
+    return Array.from(bytes)
+        .map(
+            b =>
+                b
+                    .toString(16)
+                    .padStart(2, "0")
+                    .toUpperCase()
+        )
+        .join(" ");
 
 }
 
@@ -149,24 +112,25 @@ function xbeString(
    XBE SECTION
 ============================================================ */
 
-class XBESection {
+class WebBktxXBESection {
 
     constructor(
         parser,
         index,
+        flags,
         virtualAddress,
         virtualSize,
         rawAddress,
         rawSize,
-        flags,
         nameAddress
     ) {
 
-        this.parser =
-            parser;
+        this.parser = parser;
 
-        this.index =
-            index;
+        this.index = index;
+
+        this.flags =
+            flags >>> 0;
 
         this.virtualAddress =
             virtualAddress >>> 0;
@@ -180,19 +144,12 @@ class XBESection {
         this.rawSize =
             rawSize >>> 0;
 
-        this.flags =
-            flags >>> 0;
-
         this.nameAddress =
             nameAddress >>> 0;
 
+        this.name = "";
 
-        this.name =
-            "";
-
-
-        this.loaded =
-            false;
+        this.loaded = false;
 
     }
 
@@ -217,51 +174,31 @@ class XBESection {
     }
 
 
-    containsVirtualAddress(
-        address
-    ) {
+    containsVirtualAddress(address) {
 
         address >>>= 0;
 
-
         return (
-            address >=
-                this.virtualAddress &&
-
-            address <
-                this.endVirtualAddress
+            address >= this.virtualAddress &&
+            address < this.endVirtualAddress
         );
 
     }
 
 
-    containsFileOffset(
-        offset
-    ) {
+    containsFileOffset(offset) {
 
         offset >>>= 0;
 
-
         return (
-            offset >=
-                this.rawAddress &&
-
-            offset <
-                this.endRawAddress
+            offset >= this.rawAddress &&
+            offset < this.endRawAddress
         );
 
     }
 
 
     get executable() {
-
-        /*
-         * XBE section flags are not treated
-         * as a perfect PE-style permission model.
-         *
-         * For WebBktx we use the common
-         * executable section flag interpretation.
-         */
 
         return (
             (this.flags & 0x00000001) !== 0
@@ -288,6 +225,13 @@ class XBESection {
     }
 
 
+    get size() {
+
+        return this.rawSize >>> 0;
+
+    }
+
+
     toJSON() {
 
         return {
@@ -297,6 +241,9 @@ class XBESection {
 
             name:
                 this.name,
+
+            flags:
+                xbeHex(this.flags),
 
             virtualAddress:
                 xbeHex(
@@ -318,11 +265,6 @@ class XBESection {
                     this.rawSize
                 ),
 
-            flags:
-                xbeHex(
-                    this.flags
-                ),
-
             executable:
                 this.executable,
 
@@ -330,7 +272,10 @@ class XBESection {
                 this.writable,
 
             readable:
-                this.readable
+                this.readable,
+
+            loaded:
+                this.loaded
 
         };
 
@@ -343,58 +288,35 @@ class XBESection {
    XBE PARSER
 ============================================================ */
 
-class XBEParser {
+class WebBktxXBEParser {
 
-    constructor(
-        source
-    ) {
+    constructor(source = null) {
 
-        this.source =
-            source;
+        this.source = source;
 
+        this.buffer = null;
 
-        this.buffer =
-            null;
+        this.bytes = null;
 
+        this.view = null;
 
-        this.bytes =
-            null;
+        this.valid = false;
 
+        this.loaded = false;
 
-        this.view =
-            null;
+        this.header = null;
 
+        this.sections = [];
 
-        this.valid =
-            false;
+        this.entryPoint = null;
 
+        this.entryVirtualAddress = null;
 
-        this.loaded =
-            false;
+        this.entryFileOffset = null;
 
+        this.entrySection = null;
 
-        this.header =
-            null;
-
-
-        this.sections =
-            [];
-
-
-        this.entryPoint =
-            null;
-
-
-        this.entrySection =
-            null;
-
-
-        this.entryFileOffset =
-            null;
-
-
-        this.analysis =
-            null;
+        this.analysis = null;
 
     }
 
@@ -403,9 +325,9 @@ class XBEParser {
        LOAD
     ======================================================== */
 
-    async load() {
+    async load(source = this.source) {
 
-        if (!this.source) {
+        if (!source) {
 
             throw new Error(
                 "No XBE source supplied."
@@ -414,44 +336,13 @@ class XBEParser {
         }
 
 
-        if (
-            this.source instanceof
-            ArrayBuffer
-        ) {
+        this.source = source;
 
-            this.buffer =
-                this.source.slice(
-                    0
-                );
 
-        } else if (
-            this.source instanceof
-            Uint8Array
-        ) {
-
-            this.buffer =
-                this.source.buffer.slice(
-                    this.source.byteOffset,
-                    this.source.byteOffset +
-                    this.source.byteLength
-                );
-
-        } else if (
-            typeof Blob !==
-            "undefined" &&
-            this.source instanceof Blob
-        ) {
-
-            this.buffer =
-                await this.source.arrayBuffer();
-
-        } else {
-
-            throw new Error(
-                "Unsupported XBE source type."
+        this.buffer =
+            await this.normalizeSource(
+                source
             );
-
-        }
 
 
         this.bytes =
@@ -467,8 +358,7 @@ class XBEParser {
 
 
         if (
-            this.bytes.length <
-            0x100
+            this.bytes.byteLength < 0x178
         ) {
 
             throw new Error(
@@ -480,21 +370,78 @@ class XBEParser {
 
         this.checkMagic();
 
-
         this.parseHeader();
 
-
         this.parseSections();
-
 
         this.analyzeEntryPoint();
 
 
-        this.loaded =
-            true;
+        this.loaded = true;
 
 
         return this;
+
+    }
+
+
+    /* ========================================================
+       SOURCE NORMALIZATION
+    ======================================================== */
+
+    async normalizeSource(source) {
+
+        if (
+            source instanceof ArrayBuffer
+        ) {
+
+            return source.slice(0);
+
+        }
+
+
+        if (
+            source instanceof Uint8Array
+        ) {
+
+            return source.buffer.slice(
+                source.byteOffset,
+                source.byteOffset +
+                source.byteLength
+            );
+
+        }
+
+
+        if (
+            typeof Blob !== "undefined" &&
+            source instanceof Blob
+        ) {
+
+            return await source.arrayBuffer();
+
+        }
+
+
+        /*
+         * Some applications may pass:
+         *
+         * { buffer: ArrayBuffer }
+         */
+
+        if (
+            source &&
+            source.buffer instanceof ArrayBuffer
+        ) {
+
+            return source.buffer.slice(0);
+
+        }
+
+
+        throw new Error(
+            "Unsupported XBE source type."
+        );
 
     }
 
@@ -507,7 +454,7 @@ class XBEParser {
 
         const magic =
             this.view.getUint32(
-                0,
+                0x00,
                 true
             );
 
@@ -517,16 +464,14 @@ class XBEParser {
         ) {
 
             throw new Error(
-                `Invalid XBE signature: ${
-                    xbeHex(magic)
-                }`
+                "Invalid XBE signature: " +
+                xbeHex(magic)
             );
 
         }
 
 
-        this.valid =
-            true;
+        this.valid = true;
 
     }
 
@@ -537,423 +482,348 @@ class XBEParser {
 
     parseHeader() {
 
-        const v =
-            this.view;
-
-
-        /*
-         * These offsets follow the standard
-         * XBE header layout.
-         */
-
-        const magic =
-            v.getUint32(
-                0x00,
-                true
-            );
-
-
-        const digitalSignature =
-            this.bytes.slice(
-                0x04,
-                0x104
-            );
-
-
-        /*
-         * Base address.
-         */
-
-        const baseAddress =
-            v.getUint32(
-                0x104,
-                true
-            );
-
-
-        /*
-         * Size of headers.
-         */
-
-        const sizeOfHeaders =
-            v.getUint32(
-                0x108,
-                true
-            );
-
-
-        /*
-         * Size of image.
-         */
-
-        const sizeOfImage =
-            v.getUint32(
-                0x10C,
-                true
-            );
-
-
-        /*
-         * Size of image header.
-         */
-
-        const sizeOfImageHeader =
-            v.getUint32(
-                0x110,
-                true
-            );
-
-
-        /*
-         * Timestamp.
-         */
-
-        const timestamp =
-            v.getUint32(
-                0x114,
-                true
-            );
-
-
-        /*
-         * Certificate address.
-         */
-
-        const certificateAddress =
-            v.getUint32(
-                0x118,
-                true
-            );
-
-
-        /*
-         * Number of sections.
-         */
-
-        const numberOfSections =
-            v.getUint32(
-                0x11C,
-                true
-            );
-
-
-        /*
-         * Section headers address.
-         */
-
-        const sectionHeadersAddress =
-            v.getUint32(
-                0x120,
-                true
-            );
-
-
-        /*
-         * Initialization flags.
-         */
-
-        const initFlags =
-            v.getUint32(
-                0x124,
-                true
-            );
-
-
-        /*
-         * Entry point.
-         */
-
-        const entryPoint =
-            v.getUint32(
-                0x128,
-                true
-            );
-
-
-        /*
-         * TLS address.
-         */
-
-        const tlsAddress =
-            v.getUint32(
-                0x12C,
-                true
-            );
-
-
-        /*
-         * PE stack commit.
-         */
-
-        const peStackCommit =
-            v.getUint32(
-                0x130,
-                true
-            );
-
-
-        /*
-         * PE heap reserve.
-         */
-
-        const peHeapReserve =
-            v.getUint32(
-                0x134,
-                true
-            );
-
-
-        /*
-         * PE heap commit.
-         */
-
-        const peHeapCommit =
-            v.getUint32(
-                0x138,
-                true
-            );
-
-
-        /*
-         * PE base address.
-         */
-
-        const peBaseAddress =
-            v.getUint32(
-                0x13C,
-                true
-            );
-
-
-        /*
-         * PE image size.
-         */
-
-        const peImageSize =
-            v.getUint32(
-                0x140,
-                true
-            );
-
-
-        /*
-         * PE checksum.
-         */
-
-        const peChecksum =
-            v.getUint32(
-                0x144,
-                true
-            );
-
-
-        /*
-         * PE timestamp.
-         */
-
-        const peTimestamp =
-            v.getUint32(
-                0x148,
-                true
-            );
-
-
-        /*
-         * Debug path address.
-         */
-
-        const debugPathAddress =
-            v.getUint32(
-                0x14C,
-                true
-            );
-
-
-        /*
-         * Debug filename address.
-         */
-
-        const debugFilenameAddress =
-            v.getUint32(
-                0x150,
-                true
-            );
-
-
-        /*
-         * Debug Unicode filename address.
-         */
-
-        const debugUnicodeFilenameAddress =
-            v.getUint32(
-                0x154,
-                true
-            );
-
-
-        /*
-         * Kernel thunk address.
-         */
-
-        const kernelThunkAddress =
-            v.getUint32(
-                0x158,
-                true
-            );
-
-
-        /*
-         * Non-kernel import directory.
-         */
-
-        const nonKernelImportDirAddress =
-            v.getUint32(
-                0x15C,
-                true
-            );
-
-
-        /*
-         * Number of libraries.
-         */
-
-        const numberOfLibraries =
-            v.getUint32(
-                0x160,
-                true
-            );
-
-
-        /*
-         * Library versions address.
-         */
-
-        const libraryVersionsAddress =
-            v.getUint32(
-                0x164,
-                true
-            );
-
-
-        /*
-         * Kernel library version address.
-         */
-
-        const kernelLibraryVersionAddress =
-            v.getUint32(
-                0x168,
-                true
-            );
-
-
-        /*
-         * XAPI library version address.
-         */
-
-        const xapiLibraryVersionAddress =
-            v.getUint32(
-                0x16C,
-                true
-            );
-
-
-        /*
-         * Logo bitmap address.
-         */
-
-        const logoBitmapAddress =
-            v.getUint32(
-                0x170,
-                true
-            );
-
-
-        /*
-         * Logo bitmap size.
-         */
-
-        const logoBitmapSize =
-            v.getUint32(
-                0x174,
-                true
-            );
+        const v = this.view;
 
 
         this.header = {
 
-            magic,
+            magic:
+                v.getUint32(
+                    0x00,
+                    true
+                ),
 
-            digitalSignature,
+            digitalSignature:
+                this.bytes.slice(
+                    0x04,
+                    0x104
+                ),
 
-            baseAddress,
+            baseAddress:
+                v.getUint32(
+                    0x104,
+                    true
+                ),
 
-            sizeOfHeaders,
+            sizeOfHeaders:
+                v.getUint32(
+                    0x108,
+                    true
+                ),
 
-            sizeOfImage,
+            sizeOfImage:
+                v.getUint32(
+                    0x10C,
+                    true
+                ),
 
-            sizeOfImageHeader,
+            sizeOfImageHeader:
+                v.getUint32(
+                    0x110,
+                    true
+                ),
 
-            timestamp,
+            timestamp:
+                v.getUint32(
+                    0x114,
+                    true
+                ),
 
-            certificateAddress,
+            certificateAddress:
+                v.getUint32(
+                    0x118,
+                    true
+                ),
 
-            numberOfSections,
+            numberOfSections:
+                v.getUint32(
+                    0x11C,
+                    true
+                ),
 
-            sectionHeadersAddress,
+            sectionHeadersAddress:
+                v.getUint32(
+                    0x120,
+                    true
+                ),
 
-            initFlags,
+            initFlags:
+                v.getUint32(
+                    0x124,
+                    true
+                ),
 
-            entryPoint,
+            entryPoint:
+                v.getUint32(
+                    0x128,
+                    true
+                ),
 
-            tlsAddress,
+            tlsAddress:
+                v.getUint32(
+                    0x12C,
+                    true
+                ),
 
-            peStackCommit,
+            peStackCommit:
+                v.getUint32(
+                    0x130,
+                    true
+                ),
 
-            peHeapReserve,
+            peHeapReserve:
+                v.getUint32(
+                    0x134,
+                    true
+                ),
 
-            peHeapCommit,
+            peHeapCommit:
+                v.getUint32(
+                    0x138,
+                    true
+                ),
 
-            peBaseAddress,
+            peBaseAddress:
+                v.getUint32(
+                    0x13C,
+                    true
+                ),
 
-            peImageSize,
+            peImageSize:
+                v.getUint32(
+                    0x140,
+                    true
+                ),
 
-            peChecksum,
+            peChecksum:
+                v.getUint32(
+                    0x144,
+                    true
+                ),
 
-            peTimestamp,
+            peTimestamp:
+                v.getUint32(
+                    0x148,
+                    true
+                ),
 
-            debugPathAddress,
+            debugPathAddress:
+                v.getUint32(
+                    0x14C,
+                    true
+                ),
 
-            debugFilenameAddress,
+            debugFilenameAddress:
+                v.getUint32(
+                    0x150,
+                    true
+                ),
 
-            debugUnicodeFilenameAddress,
+            debugUnicodeFilenameAddress:
+                v.getUint32(
+                    0x154,
+                    true
+                ),
 
-            kernelThunkAddress,
+            kernelThunkAddress:
+                v.getUint32(
+                    0x158,
+                    true
+                ),
 
-            nonKernelImportDirAddress,
+            nonKernelImportDirAddress:
+                v.getUint32(
+                    0x15C,
+                    true
+                ),
 
-            numberOfLibraries,
+            numberOfLibraries:
+                v.getUint32(
+                    0x160,
+                    true
+                ),
 
-            libraryVersionsAddress,
+            libraryVersionsAddress:
+                v.getUint32(
+                    0x164,
+                    true
+                ),
 
-            kernelLibraryVersionAddress,
+            kernelLibraryVersionAddress:
+                v.getUint32(
+                    0x168,
+                    true
+                ),
 
-            xapiLibraryVersionAddress,
+            xapiLibraryVersionAddress:
+                v.getUint32(
+                    0x16C,
+                    true
+                ),
 
-            logoBitmapAddress,
+            logoBitmapAddress:
+                v.getUint32(
+                    0x170,
+                    true
+                ),
 
-            logoBitmapSize
+            logoBitmapSize:
+                v.getUint32(
+                    0x174,
+                    true
+                )
 
         };
 
 
         this.entryPoint =
-            entryPoint >>> 0;
+            this.header.entryPoint >>> 0;
 
     }
 
 
     /* ========================================================
-       ADDRESS CONVERSION
+       SECTION PARSER
+    ======================================================== */
+
+    parseSections() {
+
+        this.sections = [];
+
+
+        const count =
+            this.header.numberOfSections;
+
+
+        const table =
+            this.header.sectionHeadersAddress;
+
+
+        if (
+            count > 4096
+        ) {
+
+            throw new Error(
+                "Invalid XBE section count."
+            );
+
+        }
+
+
+        if (
+            !safeRange(
+                table,
+                count * XBE_SECTION_SIZE,
+                this.bytes.length
+            )
+        ) {
+
+            throw new Error(
+                "XBE section table is outside the file."
+            );
+
+        }
+
+
+        for (
+            let i = 0;
+            i < count;
+            i++
+        ) {
+
+            const offset =
+                table +
+                i * XBE_SECTION_SIZE;
+
+
+            const flags =
+                this.view.getUint32(
+                    offset,
+                    true
+                );
+
+
+            const virtualAddress =
+                this.view.getUint32(
+                    offset + 4,
+                    true
+                );
+
+
+            const virtualSize =
+                this.view.getUint32(
+                    offset + 8,
+                    true
+                );
+
+
+            const rawAddress =
+                this.view.getUint32(
+                    offset + 12,
+                    true
+                );
+
+
+            const rawSize =
+                this.view.getUint32(
+                    offset + 16,
+                    true
+                );
+
+
+            const nameAddress =
+                this.view.getUint32(
+                    offset + 20,
+                    true
+                );
+
+
+            if (
+                rawSize > 0 &&
+                !safeRange(
+                    rawAddress,
+                    rawSize,
+                    this.bytes.length
+                )
+            ) {
+
+                throw new Error(
+                    `Invalid raw section ${i}.`
+                );
+
+            }
+
+
+            const section =
+                new WebBktxXBESection(
+                    this,
+                    i,
+                    flags,
+                    virtualAddress,
+                    virtualSize,
+                    rawAddress,
+                    rawSize,
+                    nameAddress
+                );
+
+
+            section.name =
+                this.readCStringVirtual(
+                    nameAddress
+                );
+
+
+            this.sections.push(
+                section
+            );
+
+        }
+
+    }
+
+
+    /* ========================================================
+       VIRTUAL -> FILE
     ======================================================== */
 
     virtualToFileOffset(
@@ -963,13 +833,8 @@ class XBEParser {
         virtualAddress >>>= 0;
 
 
-        /*
-         * Search sections.
-         */
-
         for (
-            const section
-            of this.sections
+            const section of this.sections
         ) {
 
             if (
@@ -986,8 +851,7 @@ class XBEParser {
 
 
                 if (
-                    delta >=
-                    section.rawSize
+                    delta >= section.rawSize
                 ) {
 
                     return null;
@@ -1005,13 +869,12 @@ class XBEParser {
         }
 
 
-        /*
-         * Header mapping.
-         */
-
         const base =
             this.header
-                ? this.header.baseAddress
+                ? (
+                    this.header.baseAddress ||
+                    XBE_DEFAULT_BASE
+                )
                 : XBE_DEFAULT_BASE;
 
 
@@ -1027,8 +890,9 @@ class XBEParser {
 
 
             if (
-                offset <
-                this.header.sizeOfHeaders
+                this.header &&
+                offset < this.header.sizeOfHeaders &&
+                offset < this.bytes.length
             ) {
 
                 return offset;
@@ -1044,7 +908,7 @@ class XBEParser {
 
 
     /* ========================================================
-       FILE OFFSET -> VIRTUAL
+       FILE -> VIRTUAL
     ======================================================== */
 
     fileOffsetToVirtual(
@@ -1055,8 +919,7 @@ class XBEParser {
 
 
         for (
-            const section
-            of this.sections
+            const section of this.sections
         ) {
 
             if (
@@ -1065,16 +928,12 @@ class XBEParser {
                 )
             ) {
 
-                const delta =
+                return (
+                    section.virtualAddress +
                     (
                         fileOffset -
                         section.rawAddress
-                    ) >>> 0;
-
-
-                return (
-                    section.virtualAddress +
-                    delta
+                    )
                 ) >>> 0;
 
             }
@@ -1083,9 +942,8 @@ class XBEParser {
 
 
         const base =
-            this.header
-                ? this.header.baseAddress
-                : XBE_DEFAULT_BASE;
+            this.header.baseAddress ||
+            XBE_DEFAULT_BASE;
 
 
         if (
@@ -1107,242 +965,8 @@ class XBEParser {
 
 
     /* ========================================================
-       SECTION PARSER
+       STRING
     ======================================================== */
-
-    parseSections() {
-
-        this.sections =
-            [];
-
-
-        const count =
-            this.header
-                .numberOfSections;
-
-
-        const table =
-            this.header
-                .sectionHeadersAddress;
-
-
-        /*
-         * XBE section header size.
-         */
-
-        const SECTION_SIZE =
-            56;
-
-
-        if (
-            count === 0
-        ) {
-
-            return;
-
-        }
-
-
-        /*
-         * Validate section table.
-         */
-
-        const tableSize =
-            count *
-            SECTION_SIZE;
-
-
-        if (
-            table +
-            tableSize >
-            this.bytes.length
-        ) {
-
-            console.warn(
-                "XBE section table extends beyond file."
-            );
-
-        }
-
-
-        for (
-            let i = 0;
-            i < count;
-            i++
-        ) {
-
-            const offset =
-                table +
-                (
-                    i *
-                    SECTION_SIZE
-                );
-
-
-            if (
-                offset + 40 >
-                this.bytes.length
-            ) {
-
-                break;
-
-            }
-
-
-            /*
-             * Section flags.
-             */
-
-            const flags =
-                this.view.getUint32(
-                    offset,
-                    true
-                );
-
-
-            /*
-             * Virtual address.
-             */
-
-            const virtualAddress =
-                this.view.getUint32(
-                    offset + 4,
-                    true
-                );
-
-
-            /*
-             * Virtual size.
-             */
-
-            const virtualSize =
-                this.view.getUint32(
-                    offset + 8,
-                    true
-                );
-
-
-            /*
-             * Raw address.
-             */
-
-            const rawAddress =
-                this.view.getUint32(
-                    offset + 12,
-                    true
-                );
-
-
-            /*
-             * Raw size.
-             */
-
-            const rawSize =
-                this.view.getUint32(
-                    offset + 16,
-                    true
-                );
-
-
-            /*
-             * Section name address.
-             */
-
-            const sectionNameAddress =
-                this.view.getUint32(
-                    offset + 20,
-                    true
-                );
-
-
-            const section =
-                new XBESection(
-
-                    this,
-
-                    i,
-
-                    virtualAddress,
-
-                    virtualSize,
-
-                    rawAddress,
-
-                    rawSize,
-
-                    flags,
-
-                    sectionNameAddress
-
-                );
-
-
-            section.name =
-                this.readCStringVirtual(
-                    sectionNameAddress
-                );
-
-
-            this.sections.push(
-                section
-            );
-
-        }
-
-    }
-
-
-    /* ========================================================
-       C STRING
-    ======================================================== */
-
-    readCStringVirtual(
-        virtualAddress,
-        maxLength = 256
-    ) {
-
-        const offset =
-            this.virtualToFileOffset(
-                virtualAddress
-            );
-
-
-        if (
-            offset === null
-        ) {
-
-            /*
-             * Some XBE fields can point
-             * into special structures.
-             *
-             * Try direct offset as fallback.
-             */
-
-            if (
-                virtualAddress <
-                this.bytes.length
-            ) {
-
-                return this.readCString(
-                    virtualAddress,
-                    maxLength
-                );
-
-            }
-
-
-            return "";
-
-        }
-
-
-        return this.readCString(
-            offset,
-            maxLength
-        );
-
-    }
-
 
     readCString(
         offset,
@@ -1359,8 +983,7 @@ class XBEParser {
         }
 
 
-        let output =
-            "";
+        let result = "";
 
 
         for (
@@ -1371,14 +994,14 @@ class XBEParser {
             i++
         ) {
 
-            const c =
+            const value =
                 this.bytes[
                     offset + i
                 ];
 
 
             if (
-                c === 0
+                value === 0
             ) {
 
                 break;
@@ -1387,140 +1010,70 @@ class XBEParser {
 
 
             if (
-                c >= 32 &&
-                c <= 126
+                value >= 32 &&
+                value <= 126
             ) {
 
-                output +=
+                result +=
                     String.fromCharCode(
-                        c
+                        value
                     );
 
             } else {
 
-                output +=
-                    ".";
+                result += ".";
 
             }
 
         }
 
 
-        return output;
+        return result;
 
     }
 
 
-    /* ========================================================
-       ENTRY POINT ANALYSIS
-    ======================================================== */
+    readCStringVirtual(
+        virtualAddress,
+        maxLength = 256
+    ) {
 
-    analyzeEntryPoint() {
-
-        const entry =
-            this.entryPoint >>> 0;
-
-
-        /*
-         * XBE entry point is generally stored
-         * as an RVA relative to the image base.
-         *
-         * Convert it to virtual address.
-         */
-
-        let virtualAddress;
-
-
-        const base =
-            this.header.baseAddress
-                || XBE_DEFAULT_BASE;
-
-
-        virtualAddress =
-            (
-                base +
-                entry
-            ) >>> 0;
-
-
-        /*
-         * Some test files/tools may provide
-         * an already-based address.
-         *
-         * If the calculated address doesn't map,
-         * try the raw value.
-         */
-
-        let section =
-            this.findSection(
-                virtualAddress
-            );
-
-
-        let interpretedAsRVA =
-            true;
-
-
-        if (
-            !section
-        ) {
-
-            section =
-                this.findSection(
-                    entry
-                );
-
-
-            if (
-                section
-            ) {
-
-                virtualAddress =
-                    entry;
-
-                interpretedAsRVA =
-                    false;
-
-            }
-
-        }
-
-
-        this.entrySection =
-            section || null;
-
-
-        this.entryFileOffset =
+        const offset =
             this.virtualToFileOffset(
                 virtualAddress
             );
 
 
-        this.analysis = {
+        if (
+            offset !== null
+        ) {
 
-            rawEntryPoint:
-                entry,
+            return this.readCString(
+                offset,
+                maxLength
+            );
 
-            virtualEntryPoint:
+        }
+
+
+        /*
+         * Fallback for malformed/test XBE files.
+         */
+
+        if (
+            virtualAddress <
+            this.bytes.length
+        ) {
+
+            return this.readCString(
                 virtualAddress,
+                maxLength
+            );
 
-            fileOffset:
-                this.entryFileOffset,
-
-            section:
-                section
-                    ? section.name
-                    : null,
-
-            interpretedAsRVA,
-
-            mapped:
-                this.entryFileOffset !== null
-
-        };
+        }
 
 
-        return this.analysis;
+        return "";
 
     }
 
@@ -1533,25 +1086,137 @@ class XBEParser {
         virtualAddress
     ) {
 
-        for (
-            const section
-            of this.sections
-        ) {
+        virtualAddress >>>= 0;
 
-            if (
-                section.containsVirtualAddress(
-                    virtualAddress
-                )
-            ) {
 
-                return section;
+        return (
+            this.sections.find(
+                section =>
+                    section.containsVirtualAddress(
+                        virtualAddress
+                    )
+            ) ||
+            null
+        );
+
+    }
+
+
+    /* ========================================================
+       ENTRY POINT
+    ======================================================== */
+
+    analyzeEntryPoint() {
+
+        const raw =
+            this.entryPoint >>> 0;
+
+
+        const base =
+            this.header.baseAddress ||
+            XBE_DEFAULT_BASE;
+
+
+        /*
+         * Standard interpretation:
+         *
+         * entry = image base + RVA
+         */
+
+        let virtualAddress =
+            (
+                base +
+                raw
+            ) >>> 0;
+
+
+        let section =
+            this.findSection(
+                virtualAddress
+            );
+
+
+        let interpretedAsRVA =
+            true;
+
+
+        /*
+         * Compatibility fallback:
+         *
+         * Some development/test images may contain
+         * an already-based virtual address.
+         */
+
+        if (!section) {
+
+            section =
+                this.findSection(
+                    raw
+                );
+
+
+            if (section) {
+
+                virtualAddress =
+                    raw;
+
+                interpretedAsRVA =
+                    false;
 
             }
 
         }
 
 
-        return null;
+        this.entryVirtualAddress =
+            virtualAddress >>> 0;
+
+
+        this.entrySection =
+            section;
+
+
+        this.entryFileOffset =
+            this.virtualToFileOffset(
+                virtualAddress
+            );
+
+
+        this.analysis = {
+
+            rawEntryPoint:
+                raw,
+
+            virtualEntryPoint:
+                this.entryVirtualAddress,
+
+            fileOffset:
+                this.entryFileOffset,
+
+            section:
+                section
+                    ? section.name
+                    : null,
+
+            sectionIndex:
+                section
+                    ? section.index
+                    : null,
+
+            interpretedAsRVA,
+
+            mapped:
+                this.entryFileOffset !== null,
+
+            executable:
+                section
+                    ? section.executable
+                    : false
+
+        };
+
+
+        return this.analysis;
 
     }
 
@@ -1561,7 +1226,7 @@ class XBEParser {
     ======================================================== */
 
     getEntryBytes(
-        count = 64
+        count = 128
     ) {
 
         if (
@@ -1571,6 +1236,16 @@ class XBEParser {
             return new Uint8Array();
 
         }
+
+
+        count =
+            Math.max(
+                0,
+                Math.min(
+                    count,
+                    1024 * 1024
+                )
+            );
 
 
         const start =
@@ -1593,105 +1268,6 @@ class XBEParser {
 
 
     /* ========================================================
-       HEX DUMP
-    ======================================================== */
-
-    hexDump(
-        bytes = this.getEntryBytes(64),
-        startAddress =
-            this.analysis
-                ? this.analysis.virtualEntryPoint
-                : 0
-    ) {
-
-        const lines =
-            [];
-
-
-        for (
-            let i = 0;
-            i < bytes.length;
-            i += 16
-        ) {
-
-            const chunk =
-                bytes.slice(
-                    i,
-                    i + 16
-                );
-
-
-            const hex =
-                Array.from(
-                    chunk
-                )
-                .map(
-                    byte =>
-                        byte
-                            .toString(16)
-                            .padStart(
-                                2,
-                                "0"
-                            )
-                            .toUpperCase()
-                )
-                .join(" ");
-
-
-            const ascii =
-                Array.from(
-                    chunk
-                )
-                .map(
-                    byte => {
-
-                        if (
-                            byte >= 32 &&
-                            byte <= 126
-                        ) {
-
-                            return String
-                                .fromCharCode(
-                                    byte
-                                );
-
-                        }
-
-
-                        return ".";
-
-                    }
-                )
-                .join("");
-
-
-            lines.push(
-
-                `${xbeHex(
-                    startAddress + i
-                )}  ` +
-
-                `${hex
-                    .padEnd(
-                        47,
-                        " "
-                    )}  ` +
-
-                `${ascii}`
-
-            );
-
-        }
-
-
-        return lines.join(
-            "\n"
-        );
-
-    }
-
-
-    /* ========================================================
        EXTRACT SECTION
     ======================================================== */
 
@@ -1704,27 +1280,31 @@ class XBEParser {
         ) {
 
             throw new Error(
-                "Section does not exist."
+                "Section is required."
             );
 
         }
 
 
-        const start =
-            section.rawAddress;
-
-
-        const end =
-            Math.min(
-                start +
+        if (
+            !safeRange(
+                section.rawAddress,
                 section.rawSize,
                 this.bytes.length
+            )
+        ) {
+
+            throw new Error(
+                "Section data is outside XBE."
             );
+
+        }
 
 
         return this.bytes.slice(
-            start,
-            end
+            section.rawAddress,
+            section.rawAddress +
+            section.rawSize
         );
 
     }
@@ -1762,7 +1342,7 @@ class XBEParser {
         }
 
 
-        const bytes =
+        const data =
             this.extractSection(
                 section
             );
@@ -1772,52 +1352,62 @@ class XBEParser {
             section.virtualAddress;
 
 
-        /*
-         * XBE virtual addresses may not directly
-         * correspond to the WebBktx RAM address.
-         *
-         * Translate using image base.
-         */
+        const translateBase =
+            options.translateBase !== false;
+
+
+        const base =
+            this.header.baseAddress ||
+            XBE_DEFAULT_BASE;
+
 
         if (
-            options.translateBase !== false
+            translateBase &&
+            address >= base
         ) {
 
-            const base =
-                this.header.baseAddress
-                    || XBE_DEFAULT_BASE;
-
-
-            if (
-                address >= base
-            ) {
-
-                address =
-                    (
-                        address -
-                        base
-                    ) >>> 0;
-
-            }
+            address =
+                (
+                    address -
+                    base
+                ) >>> 0;
 
         }
 
 
         if (
-            address +
-            bytes.length >
-            memory.size
+            address > memory.size
+        ) {
+
+            throw new RangeError(
+                `Section address outside RAM: ${
+                    xbeHex(address)
+                }`
+            );
+
+        }
+
+
+        if (
+            data.length >
+            memory.size - address
+        ) {
+
+            throw new RangeError(
+                `Section ${section.name} ` +
+                `does not fit into RAM.`
+            );
+
+        }
+
+
+        if (
+            typeof memory.writeBytes !==
+            "function"
         ) {
 
             throw new Error(
-
-                `Section ${section.name} ` +
-                `does not fit in WebBktx memory. ` +
-
-                `Address=${xbeHex(address)} ` +
-                `Size=${xbeHex(bytes.length)} ` +
-                `RAM=${xbeHex(memory.size)}`
-
+                "Memory.writeBytes() is required."
             );
 
         }
@@ -1825,23 +1415,85 @@ class XBEParser {
 
         memory.writeBytes(
             address,
-            bytes
+            data
         );
 
 
-        section.loaded =
-            true;
+        /*
+         * Zero-fill virtual tail.
+         */
+
+        const virtualTail =
+            Math.max(
+                0,
+                section.virtualSize -
+                data.length
+            );
+
+
+        if (
+            virtualTail > 0 &&
+            typeof memory.write8 ===
+            "function"
+        ) {
+
+            for (
+                let i = 0;
+                i < virtualTail;
+                i++
+            ) {
+
+                const target =
+                    address +
+                    data.length +
+                    i;
+
+
+                if (
+                    target >=
+                    memory.size
+                ) {
+
+                    break;
+
+                }
+
+
+                memory.write8(
+                    target,
+                    0
+                );
+
+            }
+
+        }
+
+
+        section.loaded = true;
 
 
         return {
 
-            address,
+            section:
+                section.name,
+
+            index:
+                section.index,
+
+            address:
+                address >>> 0,
+
+            virtualAddress:
+                section.virtualAddress,
 
             size:
-                bytes.length,
+                data.length,
 
-            section:
-                section.name
+            virtualSize:
+                section.virtualSize,
+
+            executable:
+                section.executable
 
         };
 
@@ -1849,11 +1501,77 @@ class XBEParser {
 
 
     /* ========================================================
-       LOAD ENTRY SECTION
+       LOAD ALL SECTIONS
+    ======================================================== */
+
+    loadIntoMemory(
+        memory,
+        options = {}
+    ) {
+
+        if (
+            !memory
+        ) {
+
+            throw new Error(
+                "Memory object is required."
+            );
+
+        }
+
+
+        const results = [];
+
+
+        for (
+            const section of this.sections
+        ) {
+
+            /*
+             * Skip empty sections.
+             */
+
+            if (
+                section.rawSize === 0 &&
+                section.virtualSize === 0
+            ) {
+
+                continue;
+
+            }
+
+
+            results.push(
+                this.loadSectionIntoMemory(
+                    memory,
+                    section,
+                    options
+                )
+            );
+
+        }
+
+
+        return {
+
+            loaded:
+                results.length,
+
+            sections:
+                results
+
+        };
+
+    }
+
+
+    /* ========================================================
+       ENTRY SECTION
     ======================================================== */
 
     loadEntrySectionIntoMemory(
-        memory
+        memory,
+        options = {}
     ) {
 
         if (
@@ -1861,7 +1579,7 @@ class XBEParser {
         ) {
 
             throw new Error(
-                "Entry point section could not be found."
+                "Entry point section not found."
             );
 
         }
@@ -1869,18 +1587,19 @@ class XBEParser {
 
         return this.loadSectionIntoMemory(
             memory,
-            this.entrySection
+            this.entrySection,
+            options
         );
 
     }
 
 
     /* ========================================================
-       GET CPU ENTRY ADDRESS
+       CPU ADDRESS
     ======================================================== */
 
     getCPUEntryAddress(
-        memory
+        memory = null
     ) {
 
         if (
@@ -1894,18 +1613,13 @@ class XBEParser {
 
 
         const base =
-            this.header.baseAddress
-                || XBE_DEFAULT_BASE;
+            this.header.baseAddress ||
+            XBE_DEFAULT_BASE;
 
 
         let address =
-            this.analysis.virtualEntryPoint;
+            this.entryVirtualAddress;
 
-
-        /*
-         * Translate Xbox virtual address
-         * into WebBktx RAM address.
-         */
 
         if (
             address >= base
@@ -1936,15 +1650,89 @@ class XBEParser {
 
 
     /* ========================================================
-       ANALYZE
+       HEX DUMP
+    ======================================================== */
+
+    hexDump(
+        bytes = this.getEntryBytes(128),
+        startAddress =
+            this.entryVirtualAddress || 0
+    ) {
+
+        const lines = [];
+
+
+        for (
+            let i = 0;
+            i < bytes.length;
+            i += 16
+        ) {
+
+            const chunk =
+                bytes.slice(
+                    i,
+                    i + 16
+                );
+
+
+            const hex =
+                bytesToHex(
+                    chunk
+                );
+
+
+            let ascii = "";
+
+
+            for (
+                const byte of chunk
+            ) {
+
+                ascii +=
+                    (
+                        byte >= 32 &&
+                        byte <= 126
+                    )
+                        ? String.fromCharCode(byte)
+                        : ".";
+
+            }
+
+
+            lines.push(
+                `${xbeHex(
+                    startAddress + i
+                )}  ` +
+                `${hex.padEnd(
+                    47,
+                    " "
+                )}  ${ascii}`
+            );
+
+        }
+
+
+        return lines.join("\n");
+
+    }
+
+
+    /* ========================================================
+       REPORT
     ======================================================== */
 
     getReport() {
 
         return {
 
+            version:
+                WEBBKTX_XBE_VERSION,
+
             valid:
                 this.valid,
+
+            loaded:
+                this.loaded,
 
             fileSize:
                 this.bytes
@@ -1965,17 +1753,17 @@ class XBEParser {
                                 this.header.baseAddress
                             ),
 
-                        sizeOfHeaders:
-                            xbeHex(
-                                this.header.sizeOfHeaders
-                            ),
-
-                        sizeOfImage:
+                        imageSize:
                             xbeHex(
                                 this.header.sizeOfImage
                             ),
 
-                        numberOfSections:
+                        headersSize:
+                            xbeHex(
+                                this.header.sizeOfHeaders
+                            ),
+
+                        sections:
                             this.header
                                 .numberOfSections,
 
@@ -1990,7 +1778,7 @@ class XBEParser {
                                     .kernelThunkAddress
                             ),
 
-                        numberOfLibraries:
+                        libraries:
                             this.header
                                 .numberOfLibraries
 
@@ -2019,6 +1807,9 @@ class XBEParser {
 
         return {
 
+            version:
+                WEBBKTX_XBE_VERSION,
+
             loaded:
                 this.loaded,
 
@@ -2034,10 +1825,16 @@ class XBEParser {
                 this.sections.length,
 
             entryPoint:
-                this.analysis
+                this.entryVirtualAddress !== null
                     ? xbeHex(
-                        this.analysis
-                            .virtualEntryPoint
+                        this.entryVirtualAddress
+                    )
+                    : null,
+
+            entryFileOffset:
+                this.entryFileOffset !== null
+                    ? xbeHex(
+                        this.entryFileOffset
                     )
                     : null,
 
@@ -2053,30 +1850,72 @@ class XBEParser {
 
     }
 
+
+    /* ========================================================
+       RAW DATA
+    ======================================================== */
+
+    getBytes() {
+
+        if (
+            !this.bytes
+        ) {
+
+            return new Uint8Array();
+
+        }
+
+
+        return this.bytes.slice();
+
+    }
+
 }
 
 
 /* ============================================================
-   XBE FILE CLASS
+   PUBLIC XBE CLASS
 ============================================================ */
 
 class WebBktxXBE {
 
-    constructor(
-        source
-    ) {
+    constructor(source = null) {
 
         this.parser =
-            new XBEParser(
+            new WebBktxXBEParser(
                 source
             );
 
     }
 
 
-    async load() {
+    async load(source = null) {
+
+        /*
+         * IMPORTANT:
+         *
+         * This accepts:
+         * File
+         * Blob
+         * ArrayBuffer
+         * Uint8Array
+         */
+
+        if (
+            source !== null &&
+            source !== undefined
+        ) {
+
+            this.parser =
+                new WebBktxXBEParser(
+                    source
+                );
+
+        }
+
 
         await this.parser.load();
+
 
         return this;
 
@@ -2111,6 +1950,27 @@ class WebBktxXBE {
     }
 
 
+    get entrySection() {
+
+        return this.parser.entrySection;
+
+    }
+
+
+    get entryFileOffset() {
+
+        return this.parser.entryFileOffset;
+
+    }
+
+
+    get entryVirtualAddress() {
+
+        return this.parser.entryVirtualAddress;
+
+    }
+
+
     getReport() {
 
         return this.parser.getReport();
@@ -2126,7 +1986,7 @@ class WebBktxXBE {
 
 
     getEntryBytes(
-        count
+        count = 128
     ) {
 
         return this.parser.getEntryBytes(
@@ -2149,13 +2009,39 @@ class WebBktxXBE {
     }
 
 
+    extractSection(
+        section
+    ) {
+
+        return this.parser.extractSection(
+            section
+        );
+
+    }
+
+
+    loadIntoMemory(
+        memory,
+        options = {}
+    ) {
+
+        return this.parser.loadIntoMemory(
+            memory,
+            options
+        );
+
+    }
+
+
     loadEntrySectionIntoMemory(
-        memory
+        memory,
+        options = {}
     ) {
 
         return this.parser
             .loadEntrySectionIntoMemory(
-                memory
+                memory,
+                options
             );
 
     }
@@ -2172,37 +2058,53 @@ class WebBktxXBE {
 
     }
 
+
+    virtualToFileOffset(
+        address
+    ) {
+
+        return this.parser
+            .virtualToFileOffset(
+                address
+            );
+
+    }
+
+
+    fileOffsetToVirtual(
+        offset
+    ) {
+
+        return this.parser
+            .fileOffsetToVirtual(
+                offset
+            );
+
+    }
+
+
+    findSection(
+        address
+    ) {
+
+        return this.parser.findSection(
+            address
+        );
+
+    }
+
+
+    getBytes() {
+
+        return this.parser.getBytes();
+
+    }
+
 }
 
 
 /* ============================================================
-   BYTE FORMATTER
-============================================================ */
-
-function xbeBytesToHex(
-    bytes
-) {
-
-    return Array.from(
-        bytes
-    )
-    .map(
-        byte =>
-            byte
-                .toString(16)
-                .padStart(
-                    2,
-                    "0"
-                )
-                .toUpperCase()
-    )
-    .join(" ");
-
-}
-
-
-/* ============================================================
-   PUBLIC API
+   GLOBAL EXPORTS
 ============================================================ */
 
 window.WebBktxXBE =
@@ -2210,12 +2112,16 @@ window.WebBktxXBE =
 
 
 window.WebBktxXBEParser =
-    XBEParser;
+    WebBktxXBEParser;
 
 
 window.WebBktxXBESection =
-    XBESection;
+    WebBktxXBESection;
 
+
+/* ============================================================
+   UTILS
+============================================================ */
 
 window.WebBktxXBEUtils = {
 
@@ -2223,7 +2129,11 @@ window.WebBktxXBEUtils = {
         xbeHex,
 
     bytesToHex:
-        xbeBytesToHex
+
+        bytesToHex,
+
+    version:
+        WEBBKTX_XBE_VERSION
 
 };
 
@@ -2233,5 +2143,10 @@ window.WebBktxXBEUtils = {
 ============================================================ */
 
 console.log(
-    "WebBktx XBE Loader 0.7D loaded."
+    `%cWebBktx XBE Loader ${WEBBKTX_XBE_VERSION}`,
+    "font-weight:bold"
+);
+
+console.log(
+    "XBE loader ready."
 );
