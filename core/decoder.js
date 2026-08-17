@@ -2,32 +2,54 @@
  * ============================================================
  * WebBktx x86 Decoder
  *
- * Version: 0.7C
+ * Version: 1.0 MAX
  *
- * Experimental 32-bit x86 instruction decoder
+ * 32-bit x86 instruction decoder
  *
- * Supported instructions:
+ * Designed for:
  *
- *   B8-BF  MOV r32, imm32
- *   B9     MOV ECX, imm32
- *   05     ADD EAX, imm32
- *   2D     SUB EAX, imm32
- *   31     XOR r/m32, r32
- *   33     XOR r32, r/m32
- *   89     MOV r/m32, r32
- *   8B     MOV r32, r/m32
- *   40-47  INC r32
- *   48-4F  DEC r32
- *   50-57  PUSH r32
- *   58-5F  POP r32
- *   90     NOP
- *   C3     RET
- *   F4     HLT
+ *   WebBktx CPU 0.7B+
+ *   WebBktx Memory 1.0 MAX
+ *   WebBktx XBE 0.7D+
  *
- * Basic ModR/M decoding:
+ * Supported:
  *
- *   register
- *   direct memory
+ *   NOP
+ *   HLT
+ *
+ *   MOV
+ *   ADD
+ *   SUB
+ *   XOR
+ *   AND
+ *   OR
+ *   CMP
+ *
+ *   INC
+ *   DEC
+ *
+ *   PUSH
+ *   POP
+ *
+ *   JMP
+ *   CALL
+ *   RET
+ *
+ *   JE / JZ
+ *   JNE / JNZ
+ *   JC
+ *   JNC
+ *   JS
+ *   JNS
+ *   JO
+ *   JNO
+ *   JL
+ *   JLE
+ *   JG
+ *   JGE
+ *
+ *   ModR/M register operands
+ *   ModR/M memory operands
  *
  * ============================================================
  */
@@ -36,11 +58,14 @@
 
 
 /* ============================================================
-   REGISTER TABLE
+   CONSTANTS
 ============================================================ */
 
-const X86_REGISTER_NAMES = [
+const WEBBKTX_DECODER_VERSION =
+    "1.0 MAX";
 
+
+const X86_REGISTERS = [
     "EAX",
     "ECX",
     "EDX",
@@ -49,159 +74,189 @@ const X86_REGISTER_NAMES = [
     "EBP",
     "ESI",
     "EDI"
-
 ];
+
+
+/* ============================================================
+   HELPERS
+============================================================ */
+
+function u8(
+    value
+) {
+
+    return value & 0xFF;
+
+}
+
+
+function s8(
+    value
+) {
+
+    value &=
+        0xFF;
+
+    return value & 0x80
+        ? value - 0x100
+        : value;
+
+}
+
+
+function u32(
+    value
+) {
+
+    return value >>> 0;
+
+}
+
+
+function s32(
+    value
+) {
+
+    value >>>= 0;
+
+    return value | 0;
+
+}
 
 
 /* ============================================================
    DECODER
 ============================================================ */
 
-class WebBktxX86Decoder {
+class WebBktxDecoder {
 
-    constructor(memory) {
+    constructor(
+        options = {}
+    ) {
 
-        if (!memory) {
-
-            throw new Error(
-                "Decoder requires memory."
-            );
-
-        }
+        this.version =
+            WEBBKTX_DECODER_VERSION;
 
 
-        this.memory =
-            memory;
+        this.strict =
+            options.strict !== false;
+
+
+        this.lastInstruction =
+            null;
+
+
+        this.instructionsDecoded =
+            0;
 
     }
 
 
     /* ========================================================
-       BYTE READ
+       BYTE ACCESS
     ======================================================== */
 
-    read8(address) {
+    read8(
+        cpu,
+        address
+    ) {
 
-        return this.memory.read8(
-            address >>> 0
+        return cpu.memory.read8(
+            address
         );
 
     }
 
 
-    read16(address) {
+    read16(
+        cpu,
+        address
+    ) {
 
-        return this.memory.read16(
-            address >>> 0
+        return cpu.memory.read16(
+            address
         );
 
     }
 
 
-    read32(address) {
+    read32(
+        cpu,
+        address
+    ) {
 
-        return this.memory.read32(
-            address >>> 0
+        return cpu.memory.read32(
+            address
+        );
+
+    }
+
+
+    readS8(
+        cpu,
+        address
+    ) {
+
+        return s8(
+            this.read8(
+                cpu,
+                address
+            )
+        );
+
+    }
+
+
+    readS32(
+        cpu,
+        address
+    ) {
+
+        return s32(
+            this.read32(
+                cpu,
+                address
+            )
         );
 
     }
 
 
     /* ========================================================
-       SIGN EXTENSION
-    ======================================================== */
-
-    sign8(value) {
-
-        value &= 0xFF;
-
-
-        if (
-            value & 0x80
-        ) {
-
-            return value - 0x100;
-
-        }
-
-
-        return value;
-
-    }
-
-
-    sign16(value) {
-
-        value &= 0xFFFF;
-
-
-        if (
-            value & 0x8000
-        ) {
-
-            return value - 0x10000;
-
-        }
-
-
-        return value;
-
-    }
-
-
-    sign32(value) {
-
-        value >>>= 0;
-
-
-        return value | 0;
-
-    }
-
-
-    /* ========================================================
-       REGISTER NAME
-    ======================================================== */
-
-    registerName(index) {
-
-        index &= 7;
-
-
-        return X86_REGISTER_NAMES[
-            index
-        ];
-
-    }
-
-
-    /* ========================================================
-       MODRM
+       MODR/M
     ======================================================== */
 
     decodeModRM(
+        cpu,
         address
     ) {
 
         const value =
             this.read8(
+                cpu,
                 address
             );
 
 
         const mod =
-            (value >> 6) & 3;
+            value >> 6;
 
 
         const reg =
-            (value >> 3) & 7;
+            (
+                value >> 3
+            ) & 7;
 
 
         const rm =
             value & 7;
 
 
-        return {
+        let length =
+            1;
+
+
+        const result = {
 
             value,
 
@@ -212,283 +267,311 @@ class WebBktxX86Decoder {
             rm,
 
             regName:
-                this.registerName(
-                    reg
-                ),
+                X86_REGISTERS[reg],
 
             rmName:
-                this.registerName(
-                    rm
-                )
+                null,
+
+            isRegister:
+                mod === 3,
+
+            address:
+                null,
+
+            length,
+
+            displacement:
+                0
 
         };
 
-    }
-
-
-    /* ========================================================
-       OPERAND
-    ======================================================== */
-
-    decodeRM32(
-        cpu,
-        address,
-        modrm
-    ) {
 
         /*
          * Register operand.
+         */
+
+        if (
+            mod === 3
+        ) {
+
+            result.rmName =
+                X86_REGISTERS[rm];
+
+            return result;
+
+        }
+
+
+        /*
+         * 32-bit addressing.
          *
-         * mod = 11
+         * SIB handling.
          */
 
         if (
-            modrm.mod === 3
+            rm === 4
         ) {
 
-            return {
-
-                type:
-                    "register",
-
-                register:
-                    this.registerName(
-                        modrm.rm
-                    )
-
-            };
-
-        }
-
-
-        /*
-         * Simple memory addressing.
-         *
-         * Full SIB addressing comes later.
-         */
-
-        if (
-            modrm.rm === 4
-        ) {
-
-            throw new Error(
-                "SIB addressing is not implemented yet."
-            );
-
-        }
-
-
-        /*
-         * Direct [disp32]
-         */
-
-        if (
-            modrm.mod === 0 &&
-            modrm.rm === 5
-        ) {
-
-            const displacement =
-                this.read32(
-                    address + 1
+            const sib =
+                this.read8(
+                    cpu,
+                    address + length
                 );
 
 
-            return {
-
-                type:
-                    "memory",
-
-                address:
-                    displacement >>> 0,
-
-                length:
-                    5
-
-            };
-
-        }
+            length++;
 
 
-        /*
-         * [register]
-         */
-
-        if (
-            modrm.mod === 0
-        ) {
-
-            return {
-
-                type:
-                    "memory",
-
-                register:
-                    this.registerName(
-                        modrm.rm
-                    ),
-
-                displacement:
-                    0,
-
-                length:
-                    1
-
-            };
-
-        }
-
-
-        /*
-         * [register + disp8]
-         */
-
-        if (
-            modrm.mod === 1
-        ) {
-
-            const displacement =
-                this.sign8(
-                    this.read8(
-                        address + 1
-                    )
+            const scale =
+                1 <<
+                (
+                    sib >> 6
                 );
 
 
-            return {
-
-                type:
-                    "memory",
-
-                register:
-                    this.registerName(
-                        modrm.rm
-                    ),
-
-                displacement,
-
-                length:
-                    2
-
-            };
-
-        }
+            const index =
+                (
+                    sib >> 3
+                ) & 7;
 
 
-        /*
-         * [register + disp32]
-         */
-
-        if (
-            modrm.mod === 2
-        ) {
-
-            const displacement =
-                this.read32(
-                    address + 1
-                );
+            const base =
+                sib & 7;
 
 
-            return {
+            result.sib = {
 
-                type:
-                    "memory",
+                value:
+                    sib,
 
-                register:
-                    this.registerName(
-                        modrm.rm
-                    ),
+                scale,
 
-                displacement:
-                    this.sign32(
-                        displacement
-                    ),
+                index,
 
-                length:
-                    5
+                base
 
             };
-
-        }
-
-
-        throw new Error(
-            "Unsupported ModR/M addressing mode."
-        );
-
-    }
-
-
-    /* ========================================================
-       READ OPERAND
-    ======================================================== */
-
-    readOperand(
-        cpu,
-        operand
-    ) {
-
-        if (
-            operand.type ===
-            "register"
-        ) {
-
-            return cpu.getRegister(
-                operand.register
-            );
-
-        }
-
-
-        if (
-            operand.type ===
-            "memory"
-        ) {
-
-            let address;
 
 
             if (
-                typeof operand.address ===
-                "number"
+                base === 5 &&
+                mod === 0
             ) {
 
-                address =
-                    operand.address;
+                result.base =
+                    null;
+
+                result.displacement =
+                    this.read32(
+                        cpu,
+                        address + length
+                    );
+
+                length += 4;
 
             } else {
 
-                address =
-                    (
-                        cpu.getRegister(
-                            operand.register
-                        ) +
-                        operand.displacement
-                    ) >>> 0;
+                result.base =
+                    X86_REGISTERS[base];
 
             }
 
 
-            return cpu.read32(
-                address
+            if (
+                index !== 4
+            ) {
+
+                result.index =
+                    X86_REGISTERS[index];
+
+            } else {
+
+                result.index =
+                    null;
+
+            }
+
+        } else {
+
+            if (
+                rm === 5 &&
+                mod === 0
+            ) {
+
+                result.base =
+                    null;
+
+                result.displacement =
+                    this.read32(
+                        cpu,
+                        address + length
+                    );
+
+                length += 4;
+
+            } else {
+
+                result.base =
+                    X86_REGISTERS[rm];
+
+            }
+
+        }
+
+
+        /*
+         * Displacement.
+         */
+
+        if (
+            mod === 1
+        ) {
+
+            result.displacement =
+                s8(
+                    this.read8(
+                        cpu,
+                        address + length
+                    )
+                );
+
+            length++;
+
+        } else if (
+            mod === 2
+        ) {
+
+            result.displacement =
+                this.readS32(
+                    cpu,
+                    address + length
+                );
+
+            length += 4;
+
+        }
+
+
+        result.length =
+            length;
+
+
+        return result;
+
+    }
+
+
+    /* ========================================================
+       CALCULATE EFFECTIVE ADDRESS
+    ======================================================== */
+
+    getEffectiveAddress(
+        cpu,
+        modrm
+    ) {
+
+        if (
+            modrm.isRegister
+        ) {
+
+            throw new Error(
+                "Register operand has no memory address."
             );
 
         }
 
 
-        throw new Error(
-            "Unknown operand type."
+        let address =
+            modrm.displacement | 0;
+
+
+        if (
+            modrm.base
+        ) {
+
+            address =
+                (
+                    address +
+                    cpu.getRegister(
+                        modrm.base
+                    )
+                ) | 0;
+
+        }
+
+
+        if (
+            modrm.index
+        ) {
+
+            const indexValue =
+                cpu.getRegister(
+                    modrm.index
+                );
+
+
+            address =
+                (
+                    address +
+                    (
+                        indexValue *
+                        (
+                            modrm.sib
+                                ? modrm.sib.scale
+                                : 1
+                        )
+                    )
+                ) | 0;
+
+        }
+
+
+        return address >>> 0;
+
+    }
+
+
+    /* ========================================================
+       OPERAND READ
+    ======================================================== */
+
+    readRM32(
+        cpu,
+        modrm
+    ) {
+
+        if (
+            modrm.isRegister
+        ) {
+
+            return cpu.getRegister(
+                modrm.rmName
+            );
+
+        }
+
+
+        const address =
+            this.getEffectiveAddress(
+                cpu,
+                modrm
+            );
+
+
+        return cpu.read32(
+            address
         );
 
     }
 
 
     /* ========================================================
-       WRITE OPERAND
+       OPERAND WRITE
     ======================================================== */
 
-    writeOperand(
+    writeRM32(
         cpu,
-        operand,
+        modrm,
         value
     ) {
 
@@ -496,12 +579,11 @@ class WebBktxX86Decoder {
 
 
         if (
-            operand.type ===
-            "register"
+            modrm.isRegister
         ) {
 
             cpu.setRegister(
-                operand.register,
+                modrm.rmName,
                 value
             );
 
@@ -510,865 +592,84 @@ class WebBktxX86Decoder {
         }
 
 
-        if (
-            operand.type ===
-            "memory"
-        ) {
-
-            let address;
-
-
-            if (
-                typeof operand.address ===
-                "number"
-            ) {
-
-                address =
-                    operand.address;
-
-            } else {
-
-                address =
-                    (
-                        cpu.getRegister(
-                            operand.register
-                        ) +
-                        operand.displacement
-                    ) >>> 0;
-
-            }
-
-
-            cpu.write32(
-                address,
-                value
+        const address =
+            this.getEffectiveAddress(
+                cpu,
+                modrm
             );
 
 
-            return;
-
-        }
-
-
-        throw new Error(
-            "Unknown operand type."
+        cpu.write32(
+            address,
+            value
         );
 
     }
 
 
     /* ========================================================
-       MOV REGISTER, IMM32
+       RELATIVE TARGET
     ======================================================== */
 
-    decodeMOVImmediate(
+    relativeTarget(
         cpu,
+        instructionEnd,
+        displacement
+    ) {
+
+        return (
+            instructionEnd +
+            displacement
+        ) >>> 0;
+
+    }
+
+
+    /* ========================================================
+       CREATE INSTRUCTION
+    ======================================================== */
+
+    instruction(
         address,
-        opcode
+        length,
+        mnemonic,
+        operands,
+        execute,
+        bytes = []
     ) {
 
-        const registerIndex =
-            opcode - 0xB8;
+        const result = {
 
-
-        const register =
-            this.registerName(
-                registerIndex
-            );
-
-
-        const value =
-            this.read32(
-                address + 1
-            );
-
-
-        return {
-
-            address,
-
-            opcode,
-
-            mnemonic:
-                `MOV ${register}, 0x${
-                    value
-                        .toString(16)
-                        .toUpperCase()
-                }`,
-
-            length:
-                5,
-
-            execute: cpu => {
-
-                cpu.setRegister(
-                    register,
-                    value
-                );
-
-
-                cpu.EIP =
-                    (
-                        address + 5
-                    ) >>> 0;
-
-            }
-
-        };
-
-    }
-
-
-    /* ========================================================
-       ADD EAX, IMM32
-    ======================================================== */
-
-    decodeAddEAX(
-        cpu,
-        address
-    ) {
-
-        const value =
-            this.read32(
-                address + 1
-            );
-
-
-        return {
-
-            address,
-
-            opcode:
-                0x05,
-
-            mnemonic:
-                `ADD EAX, 0x${
-                    value
-                        .toString(16)
-                        .toUpperCase()
-                }`,
-
-            length:
-                5,
-
-            execute: cpu => {
-
-                cpu.EAX =
-                    cpu.add32(
-                        cpu.EAX,
-                        value
-                    );
-
-
-                cpu.EIP =
-                    (
-                        address + 5
-                    ) >>> 0;
-
-            }
-
-        };
-
-    }
-
-
-    /* ========================================================
-       SUB EAX, IMM32
-    ======================================================== */
-
-    decodeSubEAX(
-        cpu,
-        address
-    ) {
-
-        const value =
-            this.read32(
-                address + 1
-            );
-
-
-        return {
-
-            address,
-
-            opcode:
-                0x2D,
-
-            mnemonic:
-                `SUB EAX, 0x${
-                    value
-                        .toString(16)
-                        .toUpperCase()
-                }`,
-
-            length:
-                5,
-
-            execute: cpu => {
-
-                cpu.EAX =
-                    cpu.sub32(
-                        cpu.EAX,
-                        value
-                    );
-
-
-                cpu.EIP =
-                    (
-                        address + 5
-                    ) >>> 0;
-
-            }
-
-        };
-
-    }
-
-
-    /* ========================================================
-       INC REGISTER
-    ======================================================== */
-
-    decodeINC(
-        cpu,
-        address,
-        opcode
-    ) {
-
-        const register =
-            this.registerName(
-                opcode - 0x40
-            );
-
-
-        return {
-
-            address,
-
-            opcode,
-
-            mnemonic:
-                `INC ${register}`,
-
-            length:
-                1,
-
-            execute: cpu => {
-
-                const value =
-                    cpu.getRegister(
-                        register
-                    );
-
-
-                cpu.setRegister(
-                    register,
-                    cpu.inc32(
-                        value
-                    )
-                );
-
-
-                cpu.EIP =
-                    (
-                        address + 1
-                    ) >>> 0;
-
-            }
-
-        };
-
-    }
-
-
-    /* ========================================================
-       DEC REGISTER
-    ======================================================== */
-
-    decodeDEC(
-        cpu,
-        address,
-        opcode
-    ) {
-
-        const register =
-            this.registerName(
-                opcode - 0x48
-            );
-
-
-        return {
-
-            address,
-
-            opcode,
-
-            mnemonic:
-                `DEC ${register}`,
-
-            length:
-                1,
-
-            execute: cpu => {
-
-                const value =
-                    cpu.getRegister(
-                        register
-                    );
-
-
-                cpu.setRegister(
-                    register,
-                    cpu.dec32(
-                        value
-                    )
-                );
-
-
-                cpu.EIP =
-                    (
-                        address + 1
-                    ) >>> 0;
-
-            }
-
-        };
-
-    }
-
-
-    /* ========================================================
-       PUSH REGISTER
-    ======================================================== */
-
-    decodePUSH(
-        cpu,
-        address,
-        opcode
-    ) {
-
-        const register =
-            this.registerName(
-                opcode - 0x50
-            );
-
-
-        return {
-
-            address,
-
-            opcode,
-
-            mnemonic:
-                `PUSH ${register}`,
-
-            length:
-                1,
-
-            execute: cpu => {
-
-                cpu.push32(
-                    cpu.getRegister(
-                        register
-                    )
-                );
-
-
-                cpu.EIP =
-                    (
-                        address + 1
-                    ) >>> 0;
-
-            }
-
-        };
-
-    }
-
-
-    /* ========================================================
-       POP REGISTER
-    ======================================================== */
-
-    decodePOP(
-        cpu,
-        address,
-        opcode
-    ) {
-
-        const register =
-            this.registerName(
-                opcode - 0x58
-            );
-
-
-        return {
-
-            address,
-
-            opcode,
-
-            mnemonic:
-                `POP ${register}`,
-
-            length:
-                1,
-
-            execute: cpu => {
-
-                cpu.setRegister(
-                    register,
-                    cpu.pop32()
-                );
-
-
-                cpu.EIP =
-                    (
-                        address + 1
-                    ) >>> 0;
-
-            }
-
-        };
-
-    }
-
-
-    /* ========================================================
-       NOP
-    ======================================================== */
-
-    decodeNOP(
-        cpu,
-        address
-    ) {
-
-        return {
-
-            address,
-
-            opcode:
-                0x90,
-
-            mnemonic:
-                "NOP",
-
-            length:
-                1,
-
-            execute: cpu => {
-
-                cpu.EIP =
-                    (
-                        address + 1
-                    ) >>> 0;
-
-            }
-
-        };
-
-    }
-
-
-    /* ========================================================
-       HLT
-    ======================================================== */
-
-    decodeHLT(
-        cpu,
-        address
-    ) {
-
-        return {
-
-            address,
-
-            opcode:
-                0xF4,
-
-            mnemonic:
-                "HLT",
-
-            length:
-                1,
-
-            execute: cpu => {
-
-                cpu.EIP =
-                    (
-                        address + 1
-                    ) >>> 0;
-
-                cpu.halt();
-
-            }
-
-        };
-
-    }
-
-
-    /* ========================================================
-       RET
-    ======================================================== */
-
-    decodeRET(
-        cpu,
-        address
-    ) {
-
-        return {
-
-            address,
-
-            opcode:
-                0xC3,
-
-            mnemonic:
-                "RET",
-
-            length:
-                1,
-
-            execute: cpu => {
-
-                cpu.EIP =
-                    cpu.pop32();
-
-            }
-
-        };
-
-    }
-
-
-    /* ========================================================
-       XOR r/m32, r32
-    ======================================================== */
-
-    decodeXORRM32R32(
-        cpu,
-        address
-    ) {
-
-        const modrm =
-            this.decodeModRM(
-                address + 1
-            );
-
-
-        const operand =
-            this.decodeRM32(
-                cpu,
-                address + 1,
-                modrm
-            );
-
-
-        const length =
-            2 +
-            (
-                operand.length
-                    ? operand.length - 1
-                    : 0
-            );
-
-
-        return {
-
-            address,
-
-            opcode:
-                0x31,
-
-            mnemonic:
-                `XOR ${
-                    operand.type === "register"
-                        ? operand.register
-                        : "[MEM]"
-                }, ${modrm.regName}`,
+            address:
+                address >>> 0,
 
             length,
 
-            execute: cpu => {
+            mnemonic,
 
-                const left =
-                    this.readOperand(
-                        cpu,
-                        operand
-                    );
+            operands,
 
+            bytes:
+                Array.from(bytes),
 
-                const right =
-                    cpu.getRegister(
-                        modrm.regName
-                    );
+            text:
+                operands
+                    ? `${mnemonic} ${operands}`
+                    : mnemonic,
 
-
-                const result =
-                    cpu.xor32(
-                        left,
-                        right
-                    );
-
-
-                this.writeOperand(
-                    cpu,
-                    operand,
-                    result
-                );
-
-
-                cpu.EIP =
-                    (
-                        address +
-                        length
-                    ) >>> 0;
-
-            }
+            execute
 
         };
 
-    }
 
+        this.lastInstruction =
+            result;
 
-    /* ========================================================
-       XOR r32, r/m32
-    ======================================================== */
 
-    decodeXORR32RM32(
-        cpu,
-        address
-    ) {
+        this.instructionsDecoded++;
 
-        const modrm =
-            this.decodeModRM(
-                address + 1
-            );
 
-
-        const operand =
-            this.decodeRM32(
-                cpu,
-                address + 1,
-                modrm
-            );
-
-
-        const length =
-            2 +
-            (
-                operand.length
-                    ? operand.length - 1
-                    : 0
-            );
-
-
-        return {
-
-            address,
-
-            opcode:
-                0x33,
-
-            mnemonic:
-                `XOR ${modrm.regName}, ${
-                    operand.type === "register"
-                        ? operand.register
-                        : "[MEM]"
-                }`,
-
-            length,
-
-            execute: cpu => {
-
-                const left =
-                    cpu.getRegister(
-                        modrm.regName
-                    );
-
-
-                const right =
-                    this.readOperand(
-                        cpu,
-                        operand
-                    );
-
-
-                const result =
-                    cpu.xor32(
-                        left,
-                        right
-                    );
-
-
-                cpu.setRegister(
-                    modrm.regName,
-                    result
-                );
-
-
-                cpu.EIP =
-                    (
-                        address +
-                        length
-                    ) >>> 0;
-
-            }
-
-        };
-
-    }
-
-
-    /* ========================================================
-       MOV r/m32, r32
-    ======================================================== */
-
-    decodeMOVRM32R32(
-        cpu,
-        address
-    ) {
-
-        const modrm =
-            this.decodeModRM(
-                address + 1
-            );
-
-
-        const operand =
-            this.decodeRM32(
-                cpu,
-                address + 1,
-                modrm
-            );
-
-
-        const length =
-            2 +
-            (
-                operand.length
-                    ? operand.length - 1
-                    : 0
-            );
-
-
-        return {
-
-            address,
-
-            opcode:
-                0x89,
-
-            mnemonic:
-                `MOV ${
-                    operand.type === "register"
-                        ? operand.register
-                        : "[MEM]"
-                }, ${modrm.regName}`,
-
-            length,
-
-            execute: cpu => {
-
-                const value =
-                    cpu.getRegister(
-                        modrm.regName
-                    );
-
-
-                this.writeOperand(
-                    cpu,
-                    operand,
-                    value
-                );
-
-
-                cpu.EIP =
-                    (
-                        address +
-                        length
-                    ) >>> 0;
-
-            }
-
-        };
-
-    }
-
-
-    /* ========================================================
-       MOV r32, r/m32
-    ======================================================== */
-
-    decodeMOVR32RM32(
-        cpu,
-        address
-    ) {
-
-        const modrm =
-            this.decodeModRM(
-                address + 1
-            );
-
-
-        const operand =
-            this.decodeRM32(
-                cpu,
-                address + 1,
-                modrm
-            );
-
-
-        const length =
-            2 +
-            (
-                operand.length
-                    ? operand.length - 1
-                    : 0
-            );
-
-
-        return {
-
-            address,
-
-            opcode:
-                0x8B,
-
-            mnemonic:
-                `MOV ${modrm.regName}, ${
-                    operand.type === "register"
-                        ? operand.register
-                        : "[MEM]"
-                }`,
-
-            length,
-
-            execute: cpu => {
-
-                const value =
-                    this.readOperand(
-                        cpu,
-                        operand
-                    );
-
-
-                cpu.setRegister(
-                    modrm.regName,
-                    value
-                );
-
-
-                cpu.EIP =
-                    (
-                        address +
-                        length
-                    ) >>> 0;
-
-            }
-
-        };
+        return result;
 
     }
 
@@ -1382,263 +683,1739 @@ class WebBktxX86Decoder {
         address
     ) {
 
+        address >>>=
+            0;
+
+
         const opcode =
             this.read8(
+                cpu,
                 address
             );
 
 
-        /*
-         * MOV r32, imm32
-         *
-         * B8-BF
-         */
+        /* ----------------------------------------------------
+           NOP
+        ---------------------------------------------------- */
+
+        if (
+            opcode === 0x90
+        ) {
+
+            return this.instruction(
+
+                address,
+
+                1,
+
+                "NOP",
+
+                "",
+
+                cpu => {
+
+                    cpu.EIP =
+                        (
+                            address +
+                            1
+                        ) >>> 0;
+
+                },
+
+                [opcode]
+
+            );
+
+        }
+
+
+        /* ----------------------------------------------------
+           HLT
+        ---------------------------------------------------- */
+
+        if (
+            opcode === 0xF4
+        ) {
+
+            return this.instruction(
+
+                address,
+
+                1,
+
+                "HLT",
+
+                "",
+
+                cpu => {
+
+                    cpu.EIP =
+                        (
+                            address +
+                            1
+                        ) >>> 0;
+
+                    cpu.halt();
+
+                },
+
+                [opcode]
+
+            );
+
+        }
+
+
+        /* ----------------------------------------------------
+           MOV EAX, imm32
+           B8 + rd
+        ---------------------------------------------------- */
 
         if (
             opcode >= 0xB8 &&
             opcode <= 0xBF
         ) {
 
-            return this.decodeMOVImmediate(
-                cpu,
+            const reg =
+                X86_REGISTERS[
+                    opcode - 0xB8
+                ];
+
+
+            const immediate =
+                this.read32(
+                    cpu,
+                    address + 1
+                );
+
+
+            return this.instruction(
+
                 address,
-                opcode
+
+                5,
+
+                "MOV",
+
+                `${reg}, 0x${immediate
+                    .toString(16)
+                    .padStart(8, "0")}`,
+
+                cpu => {
+
+                    cpu.setRegister(
+                        reg,
+                        immediate
+                    );
+
+
+                    cpu.EIP =
+                        (
+                            address +
+                            5
+                        ) >>> 0;
+
+                },
+
+                [
+
+                    opcode,
+
+                    this.read8(
+                        cpu,
+                        address + 1
+                    ),
+
+                    this.read8(
+                        cpu,
+                        address + 2
+                    ),
+
+                    this.read8(
+                        cpu,
+                        address + 3
+                    ),
+
+                    this.read8(
+                        cpu,
+                        address + 4
+                    )
+
+                ]
+
             );
 
         }
 
 
-        /*
-         * ADD EAX, imm32
-         */
+        /* ----------------------------------------------------
+           MOV r/m32, r32
+           89 /r
+        ---------------------------------------------------- */
 
         if (
-            opcode === 0x05
+            opcode === 0x89
         ) {
 
-            return this.decodeAddEAX(
-                cpu,
-                address
+            const modrm =
+                this.decodeModRM(
+                    cpu,
+                    address + 1
+                );
+
+
+            return this.instruction(
+
+                address,
+
+                1 +
+                modrm.length,
+
+                "MOV",
+
+                `${modrm.rmName ||
+                    "[mem]"}, ${modrm.regName}`,
+
+                cpu => {
+
+                    const value =
+                        cpu.getRegister(
+                            modrm.regName
+                        );
+
+
+                    this.writeRM32(
+                        cpu,
+                        modrm,
+                        value
+                    );
+
+
+                    cpu.EIP =
+                        (
+                            address +
+                            1 +
+                            modrm.length
+                        ) >>> 0;
+
+                }
+
             );
 
         }
 
 
-        /*
-         * SUB EAX, imm32
-         */
+        /* ----------------------------------------------------
+           MOV r32, r/m32
+           8B /r
+        ---------------------------------------------------- */
 
         if (
-            opcode === 0x2D
+            opcode === 0x8B
         ) {
 
-            return this.decodeSubEAX(
-                cpu,
-                address
+            const modrm =
+                this.decodeModRM(
+                    cpu,
+                    address + 1
+                );
+
+
+            return this.instruction(
+
+                address,
+
+                1 +
+                modrm.length,
+
+                "MOV",
+
+                `${modrm.regName}, ${modrm.rmName ||
+                    "[mem]"}`,
+
+                cpu => {
+
+                    const value =
+                        this.readRM32(
+                            cpu,
+                            modrm
+                        );
+
+
+                    cpu.setRegister(
+                        modrm.regName,
+                        value
+                    );
+
+
+                    cpu.EIP =
+                        (
+                            address +
+                            1 +
+                            modrm.length
+                        ) >>> 0;
+
+                }
+
             );
 
         }
 
 
-        /*
-         * INC r32
-         */
+        /* ----------------------------------------------------
+           ADD r/m32, r32
+           01 /r
+        ---------------------------------------------------- */
+
+        if (
+            opcode === 0x01
+        ) {
+
+            const modrm =
+                this.decodeModRM(
+                    cpu,
+                    address + 1
+                );
+
+
+            return this.instruction(
+
+                address,
+
+                1 +
+                modrm.length,
+
+                "ADD",
+
+                `${modrm.rmName ||
+                    "[mem]"}, ${modrm.regName}`,
+
+                cpu => {
+
+                    const a =
+                        this.readRM32(
+                            cpu,
+                            modrm
+                        );
+
+
+                    const b =
+                        cpu.getRegister(
+                            modrm.regName
+                        );
+
+
+                    const result =
+                        cpu.add32(
+                            a,
+                            b
+                        );
+
+
+                    this.writeRM32(
+                        cpu,
+                        modrm,
+                        result
+                    );
+
+
+                    cpu.EIP =
+                        (
+                            address +
+                            1 +
+                            modrm.length
+                        ) >>> 0;
+
+                }
+
+            );
+
+        }
+
+
+        /* ----------------------------------------------------
+           ADD r32, r/m32
+           03 /r
+        ---------------------------------------------------- */
+
+        if (
+            opcode === 0x03
+        ) {
+
+            const modrm =
+                this.decodeModRM(
+                    cpu,
+                    address + 1
+                );
+
+
+            return this.instruction(
+
+                address,
+
+                1 +
+                modrm.length,
+
+                "ADD",
+
+                `${modrm.regName}, ${modrm.rmName ||
+                    "[mem]"}`,
+
+                cpu => {
+
+                    const a =
+                        cpu.getRegister(
+                            modrm.regName
+                        );
+
+
+                    const b =
+                        this.readRM32(
+                            cpu,
+                            modrm
+                        );
+
+
+                    cpu.setRegister(
+                        modrm.regName,
+                        cpu.add32(
+                            a,
+                            b
+                        )
+                    );
+
+
+                    cpu.EIP =
+                        (
+                            address +
+                            1 +
+                            modrm.length
+                        ) >>> 0;
+
+                }
+
+            );
+
+        }
+
+
+        /* ----------------------------------------------------
+           SUB r/m32, r32
+           29 /r
+        ---------------------------------------------------- */
+
+        if (
+            opcode === 0x29
+        ) {
+
+            const modrm =
+                this.decodeModRM(
+                    cpu,
+                    address + 1
+                );
+
+
+            return this.instruction(
+
+                address,
+
+                1 +
+                modrm.length,
+
+                "SUB",
+
+                `${modrm.rmName ||
+                    "[mem]"}, ${modrm.regName}`,
+
+                cpu => {
+
+                    const a =
+                        this.readRM32(
+                            cpu,
+                            modrm
+                        );
+
+
+                    const b =
+                        cpu.getRegister(
+                            modrm.regName
+                        );
+
+
+                    const result =
+                        cpu.sub32(
+                            a,
+                            b
+                        );
+
+
+                    this.writeRM32(
+                        cpu,
+                        modrm,
+                        result
+                    );
+
+
+                    cpu.EIP =
+                        (
+                            address +
+                            1 +
+                            modrm.length
+                        ) >>> 0;
+
+                }
+
+            );
+
+        }
+
+
+        /* ----------------------------------------------------
+           SUB r32, r/m32
+           2B /r
+        ---------------------------------------------------- */
+
+        if (
+            opcode === 0x2B
+        ) {
+
+            const modrm =
+                this.decodeModRM(
+                    cpu,
+                    address + 1
+                );
+
+
+            return this.instruction(
+
+                address,
+
+                1 +
+                modrm.length,
+
+                "SUB",
+
+                `${modrm.regName}, ${modrm.rmName ||
+                    "[mem]"}`,
+
+                cpu => {
+
+                    const a =
+                        cpu.getRegister(
+                            modrm.regName
+                        );
+
+
+                    const b =
+                        this.readRM32(
+                            cpu,
+                            modrm
+                        );
+
+
+                    cpu.setRegister(
+                        modrm.regName,
+                        cpu.sub32(
+                            a,
+                            b
+                        )
+                    );
+
+
+                    cpu.EIP =
+                        (
+                            address +
+                            1 +
+                            modrm.length
+                        ) >>> 0;
+
+                }
+
+            );
+
+        }
+
+
+        /* ----------------------------------------------------
+           XOR
+           31 /r
+        ---------------------------------------------------- */
+
+        if (
+            opcode === 0x31
+        ) {
+
+            const modrm =
+                this.decodeModRM(
+                    cpu,
+                    address + 1
+                );
+
+
+            return this.instruction(
+
+                address,
+
+                1 +
+                modrm.length,
+
+                "XOR",
+
+                `${modrm.rmName ||
+                    "[mem]"}, ${modrm.regName}`,
+
+                cpu => {
+
+                    const a =
+                        this.readRM32(
+                            cpu,
+                            modrm
+                        );
+
+
+                    const b =
+                        cpu.getRegister(
+                            modrm.regName
+                        );
+
+
+                    this.writeRM32(
+                        cpu,
+                        modrm,
+                        cpu.xor32(
+                            a,
+                            b
+                        )
+                    );
+
+
+                    cpu.EIP =
+                        (
+                            address +
+                            1 +
+                            modrm.length
+                        ) >>> 0;
+
+                }
+
+            );
+
+        }
+
+
+        /* ----------------------------------------------------
+           AND
+           21 /r
+        ---------------------------------------------------- */
+
+        if (
+            opcode === 0x21
+        ) {
+
+            const modrm =
+                this.decodeModRM(
+                    cpu,
+                    address + 1
+                );
+
+
+            return this.instruction(
+
+                address,
+
+                1 +
+                modrm.length,
+
+                "AND",
+
+                `${modrm.rmName ||
+                    "[mem]"}, ${modrm.regName}`,
+
+                cpu => {
+
+                    const a =
+                        this.readRM32(
+                            cpu,
+                            modrm
+                        );
+
+
+                    const b =
+                        cpu.getRegister(
+                            modrm.regName
+                        );
+
+
+                    this.writeRM32(
+                        cpu,
+                        modrm,
+                        cpu.and32(
+                            a,
+                            b
+                        )
+                    );
+
+
+                    cpu.EIP =
+                        (
+                            address +
+                            1 +
+                            modrm.length
+                        ) >>> 0;
+
+                }
+
+            );
+
+        }
+
+
+        /* ----------------------------------------------------
+           OR
+           09 /r
+        ---------------------------------------------------- */
+
+        if (
+            opcode === 0x09
+        ) {
+
+            const modrm =
+                this.decodeModRM(
+                    cpu,
+                    address + 1
+                );
+
+
+            return this.instruction(
+
+                address,
+
+                1 +
+                modrm.length,
+
+                "OR",
+
+                `${modrm.rmName ||
+                    "[mem]"}, ${modrm.regName}`,
+
+                cpu => {
+
+                    const a =
+                        this.readRM32(
+                            cpu,
+                            modrm
+                        );
+
+
+                    const b =
+                        cpu.getRegister(
+                            modrm.regName
+                        );
+
+
+                    this.writeRM32(
+                        cpu,
+                        modrm,
+                        cpu.or32(
+                            a,
+                            b
+                        )
+                    );
+
+
+                    cpu.EIP =
+                        (
+                            address +
+                            1 +
+                            modrm.length
+                        ) >>> 0;
+
+                }
+
+            );
+
+        }
+
+
+        /* ----------------------------------------------------
+           CMP r/m32, r32
+           39 /r
+        ---------------------------------------------------- */
+
+        if (
+            opcode === 0x39
+        ) {
+
+            const modrm =
+                this.decodeModRM(
+                    cpu,
+                    address + 1
+                );
+
+
+            return this.instruction(
+
+                address,
+
+                1 +
+                modrm.length,
+
+                "CMP",
+
+                `${modrm.rmName ||
+                    "[mem]"}, ${modrm.regName}`,
+
+                cpu => {
+
+                    const a =
+                        this.readRM32(
+                            cpu,
+                            modrm
+                        );
+
+
+                    const b =
+                        cpu.getRegister(
+                            modrm.regName
+                        );
+
+
+                    cpu.sub32(
+                        a,
+                        b
+                    );
+
+
+                    cpu.EIP =
+                        (
+                            address +
+                            1 +
+                            modrm.length
+                        ) >>> 0;
+
+                }
+
+            );
+
+        }
+
+
+        /* ----------------------------------------------------
+           INC r32
+           40 + rd
+        ---------------------------------------------------- */
 
         if (
             opcode >= 0x40 &&
             opcode <= 0x47
         ) {
 
-            return this.decodeINC(
-                cpu,
+            const reg =
+                X86_REGISTERS[
+                    opcode - 0x40
+                ];
+
+
+            return this.instruction(
+
                 address,
-                opcode
+
+                1,
+
+                "INC",
+
+                reg,
+
+                cpu => {
+
+                    cpu.setRegister(
+                        reg,
+                        cpu.inc32(
+                            cpu.getRegister(
+                                reg
+                            )
+                        )
+                    );
+
+
+                    cpu.EIP =
+                        (
+                            address +
+                            1
+                        ) >>> 0;
+
+                },
+
+                [opcode]
+
             );
 
         }
 
 
-        /*
-         * DEC r32
-         */
+        /* ----------------------------------------------------
+           DEC r32
+           48 + rd
+        ---------------------------------------------------- */
 
         if (
             opcode >= 0x48 &&
             opcode <= 0x4F
         ) {
 
-            return this.decodeDEC(
-                cpu,
+            const reg =
+                X86_REGISTERS[
+                    opcode - 0x48
+                ];
+
+
+            return this.instruction(
+
                 address,
-                opcode
+
+                1,
+
+                "DEC",
+
+                reg,
+
+                cpu => {
+
+                    cpu.setRegister(
+                        reg,
+                        cpu.dec32(
+                            cpu.getRegister(
+                                reg
+                            )
+                        )
+                    );
+
+
+                    cpu.EIP =
+                        (
+                            address +
+                            1
+                        ) >>> 0;
+
+                },
+
+                [opcode]
+
             );
 
         }
 
 
-        /*
-         * PUSH r32
-         */
+        /* ----------------------------------------------------
+           PUSH r32
+           50 + rd
+        ---------------------------------------------------- */
 
         if (
             opcode >= 0x50 &&
             opcode <= 0x57
         ) {
 
-            return this.decodePUSH(
-                cpu,
+            const reg =
+                X86_REGISTERS[
+                    opcode - 0x50
+                ];
+
+
+            return this.instruction(
+
                 address,
-                opcode
+
+                1,
+
+                "PUSH",
+
+                reg,
+
+                cpu => {
+
+                    cpu.push32(
+                        cpu.getRegister(
+                            reg
+                        )
+                    );
+
+
+                    cpu.EIP =
+                        (
+                            address +
+                            1
+                        ) >>> 0;
+
+                }
+
             );
 
         }
 
 
-        /*
-         * POP r32
-         */
+        /* ----------------------------------------------------
+           POP r32
+           58 + rd
+        ---------------------------------------------------- */
 
         if (
             opcode >= 0x58 &&
             opcode <= 0x5F
         ) {
 
-            return this.decodePOP(
-                cpu,
+            const reg =
+                X86_REGISTERS[
+                    opcode - 0x58
+                ];
+
+
+            return this.instruction(
+
                 address,
-                opcode
+
+                1,
+
+                "POP",
+
+                reg,
+
+                cpu => {
+
+                    cpu.setRegister(
+                        reg,
+                        cpu.pop32()
+                    );
+
+
+                    cpu.EIP =
+                        (
+                            address +
+                            1
+                        ) >>> 0;
+
+                }
+
             );
 
         }
 
 
-        /*
-         * NOP
-         */
+        /* ----------------------------------------------------
+           PUSH imm32
+           68
+        ---------------------------------------------------- */
 
         if (
-            opcode === 0x90
+            opcode === 0x68
         ) {
 
-            return this.decodeNOP(
-                cpu,
-                address
+            const value =
+                this.read32(
+                    cpu,
+                    address + 1
+                );
+
+
+            return this.instruction(
+
+                address,
+
+                5,
+
+                "PUSH",
+
+                `0x${value
+                    .toString(16)
+                    .padStart(8, "0")}`,
+
+                cpu => {
+
+                    cpu.push32(
+                        value
+                    );
+
+
+                    cpu.EIP =
+                        (
+                            address +
+                            5
+                        ) >>> 0;
+
+                }
+
             );
 
         }
 
 
-        /*
-         * RET
-         */
+        /* ----------------------------------------------------
+           PUSH imm8
+           6A
+        ---------------------------------------------------- */
+
+        if (
+            opcode === 0x6A
+        ) {
+
+            const value =
+                this.readS8(
+                    cpu,
+                    address + 1
+                );
+
+
+            return this.instruction(
+
+                address,
+
+                2,
+
+                "PUSH",
+
+                String(value),
+
+                cpu => {
+
+                    cpu.push32(
+                        value >>> 0
+                    );
+
+
+                    cpu.EIP =
+                        (
+                            address +
+                            2
+                        ) >>> 0;
+
+                }
+
+            );
+
+        }
+
+
+        /* ----------------------------------------------------
+           JMP rel8
+           EB
+        ---------------------------------------------------- */
+
+        if (
+            opcode === 0xEB
+        ) {
+
+            const displacement =
+                this.readS8(
+                    cpu,
+                    address + 1
+                );
+
+
+            const target =
+                this.relativeTarget(
+                    cpu,
+                    address + 2,
+                    displacement
+                );
+
+
+            return this.instruction(
+
+                address,
+
+                2,
+
+                "JMP",
+
+                `0x${target
+                    .toString(16)
+                    .padStart(8, "0")}`,
+
+                cpu => {
+
+                    cpu.EIP =
+                        target;
+
+                }
+
+            );
+
+        }
+
+
+        /* ----------------------------------------------------
+           JMP rel32
+           E9
+        ---------------------------------------------------- */
+
+        if (
+            opcode === 0xE9
+        ) {
+
+            const displacement =
+                this.readS32(
+                    cpu,
+                    address + 1
+                );
+
+
+            const target =
+                this.relativeTarget(
+                    cpu,
+                    address + 5,
+                    displacement
+                );
+
+
+            return this.instruction(
+
+                address,
+
+                5,
+
+                "JMP",
+
+                `0x${target
+                    .toString(16)
+                    .padStart(8, "0")}`,
+
+                cpu => {
+
+                    cpu.EIP =
+                        target;
+
+                }
+
+            );
+
+        }
+
+
+        /* ----------------------------------------------------
+           CALL rel32
+           E8
+        ---------------------------------------------------- */
+
+        if (
+            opcode === 0xE8
+        ) {
+
+            const displacement =
+                this.readS32(
+                    cpu,
+                    address + 1
+                );
+
+
+            const returnAddress =
+                (
+                    address +
+                    5
+                ) >>> 0;
+
+
+            const target =
+                (
+                    returnAddress +
+                    displacement
+                ) >>> 0;
+
+
+            return this.instruction(
+
+                address,
+
+                5,
+
+                "CALL",
+
+                `0x${target
+                    .toString(16)
+                    .padStart(8, "0")}`,
+
+                cpu => {
+
+                    cpu.push32(
+                        returnAddress
+                    );
+
+
+                    cpu.EIP =
+                        target;
+
+                }
+
+            );
+
+        }
+
+
+        /* ----------------------------------------------------
+           RET
+           C3
+        ---------------------------------------------------- */
 
         if (
             opcode === 0xC3
         ) {
 
-            return this.decodeRET(
-                cpu,
-                address
+            return this.instruction(
+
+                address,
+
+                1,
+
+                "RET",
+
+                "",
+
+                cpu => {
+
+                    cpu.EIP =
+                        cpu.pop32();
+
+                }
+
             );
 
         }
 
 
-        /*
-         * HLT
-         */
+        /* ----------------------------------------------------
+           JZ / JE
+           74
+        ---------------------------------------------------- */
 
         if (
-            opcode === 0xF4
+            opcode === 0x74
         ) {
 
-            return this.decodeHLT(
-                cpu,
-                address
+            const displacement =
+                this.readS8(
+                    cpu,
+                    address + 1
+                );
+
+
+            const target =
+                this.relativeTarget(
+                    cpu,
+                    address + 2,
+                    displacement
+                );
+
+
+            return this.conditionalJump(
+                address,
+                2,
+                "JZ",
+                target,
+                cpu =>
+                    cpu.getFlag(
+                        1 << 6
+                    )
             );
 
         }
 
 
-        /*
-         * XOR r/m32,r32
-         */
+        /* ----------------------------------------------------
+           JNZ / JNE
+           75
+        ---------------------------------------------------- */
 
         if (
-            opcode === 0x31
+            opcode === 0x75
         ) {
 
-            return this.decodeXORRM32R32(
-                cpu,
-                address
+            const displacement =
+                this.readS8(
+                    cpu,
+                    address + 1
+                );
+
+
+            const target =
+                this.relativeTarget(
+                    cpu,
+                    address + 2,
+                    displacement
+                );
+
+
+            return this.conditionalJump(
+                address,
+                2,
+                "JNZ",
+                target,
+                cpu =>
+                    !cpu.getFlag(
+                        1 << 6
+                    )
             );
 
         }
 
 
-        /*
-         * XOR r32,r/m32
-         */
+        /* ----------------------------------------------------
+           JC
+           72
+        ---------------------------------------------------- */
 
         if (
-            opcode === 0x33
+            opcode === 0x72
         ) {
 
-            return this.decodeXORR32RM32(
-                cpu,
-                address
+            const displacement =
+                this.readS8(
+                    cpu,
+                    address + 1
+                );
+
+
+            const target =
+                this.relativeTarget(
+                    cpu,
+                    address + 2,
+                    displacement
+                );
+
+
+            return this.conditionalJump(
+                address,
+                2,
+                "JC",
+                target,
+                cpu =>
+                    cpu.getFlag(
+                        1 << 0
+                    )
             );
 
         }
 
 
-        /*
-         * MOV r/m32,r32
-         */
+        /* ----------------------------------------------------
+           JNC
+           73
+        ---------------------------------------------------- */
 
         if (
-            opcode === 0x89
+            opcode === 0x73
         ) {
 
-            return this.decodeMOVRM32R32(
-                cpu,
-                address
+            const displacement =
+                this.readS8(
+                    cpu,
+                    address + 1
+                );
+
+
+            const target =
+                this.relativeTarget(
+                    cpu,
+                    address + 2,
+                    displacement
+                );
+
+
+            return this.conditionalJump(
+                address,
+                2,
+                "JNC",
+                target,
+                cpu =>
+                    !cpu.getFlag(
+                        1 << 0
+                    )
             );
 
         }
 
 
-        /*
-         * MOV r32,r/m32
-         */
+        /* ----------------------------------------------------
+           JS
+           78
+        ---------------------------------------------------- */
 
         if (
-            opcode === 0x8B
+            opcode === 0x78
         ) {
 
-            return this.decodeMOVR32RM32(
-                cpu,
-                address
+            const displacement =
+                this.readS8(
+                    cpu,
+                    address + 1
+                );
+
+
+            const target =
+                this.relativeTarget(
+                    cpu,
+                    address + 2,
+                    displacement
+                );
+
+
+            return this.conditionalJump(
+                address,
+                2,
+                "JS",
+                target,
+                cpu =>
+                    cpu.getFlag(
+                        1 << 7
+                    )
             );
 
         }
 
 
-        /*
-         * Unknown opcode.
-         */
+        /* ----------------------------------------------------
+           JNS
+           79
+        ---------------------------------------------------- */
+
+        if (
+            opcode === 0x79
+        ) {
+
+            const displacement =
+                this.readS8(
+                    cpu,
+                    address + 1
+                );
+
+
+            const target =
+                this.relativeTarget(
+                    cpu,
+                    address + 2,
+                    displacement
+                );
+
+
+            return this.conditionalJump(
+                address,
+                2,
+                "JNS",
+                target,
+                cpu =>
+                    !cpu.getFlag(
+                        1 << 7
+                    )
+            );
+
+        }
+
+
+        /* ----------------------------------------------------
+           UNKNOWN
+        ---------------------------------------------------- */
 
         throw new Error(
+
             `Unsupported x86 opcode ` +
             `0x${opcode
                 .toString(16)
                 .padStart(2, "0")
                 .toUpperCase()} ` +
-            `at EIP=0x${address
+            `at 0x${address
                 .toString(16)
                 .padStart(8, "0")
                 .toUpperCase()}`
+
         );
+
+    }
+
+
+    /* ========================================================
+       CONDITIONAL JUMP
+    ======================================================== */
+
+    conditionalJump(
+        address,
+        length,
+        mnemonic,
+        target,
+        condition
+    ) {
+
+        return this.instruction(
+
+            address,
+
+            length,
+
+            mnemonic,
+
+            `0x${target
+                .toString(16)
+                .padStart(8, "0")}`,
+
+            cpu => {
+
+                if (
+                    condition(cpu)
+                ) {
+
+                    cpu.EIP =
+                        target;
+
+                } else {
+
+                    cpu.EIP =
+                        (
+                            address +
+                            length
+                        ) >>> 0;
+
+                }
+
+            }
+
+        );
+
+    }
+
+
+    /* ========================================================
+       STATUS
+    ======================================================== */
+
+    getStatus() {
+
+        return {
+
+            version:
+                this.version,
+
+            instructionsDecoded:
+                this.instructionsDecoded,
+
+            lastInstruction:
+                this.lastInstruction
+                    ? this.lastInstruction.text
+                    : null
+
+        };
+
+    }
+
+
+    /* ========================================================
+       SELF TEST
+    ======================================================== */
+
+    selfTest(
+        cpu
+    ) {
+
+        if (
+            !cpu
+        ) {
+
+            throw new Error(
+                "Decoder selfTest requires CPU."
+            );
+
+        }
+
+
+        /*
+         * Program:
+         *
+         * MOV EAX,10
+         * MOV EBX,20
+         * ADD EAX,EBX
+         * HLT
+         */
+
+        const address =
+            0x1000;
+
+
+        cpu.memory.writeBytes(
+            address,
+            new Uint8Array([
+
+                0xB8,
+                0x0A,
+                0x00,
+                0x00,
+                0x00,
+
+                0xBB,
+                0x14,
+                0x00,
+                0x00,
+                0x00,
+
+                0x01,
+                0xD8,
+
+                0xF4
+
+            ])
+        );
+
+
+        cpu.reset();
+
+
+        cpu.setEIP(
+            address
+        );
+
+
+        cpu.attachDecoder(
+            this
+        );
+
+
+        cpu.run(
+            10
+        );
+
+
+        if (
+            cpu.EAX !==
+            30
+        ) {
+
+            return {
+
+                passed: false,
+
+                test:
+                    "MOV/ADD",
+
+                expected:
+                    30,
+
+                received:
+                    cpu.EAX
+
+            };
+
+        }
+
+
+        return {
+
+            passed: true,
+
+            decoder:
+                WEBBKTX_DECODER_VERSION,
+
+            result:
+                "EAX = 30",
+
+            instructions:
+                cpu.instructionsExecuted
+
+        };
 
     }
 
@@ -1646,17 +2423,25 @@ class WebBktxX86Decoder {
 
 
 /* ============================================================
-   EXPORT
+   GLOBAL INSTANCE
 ============================================================ */
 
+window.WebBktxDecoder =
+    WebBktxDecoder;
+
+
+/*
+ * Compatibility aliases.
+ */
+
 window.WebBktxX86Decoder =
-    WebBktxX86Decoder;
+    WebBktxDecoder;
 
 
-window.WebBktxX86Registers =
-    X86_REGISTER_NAMES;
-
+/* ============================================================
+   READY
+============================================================ */
 
 console.log(
-    "WebBktx x86 Decoder 0.7C loaded."
+    `WebBktx x86 Decoder ${WEBBKTX_DECODER_VERSION} loaded.`
 );
