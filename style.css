@@ -1,95 +1,1438 @@
+/* ============================================================
+   WebBktx
+   Main Interface
+   ============================================================ */
+
+:root {
+    --bg: #070a0c;
+    --bg-light: #0d1114;
+    --panel: #11171a;
+    --panel-light: #171e22;
+    --border: #2b3639;
+
+    --green: #72a894;
+    --green-bright: #9bcbb4;
+    --green-dark: #315847;
+
+    --text: #e1e7e4;
+    --text-soft: #929d9a;
+    --text-dark: #5d6866;
+
+    --danger: #a66c6c;
+
+    --shadow: rgba(0, 0, 0, 0.65);
+}
+
+
+/* ============================================================
+   RESET
+   ============================================================ */
+
+* {
+    box-sizing: border-box;
+}
+
+
+html,
+body {
+    width: 100%;
+    min-height: 100%;
+}
+
+
 body {
     margin: 0;
+
+    background:
+        radial-gradient(
+            circle at 50% -20%,
+            #1a2726 0%,
+            #0b1012 35%,
+            #070a0c 75%
+        );
+
+    color: var(--text);
+
+    font-family:
+        Arial,
+        Helvetica,
+        sans-serif;
+
+    font-size: 14px;
+
+    letter-spacing: 0.02em;
+}
+
+
+button,
+input {
+    font-family: inherit;
+}
+
+
+button {
+    -webkit-tap-highlight-color: transparent;
+}
+
+
+.hidden {
+    display: none !important;
+}
+
+
+/* ============================================================
+   APP
+   ============================================================ */
+
+#app {
+    width: 100%;
     min-height: 100vh;
+}
 
-    background: #0b0d10;
-    color: white;
 
-    font-family: Arial, sans-serif;
+.screen {
+    width: 100%;
+    min-height: 100vh;
+}
 
+
+/* ============================================================
+   LOADING SCREEN
+   ============================================================ */
+
+.loading-screen {
     display: flex;
+
     justify-content: center;
     align-items: center;
+
+    padding: 30px;
+}
+
+
+.loading-container {
+    width: min(650px, 100%);
 
     text-align: center;
 }
 
-#loadingScreen,
-#mainScreen {
-    width: 90%;
-    max-width: 700px;
+
+/* ============================================================
+   BRAND
+   ============================================================ */
+
+.brand {
+    margin-bottom: 38px;
 }
 
-h1 {
-    font-size: 64px;
-    margin-bottom: 5px;
+
+.brand-main {
+    font-size: clamp(52px, 12vw, 88px);
+
+    font-weight: 700;
+
+    letter-spacing: -0.07em;
+
+    color: #dce4e1;
+
+    text-shadow:
+        0 2px 0 #000,
+        0 0 24px rgba(114, 168, 148, 0.12);
 }
 
-p {
-    color: #9da5ad;
+
+.brand-sub {
+    margin-top: 4px;
+
+    font-size: 12px;
+
+    letter-spacing: 0.32em;
+
+    color: var(--green);
+
+    font-weight: bold;
 }
 
-.loader {
+
+/* ============================================================
+   LOADING PANEL
+   ============================================================ */
+
+.loading-panel {
+    padding: 25px;
+
+    background:
+        linear-gradient(
+            180deg,
+            #151c1f,
+            #0d1215
+        );
+
+    border: 1px solid var(--border);
+
+    border-radius: 4px;
+
+    box-shadow:
+        0 18px 50px var(--shadow),
+        inset 0 1px 0 rgba(255,255,255,0.035);
+}
+
+
+.panel-header {
+    padding-bottom: 14px;
+
+    border-bottom: 1px solid #263033;
+
+    color: var(--green);
+
+    font-size: 11px;
+
+    font-weight: bold;
+
+    letter-spacing: 0.18em;
+
+    text-align: left;
+}
+
+
+/* ============================================================
+   MODULE LIST
+   ============================================================ */
+
+.module-list {
+    margin-top: 10px;
+}
+
+
+.module {
+    display: flex;
+
+    justify-content: space-between;
+    align-items: center;
+
+    min-height: 44px;
+
+    padding: 0 10px;
+
+    border-bottom: 1px solid #20292c;
+
+    color: #adb7b4;
+
+    font-size: 12px;
+}
+
+
+.module:last-child {
+    border-bottom: none;
+}
+
+
+.module strong {
+    min-width: 55px;
+
+    text-align: right;
+
+    color: var(--text-dark);
+
+    font-size: 11px;
+
+    letter-spacing: 0.1em;
+}
+
+
+.module strong.module-ok {
+    color: var(--green-bright);
+}
+
+
+/* ============================================================
+   PROGRESS
+   ============================================================ */
+
+.progress-container {
     width: 100%;
-    height: 10px;
 
-    background: #242930;
+    height: 8px;
 
-    border-radius: 10px;
+    margin-top: 22px;
 
     overflow: hidden;
 
-    margin-top: 30px;
+    background: #050708;
+
+    border: 1px solid #222b2e;
 }
 
-#progress {
-    width: 0%;
+
+.progress-bar {
+    width: 0;
+
     height: 100%;
 
-    background: white;
+    background:
+        linear-gradient(
+            90deg,
+            var(--green-dark),
+            var(--green)
+        );
 
-    transition: width 0.3s;
+    box-shadow:
+        0 0 10px rgba(114,168,148,0.2);
+
+    transition:
+        width 0.35s ease;
 }
 
-.box {
-    margin-top: 40px;
 
-    padding: 30px;
+.loading-text {
+    margin-top: 14px;
 
-    background: #15191e;
+    color: var(--text-soft);
 
-    border: 1px solid #2c333b;
+    font-family:
+        "Courier New",
+        monospace;
 
-    border-radius: 15px;
+    font-size: 12px;
+
+    text-align: left;
 }
 
-input {
-    margin-top: 20px;
+
+.version {
+    margin-top: 16px;
+
+    color: #46504e;
+
+    font-size: 10px;
+
+    letter-spacing: 0.18em;
 }
 
-button {
-    width: 100%;
 
-    margin-top: 20px;
+/* ============================================================
+   MAIN SCREEN
+   ============================================================ */
 
-    padding: 15px;
+.main-screen {
+    display: flex;
 
-    border: none;
+    flex-direction: column;
 
-    border-radius: 8px;
+    padding: 22px;
 
-    font-size: 18px;
+    background:
+        linear-gradient(
+            135deg,
+            rgba(30,42,42,0.18),
+            transparent 40%
+        );
+}
+
+
+/* ============================================================
+   TOP BAR
+   ============================================================ */
+
+.top-bar {
+    display: flex;
+
+    justify-content: space-between;
+    align-items: center;
+
+    width: min(1250px, 100%);
+
+    margin: 0 auto;
+
+    padding-bottom: 18px;
+
+    border-bottom: 1px solid #20292c;
+}
+
+
+.top-brand {
+    display: flex;
+
+    align-items: baseline;
+
+    gap: 14px;
+}
+
+
+.top-logo {
+    color: #dce4e1;
+
+    font-size: 29px;
 
     font-weight: bold;
+
+    letter-spacing: -0.05em;
+}
+
+
+.top-subtitle {
+    color: var(--green);
+
+    font-size: 10px;
+
+    letter-spacing: 0.18em;
+}
+
+
+.system-status {
+    display: flex;
+
+    align-items: center;
+
+    gap: 8px;
+
+    color: #7d8b86;
+
+    font-size: 10px;
+
+    letter-spacing: 0.14em;
+}
+
+
+.status-light {
+    width: 7px;
+    height: 7px;
+
+    border-radius: 50%;
+
+    background: var(--green);
+
+    box-shadow:
+        0 0 8px rgba(114,168,148,0.6);
+}
+
+
+/* ============================================================
+   DASHBOARD
+   ============================================================ */
+
+.dashboard {
+    display: grid;
+
+    grid-template-columns:
+        210px
+        minmax(0, 1fr);
+
+    gap: 18px;
+
+    width: min(1250px, 100%);
+
+    margin: 25px auto 0;
+
+    flex: 1;
+}
+
+
+/* ============================================================
+   SIDE PANEL
+   ============================================================ */
+
+.side-panel {
+    position: relative;
+
+    min-height: 510px;
+
+    padding: 12px;
+
+    background:
+        linear-gradient(
+            180deg,
+            #12191c,
+            #0b1012
+        );
+
+    border: 1px solid var(--border);
+
+    border-radius: 3px;
+
+    box-shadow:
+        0 15px 35px var(--shadow);
+}
+
+
+.side-title {
+    padding: 10px 9px 13px;
+
+    color: var(--text-dark);
+
+    font-size: 10px;
+
+    font-weight: bold;
+
+    letter-spacing: 0.2em;
+
+    border-bottom: 1px solid #20292c;
+}
+
+
+.menu-button {
+    display: flex;
+
+    align-items: center;
+
+    gap: 10px;
+
+    width: 100%;
+
+    margin-top: 5px;
+
+    padding: 12px 10px;
+
+    border: 1px solid transparent;
+
+    background: transparent;
+
+    color: #89938f;
+
+    font-size: 12px;
+
+    text-align: left;
+
+    cursor: pointer;
+
+    transition:
+        background 0.15s,
+        color 0.15s,
+        border 0.15s;
+}
+
+
+.menu-button span {
+    width: 15px;
+
+    color: #4e5c57;
+}
+
+
+.menu-button:hover {
+    background: #151d20;
+
+    color: #c8d1cd;
+
+    border-color: #253034;
+}
+
+
+.menu-button.active {
+    background:
+        linear-gradient(
+            90deg,
+            #1a2a26,
+            #11191b
+        );
+
+    border: 1px solid #2d4940;
+
+    color: var(--green-bright);
+}
+
+
+.menu-button.active span {
+    color: var(--green);
+}
+
+
+.side-footer {
+    position: absolute;
+
+    left: 20px;
+    right: 20px;
+    bottom: 18px;
+
+    padding-top: 15px;
+
+    border-top: 1px solid #20292c;
+
+    color: #46504e;
+
+    font-size: 10px;
+
+    line-height: 1.7;
+}
+
+
+.side-footer span {
+    color: #606b67;
+}
+
+
+/* ============================================================
+   CONTENT PANEL
+   ============================================================ */
+
+.content-panel {
+    min-width: 0;
+
+    padding: clamp(20px, 4vw, 35px);
+
+    background:
+        linear-gradient(
+            180deg,
+            #141b1e,
+            #0c1113
+        );
+
+    border: 1px solid var(--border);
+
+    border-radius: 3px;
+
+    box-shadow:
+        0 15px 35px var(--shadow);
+}
+
+
+.content-header {
+    display: flex;
+
+    justify-content: space-between;
+
+    align-items: flex-start;
+
+    padding-bottom: 22px;
+
+    border-bottom: 1px solid #222c2f;
+}
+
+
+.section-label {
+    margin-bottom: 6px;
+
+    color: var(--green);
+
+    font-size: 10px;
+
+    font-weight: bold;
+
+    letter-spacing: 0.2em;
+}
+
+
+.content-header h1,
+.secondary-header h1 {
+    margin: 0;
+
+    color: #dce3e0;
+
+    font-size: 28px;
+
+    font-weight: normal;
+
+    letter-spacing: -0.02em;
+}
+
+
+.hardware-label {
+    padding: 8px 12px;
+
+    border: 1px solid #35423f;
+
+    color: #687773;
+
+    font-size: 10px;
+
+    letter-spacing: 0.18em;
+}
+
+
+/* ============================================================
+   DISC PANEL
+   ============================================================ */
+
+.disc-panel {
+    display: flex;
+
+    align-items: center;
+
+    gap: 30px;
+
+    margin-top: 28px;
+
+    padding: 28px;
+
+    background:
+        radial-gradient(
+            circle at 15% 50%,
+            rgba(114,168,148,0.07),
+            transparent 25%
+        ),
+        #0b1012;
+
+    border: 1px solid #222d30;
+}
+
+
+/* ============================================================
+   DISC
+   ============================================================ */
+
+.disc-icon {
+    position: relative;
+
+    flex-shrink: 0;
+
+    width: 120px;
+    height: 120px;
+
+    border-radius: 50%;
+
+    background:
+        radial-gradient(
+            circle,
+            #5e6765 0%,
+            #2a3131 24%,
+            #161b1d 26%,
+            #303838 48%,
+            #121719 50%,
+            #090c0e 70%,
+            #202728 100%
+        );
+
+    border: 2px solid #485351;
+
+    box-shadow:
+        0 10px 25px #000,
+        inset 0 0 20px #000;
+}
+
+
+.disc-icon::after {
+    content: "";
+
+    position: absolute;
+
+    inset: 12px;
+
+    border-radius: 50%;
+
+    border: 1px solid rgba(255,255,255,0.08);
+}
+
+
+.disc-center {
+    position: absolute;
+
+    top: 50%;
+    left: 50%;
+
+    width: 18px;
+    height: 18px;
+
+    transform:
+        translate(-50%, -50%);
+
+    border-radius: 50%;
+
+    background: #090c0e;
+
+    border: 2px solid #65706d;
+}
+
+
+.disc-info h2 {
+    margin: 0 0 8px;
+
+    color: #d5ddda;
+
+    font-size: 20px;
+
+    font-weight: normal;
+}
+
+
+.disc-info p {
+    max-width: 550px;
+
+    margin: 0 0 20px;
+
+    color: #7e8985;
+
+    line-height: 1.6;
+}
+
+
+/* ============================================================
+   SELECT BUTTON
+   ============================================================ */
+
+.select-button {
+    display: inline-flex;
+
+    align-items: center;
+    justify-content: center;
+
+    min-height: 42px;
+
+    padding: 0 20px;
+
+    background:
+        linear-gradient(
+            #293532,
+            #1a2421
+        );
+
+    border: 1px solid #3e534b;
+
+    color: #b9d1c7;
+
+    font-size: 11px;
+
+    font-weight: bold;
+
+    letter-spacing: 0.12em;
+
+    cursor: pointer;
+
+    box-shadow:
+        inset 0 1px rgba(255,255,255,0.04);
+
+    transition:
+        background 0.15s,
+        border 0.15s;
+}
+
+
+.select-button:hover {
+    background:
+        linear-gradient(
+            #33443e,
+            #202d28
+        );
+
+    border-color: #597568;
+}
+
+
+.select-button input {
+    display: none;
+}
+
+
+/* ============================================================
+   FILE INFO
+   ============================================================ */
+
+.file-info {
+    display: grid;
+
+    grid-template-columns:
+        120px
+        minmax(0, 1fr)
+        auto;
+
+    gap: 15px;
+
+    align-items: center;
+
+    min-height: 50px;
+
+    margin-top: 15px;
+
+    padding: 0 15px;
+
+    background: #090d0f;
+
+    border: 1px solid #20292c;
+}
+
+
+.file-label {
+    color: #586560;
+
+    font-size: 9px;
+
+    letter-spacing: 0.16em;
+}
+
+
+.file-name {
+    overflow: hidden;
+
+    color: #aeb9b5;
+
+    text-overflow: ellipsis;
+
+    white-space: nowrap;
+}
+
+
+.file-size {
+    color: #5e6c66;
+
+    font-family:
+        "Courier New",
+        monospace;
+
+    font-size: 11px;
+}
+
+
+/* ============================================================
+   START BUTTON
+   ============================================================ */
+
+.start-button {
+    display: flex;
+
+    align-items: center;
+    justify-content: center;
+
+    gap: 12px;
+
+    width: 100%;
+
+    min-height: 58px;
+
+    margin-top: 18px;
+
+    border: 1px solid #466456;
+
+    background:
+        linear-gradient(
+            180deg,
+            #2a4038,
+            #1a2c26
+        );
+
+    color: #cce2d8;
+
+    font-size: 13px;
+
+    font-weight: bold;
+
+    letter-spacing: 0.13em;
+
+    cursor: pointer;
+
+    box-shadow:
+        inset 0 1px rgba(255,255,255,0.05),
+        0 8px 20px rgba(0,0,0,0.25);
+
+    transition:
+        transform 0.12s,
+        filter 0.12s;
+}
+
+
+.start-button:hover:not(:disabled) {
+    filter: brightness(1.15);
+
+    transform:
+        translateY(-1px);
+}
+
+
+.start-button:active:not(:disabled) {
+    transform:
+        translateY(1px);
+}
+
+
+.start-button:disabled {
+    opacity: 0.32;
+
+    cursor: not-allowed;
+
+    filter: grayscale(0.5);
+}
+
+
+.start-icon {
+    font-size: 14px;
+}
+
+
+/* ============================================================
+   MESSAGE
+   ============================================================ */
+
+.system-message {
+    min-height: 24px;
+
+    margin-top: 13px;
+
+    color: #66746f;
+
+    font-size: 11px;
+
+    text-align: center;
+}
+
+
+/* ============================================================
+   FOOTER
+   ============================================================ */
+
+.footer {
+    display: flex;
+
+    justify-content: center;
+
+    gap: 25px;
+
+    width: min(1250px, 100%);
+
+    margin: 18px auto 0;
+
+    padding-top: 13px;
+
+    border-top: 1px solid #151d1f;
+
+    color: #3f4947;
+
+    font-size: 9px;
+
+    letter-spacing: 0.13em;
+}
+
+
+/* ============================================================
+   SECONDARY SCREENS
+   ============================================================ */
+
+.secondary-screen {
+    display: flex;
+
+    align-items: center;
+    justify-content: center;
+
+    padding: 25px;
+}
+
+
+.secondary-container {
+    width: min(900px, 100%);
+}
+
+
+.secondary-header {
+    display: flex;
+
+    justify-content: space-between;
+
+    align-items: flex-start;
+
+    padding-bottom: 20px;
+
+    border-bottom: 1px solid #242d30;
+}
+
+
+.small-button {
+    min-width: 80px;
+
+    min-height: 36px;
+
+    padding: 0 13px;
+
+    border: 1px solid #33413d;
+
+    background: #111719;
+
+    color: #87938f;
+
+    font-size: 10px;
+
+    letter-spacing: 0.1em;
 
     cursor: pointer;
 }
 
-button:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
+
+.small-button:hover {
+    color: var(--green-bright);
+
+    border-color: #496457;
+
+    background: #17201e;
 }
 
-.hidden {
-    display: none;
+
+/* ============================================================
+   TERMINAL
+   ============================================================ */
+
+.terminal {
+    margin-top: 20px;
+
+    background: #050708;
+
+    border: 1px solid #273130;
+
+    box-shadow:
+        0 20px 45px rgba(0,0,0,0.5);
+}
+
+
+.terminal-title {
+    padding: 12px 15px;
+
+    border-bottom: 1px solid #222b2c;
+
+    color: #687772;
+
+    font-size: 10px;
+
+    letter-spacing: 0.16em;
+}
+
+
+.terminal pre {
+    min-height: 330px;
+
+    margin: 0;
+
+    padding: 22px;
+
+    color: #86b49f;
+
+    font-family:
+        "Courier New",
+        monospace;
+
+    font-size: 13px;
+
+    line-height: 1.7;
+
+    white-space: pre-wrap;
+}
+
+
+/* ============================================================
+   ABOUT
+   ============================================================ */
+
+.about-box {
+    margin-top: 20px;
+
+    padding: 30px;
+
+    background: #101618;
+
+    border: 1px solid #283235;
+}
+
+
+.about-logo {
+    margin-bottom: 8px;
+
+    color: #dce4e1;
+
+    font-size: 42px;
+
+    font-weight: bold;
+
+    letter-spacing: -0.06em;
+}
+
+
+.about-box > p {
+    margin-bottom: 28px;
+
+    color: #74807c;
+}
+
+
+.info-row {
+    display: flex;
+
+    justify-content: space-between;
+
+    padding: 13px 0;
+
+    border-top: 1px solid #20292b;
+
+    color: #697571;
+}
+
+
+.info-row strong {
+    color: #aab6b1;
+
+    font-weight: normal;
+}
+
+
+/* ============================================================
+   EMULATOR SCREEN
+   ============================================================ */
+
+.emulator-screen {
+    display: flex;
+
+    justify-content: center;
+    align-items: center;
+
+    padding: 20px;
+}
+
+
+.emulator-window {
+    width: min(1280px, 100%);
+}
+
+
+.emulator-header {
+    display: grid;
+
+    grid-template-columns: 1fr auto 1fr;
+
+    align-items: center;
+
+    min-height: 42px;
+
+    padding: 0 10px;
+
+    background: #111719;
+
+    border: 1px solid #293234;
+
+    color: #87938f;
+
+    font-size: 11px;
+
+    letter-spacing: 0.1em;
+}
+
+
+.emulator-header > span:nth-child(2) {
+    max-width: 350px;
+
+    overflow: hidden;
+
+    color: #b0bbb7;
+
+    text-overflow: ellipsis;
+
+    white-space: nowrap;
+}
+
+
+.emulator-header .small-button {
+    justify-self: end;
+}
+
+
+#screen {
+    display: block;
+
+    width: 100%;
+    height: auto;
+
+    margin-top: 4px;
+
+    background: #000;
+
+    border: 1px solid #293234;
+
+    image-rendering: auto;
+}
+
+
+.emulator-status {
+    display: flex;
+
+    justify-content: space-between;
+
+    gap: 15px;
+
+    padding: 10px 12px;
+
+    background: #0b1012;
+
+    border: 1px solid #222b2d;
+
+    color: #596562;
+
+    font-family:
+        "Courier New",
+        monospace;
+
+    font-size: 9px;
+
+    letter-spacing: 0.08em;
+}
+
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+
+@media (max-width: 800px) {
+
+    .main-screen {
+        padding: 12px;
+    }
+
+
+    .dashboard {
+        grid-template-columns: 1fr;
+    }
+
+
+    .side-panel {
+        min-height: auto;
+
+        display: flex;
+
+        gap: 5px;
+
+        padding: 7px;
+    }
+
+
+    .side-title,
+    .side-footer {
+        display: none;
+    }
+
+
+    .menu-button {
+        justify-content: center;
+
+        margin: 0;
+
+        padding: 11px 8px;
+
+        text-align: center;
+    }
+
+
+    .menu-button span {
+        display: none;
+    }
+
+
+    .disc-panel {
+        flex-direction: column;
+
+        text-align: center;
+    }
+
+
+    .disc-info p {
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+
+    .file-info {
+        grid-template-columns: 1fr;
+
+        gap: 5px;
+
+        padding: 12px;
+    }
+
+
+    .file-name {
+        white-space: normal;
+    }
+
+
+    .file-size {
+        text-align: left;
+    }
+
+
+    .footer {
+        flex-wrap: wrap;
+
+        gap: 10px;
+    }
+
+
+    .emulator-status {
+        flex-wrap: wrap;
+    }
+
+}
+
+
+@media (max-width: 500px) {
+
+    .brand-main {
+        font-size: 52px;
+    }
+
+
+    .brand-sub {
+        font-size: 9px;
+
+        letter-spacing: 0.2em;
+    }
+
+
+    .loading-panel {
+        padding: 17px;
+    }
+
+
+    .top-bar {
+        align-items: flex-start;
+    }
+
+
+    .top-brand {
+        display: block;
+    }
+
+
+    .top-subtitle {
+        display: block;
+
+        margin-top: 4px;
+    }
+
+
+    .system-status {
+        font-size: 8px;
+    }
+
+
+    .system-status .status-light {
+        width: 6px;
+        height: 6px;
+    }
+
+
+    .content-panel {
+        padding: 18px;
+    }
+
+
+    .content-header h1 {
+        font-size: 24px;
+    }
+
+
+    .hardware-label {
+        display: none;
+    }
+
+
+    .disc-panel {
+        padding: 20px;
+    }
+
+
+    .disc-icon {
+        width: 95px;
+        height: 95px;
+    }
+
+
+    .emulator-header {
+        grid-template-columns: 1fr auto;
+    }
+
+
+    .emulator-header > span:nth-child(2) {
+        display: none;
+    }
+
 }
