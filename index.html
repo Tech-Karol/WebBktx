@@ -2,62 +2,586 @@
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <meta
+        name="theme-color"
+        content="#080b0d"
+    >
+
+    <meta
+        name="description"
+        content="WebBktx — Xbox Emulator for Web"
+    >
+
+    <link
+        rel="manifest"
+        href="manifest.json"
+    >
+
+    <link
+        rel="stylesheet"
+        href="style.css"
+    >
 
     <title>WebBktx</title>
-
-    <link rel="stylesheet" href="style.css">
-    <link rel="manifest" href="manifest.json">
 </head>
+
 
 <body>
 
-    <div id="loadingScreen">
-        <h1>WebBktx</h1>
-        <p>Xbox Emulator for Web</p>
+<div id="app">
 
-        <div class="loader">
-            <div id="progress"></div>
+
+    <!-- =====================================================
+         LOADING SCREEN
+    ====================================================== -->
+
+    <section
+        id="loadingScreen"
+        class="screen loading-screen"
+    >
+
+        <div class="loading-container">
+
+            <div class="brand">
+                <div class="brand-main">
+                    WebBktx
+                </div>
+
+                <div class="brand-sub">
+                    XBOX EMULATOR FOR WEB
+                </div>
+            </div>
+
+
+            <div class="loading-panel">
+
+                <div class="panel-header">
+                    SYSTEM INITIALIZATION
+                </div>
+
+
+                <div class="module-list">
+
+                    <div
+                        class="module"
+                        data-module="cache"
+                    >
+                        <span>
+                            LOCAL STORAGE
+                        </span>
+
+                        <strong>
+                            WAIT
+                        </strong>
+                    </div>
+
+
+                    <div
+                        class="module"
+                        data-module="core"
+                    >
+                        <span>
+                            WEBBKTX CORE
+                        </span>
+
+                        <strong>
+                            WAIT
+                        </strong>
+                    </div>
+
+
+                    <div
+                        class="module"
+                        data-module="graphics"
+                    >
+                        <span>
+                            GRAPHICS SYSTEM
+                        </span>
+
+                        <strong>
+                            WAIT
+                        </strong>
+                    </div>
+
+
+                    <div
+                        class="module"
+                        data-module="input"
+                    >
+                        <span>
+                            CONTROLLER SYSTEM
+                        </span>
+
+                        <strong>
+                            WAIT
+                        </strong>
+                    </div>
+
+                </div>
+
+
+                <div class="progress-container">
+
+                    <div
+                        id="progress"
+                        class="progress-bar"
+                    ></div>
+
+                </div>
+
+
+                <div
+                    id="loadingText"
+                    class="loading-text"
+                >
+                    Initializing WebBktx...
+                </div>
+
+            </div>
+
+
+            <div class="version">
+                WEBBKTX 0.2 • EXPERIMENTAL BUILD
+            </div>
+
         </div>
 
-        <p id="loadingText">Ładowanie modułów...</p>
-    </div>
+    </section>
 
 
-    <div id="mainScreen" class="hidden">
 
-        <h1>WebBktx</h1>
-        <p>Xbox Emulator for Web</p>
+    <!-- =====================================================
+         MAIN MENU
+    ====================================================== -->
 
-        <div class="box">
+    <section
+        id="mainScreen"
+        class="screen main-screen hidden"
+    >
 
-            <h2>Wirtualna płyta</h2>
+        <header class="top-bar">
 
-            <p>
-                Wybierz lokalny plik gry.
-                Plik nie jest wysyłany na serwer.
-            </p>
+            <div class="top-brand">
 
-            <input
-                type="file"
-                id="gameFile"
-                accept=".iso,.xiso,.xbe"
-            >
+                <div class="top-logo">
+                    WebBktx
+                </div>
 
-            <p id="fileInfo">
-                Nie wybrano pliku.
-            </p>
+                <div class="top-subtitle">
+                    XBOX EMULATOR
+                </div>
 
-            <button id="startButton" disabled>
-                ▶ START
-            </button>
+            </div>
+
+
+            <div class="system-status">
+
+                <span class="status-light"></span>
+
+                SYSTEM READY
+
+            </div>
+
+        </header>
+
+
+
+        <main class="dashboard">
+
+
+            <!-- LEFT MENU -->
+
+            <aside class="side-panel">
+
+                <div class="side-title">
+                    SYSTEM
+                </div>
+
+
+                <button
+                    class="menu-button active"
+                    type="button"
+                >
+                    <span>▶</span>
+                    Emulator
+                </button>
+
+
+                <button
+                    class="menu-button"
+                    type="button"
+                    id="cpuTestButton"
+                >
+                    <span>▣</span>
+                    CPU Test
+                </button>
+
+
+                <button
+                    class="menu-button"
+                    type="button"
+                    id="aboutButton"
+                >
+                    <span>?</span>
+                    About
+                </button>
+
+
+                <div class="side-footer">
+
+                    WebBktx Core<br>
+
+                    <span>
+                        Build 0.2
+                    </span>
+
+                </div>
+
+            </aside>
+
+
+
+            <!-- MAIN CONTENT -->
+
+            <section class="content-panel">
+
+
+                <div class="content-header">
+
+                    <div>
+
+                        <div class="section-label">
+                            VIRTUAL DISC
+                        </div>
+
+                        <h1>
+                            Insert Game
+                        </h1>
+
+                    </div>
+
+
+                    <div class="hardware-label">
+
+                        XBOX
+
+                    </div>
+
+                </div>
+
+
+
+                <div class="disc-panel">
+
+
+                    <div class="disc-icon">
+
+                        <div class="disc-center"></div>
+
+                    </div>
+
+
+                    <div class="disc-info">
+
+                        <h2>
+                            No disc inserted
+                        </h2>
+
+                        <p>
+                            Select a local Xbox game image
+                            to mount it as a virtual disc.
+                        </p>
+
+
+                        <label
+                            class="select-button"
+                            for="gameFile"
+                        >
+
+                            SELECT GAME
+
+                            <input
+                                id="gameFile"
+                                type="file"
+                                accept=".iso,.xiso,.xbe"
+                            >
+
+                        </label>
+
+                    </div>
+
+                </div>
+
+
+
+                <div
+                    id="fileInfo"
+                    class="file-info"
+                >
+
+                    <span class="file-label">
+                        DISC STATUS
+                    </span>
+
+                    <span class="file-name">
+                        No file selected
+                    </span>
+
+                </div>
+
+
+
+                <button
+                    id="startButton"
+                    class="start-button"
+                    type="button"
+                    disabled
+                >
+
+                    <span class="start-icon">
+                        ▶
+                    </span>
+
+                    START EMULATOR
+
+                </button>
+
+
+
+                <div
+                    id="message"
+                    class="system-message"
+                ></div>
+
+
+            </section>
+
+        </main>
+
+
+
+        <footer class="footer">
+
+            <span>
+                WebBktx
+            </span>
+
+            <span>
+                LOCAL MODE
+            </span>
+
+            <span>
+                NON-COMMERCIAL PROJECT
+            </span>
+
+        </footer>
+
+    </section>
+
+
+
+    <!-- =====================================================
+         CPU TEST SCREEN
+    ====================================================== -->
+
+    <section
+        id="cpuScreen"
+        class="screen secondary-screen hidden"
+    >
+
+        <div class="secondary-container">
+
+            <div class="secondary-header">
+
+                <div>
+                    <div class="section-label">
+                        WEBSYSTEM / DEBUG
+                    </div>
+
+                    <h1>
+                        CPU Diagnostics
+                    </h1>
+                </div>
+
+
+                <button
+                    id="cpuBackButton"
+                    class="small-button"
+                >
+                    BACK
+                </button>
+
+            </div>
+
+
+            <div class="terminal">
+
+                <div class="terminal-title">
+                    WebBktx x86 CPU Diagnostic
+                </div>
+
+
+                <pre id="cpuOutput">Waiting for diagnostic...</pre>
+
+            </div>
 
         </div>
 
-    </div>
+    </section>
 
 
-    <script src="app.js"></script>
+
+    <!-- =====================================================
+         ABOUT SCREEN
+    ====================================================== -->
+
+    <section
+        id="aboutScreen"
+        class="screen secondary-screen hidden"
+    >
+
+        <div class="secondary-container">
+
+            <div class="secondary-header">
+
+                <div>
+                    <div class="section-label">
+                        SYSTEM INFORMATION
+                    </div>
+
+                    <h1>
+                        About WebBktx
+                    </h1>
+                </div>
+
+
+                <button
+                    id="aboutBackButton"
+                    class="small-button"
+                >
+                    BACK
+                </button>
+
+            </div>
+
+
+            <div class="about-box">
+
+                <div class="about-logo">
+                    WebBktx
+                </div>
+
+
+                <p>
+                    Browser-based Xbox emulation project.
+                </p>
+
+
+                <div class="info-row">
+                    <span>Version</span>
+                    <strong>0.2</strong>
+                </div>
+
+
+                <div class="info-row">
+                    <span>Core</span>
+                    <strong>Experimental x86</strong>
+                </div>
+
+
+                <div class="info-row">
+                    <span>Runtime</span>
+                    <strong>Web Browser</strong>
+                </div>
+
+
+                <div class="info-row">
+                    <span>Mode</span>
+                    <strong>Local</strong>
+                </div>
+
+            </div>
+
+        </div>
+
+    </section>
+
+
+
+    <!-- =====================================================
+         EMULATOR SCREEN
+    ====================================================== -->
+
+    <section
+        id="gameScreen"
+        class="screen emulator-screen hidden"
+    >
+
+        <div class="emulator-window">
+
+            <div class="emulator-header">
+
+                <span>
+                    WebBktx
+                </span>
+
+                <span id="gameName">
+                    GAME
+                </span>
+
+                <button
+                    id="backButton"
+                    class="small-button"
+                >
+                    EXIT
+                </button>
+
+            </div>
+
+
+            <canvas
+                id="screen"
+                width="1280"
+                height="720"
+            ></canvas>
+
+
+            <div class="emulator-status">
+
+                <span>
+                    CPU: ONLINE
+                </span>
+
+                <span>
+                    GPU: WAITING
+                </span>
+
+                <span>
+                    AUDIO: WAITING
+                </span>
+
+                <span>
+                    FPS: --
+                </span>
+
+            </div>
+
+        </div>
+
+    </section>
+
+
+</div>
+
+
+<script src="core.js"></script>
+<script src="app.js"></script>
 
 </body>
 </html>
