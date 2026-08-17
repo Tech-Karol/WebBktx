@@ -915,19 +915,13 @@ class WebBktxCore {
 /* ============================================================
    PUBLIC API
 ============================================================ */
-
 window.WebBktxCore = {
 
     X86CPU,
-
     WebBktxMemory,
-
     XBEImage,
-
     WebBktxCore,
-
     testRAM,
-
     loadGameFile
 
 };
