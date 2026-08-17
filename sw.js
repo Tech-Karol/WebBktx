@@ -1,67 +1,205 @@
-const CACHE_NAME = "webbktx-v1";
+/*
+ * ============================================================
+ * WebBktx Service Worker
+ *
+ * Version: 0.4
+ *
+ * Local application cache
+ * ============================================================
+ */
 
-const FILES = [
+"use strict";
+
+
+const CACHE_NAME =
+    "webbktx-cache-v4";
+
+
+const APP_FILES = [
+
     "./",
+
     "./index.html",
+
     "./style.css",
+
+    "./core.js",
+
     "./app.js",
-    "./sw.js",
+
     "./manifest.json"
+
 ];
 
 
-self.addEventListener("install", event => {
+/* ============================================================
+   INSTALL
+============================================================ */
 
-    event.waitUntil(
+self.addEventListener(
+    "install",
+    event => {
 
-        caches.open(CACHE_NAME)
-
-            .then(cache => {
-
-                return cache.addAll(FILES);
-
-            })
-
-            .then(() => {
-
-                return self.skipWaiting();
-
-            })
-
-    );
-
-});
+        console.log(
+            "[WebBktx SW] Installing:",
+            CACHE_NAME
+        );
 
 
-self.addEventListener("activate", event => {
+        event.waitUntil(
 
-    event.waitUntil(
+            caches.open(
+                CACHE_NAME
+            )
 
-        self.clients.claim()
+            .then(
+                cache => {
 
-    );
-
-});
-
-
-self.addEventListener("fetch", event => {
-
-    event.respondWith(
-
-        caches.match(event.request)
-
-            .then(cached => {
-
-                if (cached) {
-
-                    return cached;
+                    return cache.addAll(
+                        APP_FILES
+                    );
 
                 }
+            )
 
-                return fetch(event.request);
+        );
 
-            })
 
-    );
+        /*
+         * Activate immediately.
+         */
 
-});
+        self.skipWaiting();
+
+    }
+);
+
+
+/* ============================================================
+   ACTIVATE
+============================================================ */
+
+self.addEventListener(
+    "activate",
+    event => {
+
+        console.log(
+            "[WebBktx SW] Activating:",
+            CACHE_NAME
+        );
+
+
+        event.waitUntil(
+
+            caches.keys()
+
+            .then(
+                cacheNames => {
+
+                    return Promise.all(
+
+                        cacheNames.map(
+                            cacheName => {
+
+                                if (
+                                    cacheName !==
+                                    CACHE_NAME
+                                ) {
+
+                                    console.log(
+                                        "[WebBktx SW] " +
+                                        "Deleting old cache:",
+                                        cacheName
+                                    );
+
+
+                                    return caches.delete(
+                                        cacheName
+                                    );
+
+                                }
+
+
+                                return null;
+
+                            }
+                        )
+
+                    );
+
+                }
+            )
+
+        );
+
+
+        /*
+         * Take control of the page immediately.
+         */
+
+        self.clients.claim();
+
+    }
+);
+
+
+/* ============================================================
+   FETCH
+============================================================ */
+
+self.addEventListener(
+    "fetch",
+    event => {
+
+        /*
+         * Only handle GET requests.
+         */
+
+        if (
+            event.request.method !==
+            "GET"
+        ) {
+
+            return;
+
+        }
+
+
+        event.respondWith(
+
+            caches.match(
+                event.request
+            )
+
+            .then(
+                cachedResponse => {
+
+                    /*
+                     * Cached application file.
+                     */
+
+                    if (
+                        cachedResponse
+                    ) {
+
+                        return cachedResponse;
+
+                    }
+
+
+                    /*
+                     * Not cached:
+                     * request from network.
+                     */
+
+                    return fetch(
+                        event.request
+                    );
+
+                }
+            )
+
+        );
+
+    }
+);
