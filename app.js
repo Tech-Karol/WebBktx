@@ -3,7 +3,7 @@
  * WebBktx
  * Application Controller
  *
- * Version: 0.7
+ * Version: 0.7.1
  *
  * Handles:
  *   - Boot screen
@@ -13,8 +13,9 @@
  *   - XBE analysis
  *   - Entry point display
  *   - CPU diagnostics
- *   - Emulator window
- *   - Keyboard / Gamepad input
+ *   - Emulator screen
+ *   - Keyboard input
+ *   - Gamepad detection
  *
  * ============================================================
  */
@@ -41,13 +42,11 @@ const aboutScreen =
 const gameScreen =
     document.getElementById("gameScreen");
 
-
 const progress =
     document.getElementById("progress");
 
 const loadingText =
     document.getElementById("loadingText");
-
 
 const gameFile =
     document.getElementById("gameFile");
@@ -61,7 +60,6 @@ const startButton =
 const message =
     document.getElementById("message");
 
-
 const gameName =
     document.getElementById("gameName");
 
@@ -70,7 +68,6 @@ const canvas =
 
 const cpuOutput =
     document.getElementById("cpuOutput");
-
 
 const cpuTestButton =
     document.getElementById("cpuTestButton");
@@ -89,7 +86,7 @@ const backButton =
 
 
 /* ============================================================
-   STATE
+   GLOBAL STATE
 ============================================================ */
 
 let emulatorCore = null;
@@ -104,7 +101,7 @@ let animationFrame = null;
 
 
 /* ============================================================
-   HELPERS
+   BASIC HELPERS
 ============================================================ */
 
 function sleep(ms) {
@@ -122,29 +119,41 @@ function setProgress(value) {
         return;
     }
 
-    value =
+    const safe =
         Math.max(
             0,
             Math.min(
                 100,
-                value
+                Number(value) || 0
             )
         );
 
     progress.style.width =
-        `${value}%`;
+        `${safe}%`;
+
+}
+
+
+function setLoadingText(text) {
+
+    if (loadingText) {
+
+        loadingText.textContent =
+            text;
+
+    }
 
 }
 
 
 function setMessage(text) {
 
-    if (!message) {
-        return;
-    }
+    if (message) {
 
-    message.textContent =
-        text || "";
+        message.textContent =
+            text || "";
+
+    }
 
 }
 
@@ -167,13 +176,17 @@ function showScreen(screen) {
             continue;
         }
 
-        item.classList.add("hidden");
+        item.classList.add(
+            "hidden"
+        );
 
     }
 
     if (screen) {
 
-        screen.classList.remove("hidden");
+        screen.classList.remove(
+            "hidden"
+        );
 
     }
 
@@ -266,34 +279,6 @@ function formatBytes(bytes) {
 }
 
 
-function hex(value, digits = 8) {
-
-    if (
-        value === undefined ||
-        value === null ||
-        Number.isNaN(Number(value))
-    ) {
-
-        return "--------";
-
-    }
-
-    return (
-        "0x" +
-        (
-            Number(value) >>> 0
-        )
-        .toString(16)
-        .toUpperCase()
-        .padStart(
-            digits,
-            "0"
-        )
-    );
-
-}
-
-
 function getExtension(file) {
 
     if (
@@ -323,52 +308,149 @@ function getExtension(file) {
 }
 
 
+function hex(value, digits = 8) {
+
+    if (
+        value === undefined ||
+        value === null ||
+        Number.isNaN(Number(value))
+    ) {
+
+        return "--------";
+
+    }
+
+    return (
+        "0x" +
+        (
+            Number(value) >>> 0
+        )
+        .toString(16)
+        .toUpperCase()
+        .padStart(
+            digits,
+            "0"
+        )
+    );
+
+}
+
+
 /* ============================================================
-   CORE
+   CORE DETECTION
+============================================================ */
+
+function findCoreClass() {
+
+    /*
+     * Variant A:
+     *
+     * window.WebBktxCore = class
+     */
+
+    if (
+        typeof window.WebBktxCore ===
+        "function"
+    ) {
+
+        return window.WebBktxCore;
+
+    }
+
+
+    /*
+     * Variant B:
+     *
+     * window.WebBktxCore = {
+     *     WebBktxCore: class
+     * }
+     */
+
+    if (
+        window.WebBktxCore &&
+        typeof window.WebBktxCore.WebBktxCore ===
+        "function"
+    ) {
+
+        return window.WebBktxCore.WebBktxCore;
+
+    }
+
+
+    /*
+     * Variant C:
+     *
+     * window.WebBktx = {
+     *     WebBktxCore: class
+     * }
+     */
+
+    if (
+        window.WebBktx &&
+        typeof window.WebBktx.WebBktxCore ===
+        "function"
+    ) {
+
+        return window.WebBktx.WebBktxCore;
+
+    }
+
+
+    return null;
+
+}
+
+
+/* ============================================================
+   CORE INITIALIZATION
 ============================================================ */
 
 function initializeCore() {
 
     try {
 
-        if (
-            typeof window.WebBktxCore !==
-            "function"
-        ) {
+        const CoreClass =
+            findCoreClass();
+
+
+        if (!CoreClass) {
 
             throw new Error(
-                "WebBktxCore class not found."
+                "WebBktxCore class not found. " +
+                "Check core.js."
             );
 
         }
 
+
+        /*
+         * Create emulator core.
+         *
+         * We intentionally use an empty
+         * constructor so this remains
+         * compatible with older versions.
+         */
+
         emulatorCore =
-            new window.WebBktxCore({
-
-                /*
-                 * 64 MB initial RAM.
-                 *
-                 * This is still only an
-                 * experimental memory model.
-                 */
-
-                ramSize:
-                    64 * 1024 * 1024,
-
-                debug:
-                    true,
-
-                maxInstructions:
-                    100000
-
-            });
+            new CoreClass();
 
 
-        emulatorCore.initialize();
+        /*
+         * Newer cores may provide initialize().
+         */
+
+        if (
+            typeof emulatorCore.initialize ===
+            "function"
+        ) {
+
+            emulatorCore.initialize();
+
+        }
 
 
         console.log(
-            "WebBktx Core initialized.",
+            "WebBktx Core initialized:",
             emulatorCore
         );
 
@@ -384,14 +466,24 @@ function initializeCore() {
     } catch (error) {
 
         console.error(
-            "Core initialization failed:",
+            "WebBktx Core initialization failed:",
             error
         );
+
+
+        emulatorCore =
+            null;
 
 
         setModule(
             "core",
             false
+        );
+
+
+        setLoadingText(
+            "CORE ERROR: " +
+            error.message
         );
 
 
@@ -413,7 +505,7 @@ async function initializeServiceWorker() {
     ) {
 
         console.warn(
-            "Service Worker unsupported."
+            "Service Worker is not supported."
         );
 
         setModule(
@@ -425,13 +517,20 @@ async function initializeServiceWorker() {
 
     }
 
+
     try {
 
         await navigator.serviceWorker.register(
             "sw.js"
         );
 
+
         await navigator.serviceWorker.ready;
+
+
+        console.log(
+            "Service Worker ready."
+        );
 
 
         setModule(
@@ -440,20 +539,21 @@ async function initializeServiceWorker() {
         );
 
 
-        console.log(
-            "WebBktx Service Worker ready."
-        );
-
-
         return true;
 
     } catch (error) {
 
-        console.error(
-            "Service Worker error:",
+        console.warn(
+            "Service Worker failed:",
             error
         );
 
+
+        /*
+         * SW is useful for offline cache,
+         * but it must NOT prevent the emulator
+         * itself from starting.
+         */
 
         setModule(
             "cache",
@@ -486,33 +586,52 @@ function initializeGraphics() {
     }
 
 
-    const ctx =
-        canvas.getContext("2d");
+    try {
+
+        const context =
+            canvas.getContext(
+                "2d"
+            );
 
 
-    if (!ctx) {
+        if (!context) {
+
+            throw new Error(
+                "Canvas 2D context unavailable."
+            );
+
+        }
+
+
+        context.imageSmoothingEnabled =
+            false;
+
+
+        setModule(
+            "graphics",
+            true
+        );
+
+
+        return true;
+
+    } catch (error) {
+
+        console.error(
+            "Graphics initialization failed:",
+            error
+        );
+
 
         setModule(
             "graphics",
             false
         );
 
+
         return false;
 
     }
-
-
-    ctx.imageSmoothingEnabled =
-        false;
-
-
-    setModule(
-        "graphics",
-        true
-    );
-
-
-    return true;
 
 }
 
@@ -540,10 +659,66 @@ function initializeInput() {
 
 
 /* ============================================================
+   CORE DIAGNOSTICS
+============================================================ */
+
+function runCoreDiagnostics() {
+
+    if (!emulatorCore) {
+
+        return null;
+
+    }
+
+
+    try {
+
+        if (
+            typeof emulatorCore.diagnostics ===
+            "function"
+        ) {
+
+            return emulatorCore.diagnostics();
+
+        }
+
+
+        if (
+            typeof emulatorCore.runDiagnostics ===
+            "function"
+        ) {
+
+            return emulatorCore.runDiagnostics();
+
+        }
+
+
+        return null;
+
+    } catch (error) {
+
+        console.warn(
+            "Core diagnostics failed:",
+            error
+        );
+
+        return null;
+
+    }
+
+}
+
+
+/* ============================================================
    BOOT
 ============================================================ */
 
 async function bootWebBktx() {
+
+    showScreen(
+        loadingScreen
+    );
+
 
     setProgress(0);
 
@@ -552,8 +727,9 @@ async function bootWebBktx() {
        CACHE
     -------------------------------------------------------- */
 
-    loadingText.textContent =
-        "Checking local cache...";
+    setLoadingText(
+        "Checking local cache..."
+    );
 
     setProgress(10);
 
@@ -567,8 +743,9 @@ async function bootWebBktx() {
        CORE
     -------------------------------------------------------- */
 
-    loadingText.textContent =
-        "Loading WebBktx Core...";
+    setLoadingText(
+        "Loading WebBktx Core..."
+    );
 
     setProgress(30);
 
@@ -579,23 +756,52 @@ async function bootWebBktx() {
 
     if (!coreReady) {
 
-        loadingText.textContent =
-            "CORE ERROR";
+        /*
+         * Do NOT silently remain stuck
+         * on the loading screen.
+         */
 
-        return;
+        setProgress(100);
+
+
+        setLoadingText(
+            "CORE ERROR — check console"
+        );
+
+
+        /*
+         * We still allow the UI to open.
+         * This makes debugging from a phone
+         * much easier.
+         */
+
+        await sleep(800);
+
+
+        showScreen(
+            mainScreen
+        );
+
+
+        setMessage(
+            "WebBktx Core failed to initialize."
+        );
+
+
+    } else {
+
+        await sleep(300);
 
     }
-
-
-    await sleep(300);
 
 
     /* --------------------------------------------------------
        GRAPHICS
     -------------------------------------------------------- */
 
-    loadingText.textContent =
-        "Initializing graphics...";
+    setLoadingText(
+        "Initializing graphics..."
+    );
 
     setProgress(50);
 
@@ -603,15 +809,16 @@ async function bootWebBktx() {
     initializeGraphics();
 
 
-    await sleep(250);
+    await sleep(200);
 
 
     /* --------------------------------------------------------
        INPUT
     -------------------------------------------------------- */
 
-    loadingText.textContent =
-        "Initializing controller system...";
+    setLoadingText(
+        "Initializing controller system..."
+    );
 
     setProgress(65);
 
@@ -619,58 +826,69 @@ async function bootWebBktx() {
     initializeInput();
 
 
-    await sleep(250);
+    await sleep(200);
 
 
     /* --------------------------------------------------------
        DIAGNOSTICS
     -------------------------------------------------------- */
 
-    loadingText.textContent =
-        "Running diagnostics...";
+    setLoadingText(
+        "Running diagnostics..."
+    );
 
     setProgress(80);
 
 
-    try {
-
-        const diagnostics =
-            emulatorCore.diagnostics();
+    const diagnostics =
+        runCoreDiagnostics();
 
 
-        console.log(
-            "WebBktx diagnostics:",
-            diagnostics
-        );
-
-    } catch (error) {
-
-        console.warn(
-            "Diagnostics unavailable:",
-            error
-        );
-
-    }
+    console.log(
+        "WebBktx diagnostics:",
+        diagnostics
+    );
 
 
     setProgress(95);
 
-    await sleep(300);
+
+    await sleep(250);
 
 
     setProgress(100);
 
 
-    loadingText.textContent =
-        "System ready.";
+    setLoadingText(
+        "System ready."
+    );
 
 
-    await sleep(600);
+    await sleep(400);
 
+
+    /*
+     * Always show main screen.
+     */
 
     showScreen(
         mainScreen
     );
+
+
+    if (!coreReady) {
+
+        setMessage(
+            "CORE ERROR: emulator unavailable."
+        );
+
+    } else {
+
+        setMessage(
+            "WebBktx ready."
+        );
+
+    }
 
 }
 
@@ -695,10 +913,6 @@ if (gameFile) {
 
             if (!file) {
 
-                startButton.disabled =
-                    true;
-
-
                 if (fileInfo) {
 
                     fileInfo.innerHTML = `
@@ -712,6 +926,14 @@ if (gameFile) {
                         </span>
 
                     `;
+
+                }
+
+
+                if (startButton) {
+
+                    startButton.disabled =
+                        true;
 
                 }
 
@@ -748,29 +970,22 @@ if (gameFile) {
             }
 
 
-            startButton.disabled =
-                false;
+            if (startButton) {
+
+                startButton.disabled =
+                    false;
+
+            }
 
 
             setMessage(
-                `Local ${extension.toUpperCase() || "GAME"} file selected.`
+                `Selected ${extension.toUpperCase() || "GAME"} file locally.`
             );
 
 
             console.log(
-                "Selected game:",
-                {
-                    name:
-                        file.name,
-
-                    size:
-                        file.size,
-
-                    type:
-                        file.type,
-
-                    extension
-                }
+                "Selected file:",
+                file
             );
 
         }
@@ -780,7 +995,7 @@ if (gameFile) {
 
 
 /* ============================================================
-   GAME LOADING
+   LOAD GAME
 ============================================================ */
 
 async function loadSelectedGame() {
@@ -797,7 +1012,7 @@ async function loadSelectedGame() {
     if (!emulatorCore) {
 
         throw new Error(
-            "WebBktx Core is unavailable."
+            "WebBktx Core is not initialized."
         );
 
     }
@@ -810,13 +1025,68 @@ async function loadSelectedGame() {
 
 
     /*
-     * Currently XBE is the main
-     * supported executable format.
+     * XBE
      */
 
     if (
-        extension !== "xbe"
+        extension === "xbe"
     ) {
+
+        /*
+         * Preferred API
+         */
+
+        if (
+            typeof emulatorCore.loadGame ===
+            "function"
+        ) {
+
+            return await emulatorCore.loadGame(
+                selectedGameFile
+            );
+
+        }
+
+
+        /*
+         * Alternative API
+         */
+
+        if (
+            typeof emulatorCore.loadXBE ===
+            "function"
+        ) {
+
+            return await emulatorCore.loadXBE(
+                selectedGameFile
+            );
+
+        }
+
+
+        throw new Error(
+            "Core does not provide an XBE loader."
+        );
+
+    }
+
+
+    /*
+     * ISO / XISO
+     *
+     * We can read the file locally,
+     * but full disc mounting is not
+     * implemented yet.
+     */
+
+    if (
+        extension === "iso" ||
+        extension === "xiso"
+    ) {
+
+        const buffer =
+            await selectedGameFile.arrayBuffer();
+
 
         return {
 
@@ -828,25 +1098,25 @@ async function loadSelectedGame() {
                 extension.toUpperCase(),
 
             size:
-                selectedGameFile.size,
+                buffer.byteLength,
 
             reason:
-                "Only XBE executable analysis is currently implemented."
+                "ISO/XISO mounting is not implemented yet."
 
         };
 
     }
 
 
-    return await emulatorCore.loadGame(
-        selectedGameFile
+    throw new Error(
+        "Unsupported game file format."
     );
 
 }
 
 
 /* ============================================================
-   START BUTTON
+   START EMULATOR
 ============================================================ */
 
 if (startButton) {
@@ -869,11 +1139,11 @@ if (startButton) {
             try {
 
                 setMessage(
-                    "Analyzing XBE..."
+                    "Loading game..."
                 );
 
 
-                await sleep(200);
+                await sleep(150);
 
 
                 const result =
@@ -881,19 +1151,19 @@ if (startButton) {
 
 
                 console.log(
-                    "XBE result:",
+                    "Game result:",
                     result
                 );
 
 
                 if (
-                    !result ||
-                    !result.success
+                    result &&
+                    result.success === false
                 ) {
 
                     throw new Error(
-                        result?.reason ||
-                        "XBE analysis failed."
+                        result.reason ||
+                        "Game could not be loaded."
                     );
 
                 }
@@ -916,26 +1186,15 @@ if (startButton) {
                 );
 
 
-                renderXBEDebugScreen(
+                renderEmulatorScreen(
                     result
                 );
 
 
                 setMessage(
-                    "XBE analyzed successfully."
+                    "XBE loaded. Execution environment ready."
                 );
 
-
-                /*
-                 * Important:
-                 *
-                 * We do NOT automatically
-                 * execute the XBE yet.
-                 *
-                 * 0.7 displays the executable
-                 * information and prepares
-                 * the CPU.
-                 */
 
                 emulatorRunning =
                     false;
@@ -967,10 +1226,102 @@ if (startButton) {
 
 
 /* ============================================================
-   XBE DEBUG DISPLAY
+   CPU STATE
 ============================================================ */
 
-function renderXBEDebugScreen(
+function getCPUState() {
+
+    if (!emulatorCore) {
+
+        return null;
+
+    }
+
+
+    try {
+
+        if (
+            typeof emulatorCore.getCPUState ===
+            "function"
+        ) {
+
+            return emulatorCore.getCPUState();
+
+        }
+
+
+        if (
+            emulatorCore.cpu
+        ) {
+
+            const cpu =
+                emulatorCore.cpu;
+
+
+            const registers =
+                cpu.registers ||
+                {};
+
+
+            return {
+
+                EAX:
+                    registers.EAX || 0,
+
+                EBX:
+                    registers.EBX || 0,
+
+                ECX:
+                    registers.ECX || 0,
+
+                EDX:
+                    registers.EDX || 0,
+
+                ESI:
+                    registers.ESI || 0,
+
+                EDI:
+                    registers.EDI || 0,
+
+                EBP:
+                    registers.EBP || 0,
+
+                ESP:
+                    registers.ESP || 0,
+
+                EIP:
+                    cpu.EIP || 0,
+
+                EFLAGS:
+                    cpu.EFLAGS || 0
+
+            };
+
+        }
+
+
+        return null;
+
+    } catch (error) {
+
+        console.warn(
+            "Could not read CPU state:",
+            error
+        );
+
+
+        return null;
+
+    }
+
+}
+
+
+/* ============================================================
+   EMULATOR DISPLAY
+============================================================ */
+
+function renderEmulatorScreen(
     result
 ) {
 
@@ -980,7 +1331,9 @@ function renderXBEDebugScreen(
 
 
     const ctx =
-        canvas.getContext("2d");
+        canvas.getContext(
+            "2d"
+        );
 
 
     if (!ctx) {
@@ -995,12 +1348,9 @@ function renderXBEDebugScreen(
         canvas.height;
 
 
-    /* --------------------------------------------------------
-       CLEAR
-    -------------------------------------------------------- */
-
     ctx.fillStyle =
         "#050708";
+
 
     ctx.fillRect(
         0,
@@ -1015,58 +1365,78 @@ function renderXBEDebugScreen(
 
 
     /* --------------------------------------------------------
-       TITLE
+       HEADER
     -------------------------------------------------------- */
 
     ctx.fillStyle =
         "#d7dedb";
 
     ctx.font =
-        "bold 34px monospace";
+        "bold 32px monospace";
 
 
     ctx.fillText(
-        "WebBktx XBE ANALYZER",
-        50,
-        70
+        "WebBktx",
+        45,
+        60
     );
 
-
-    /* --------------------------------------------------------
-       GAME
-    -------------------------------------------------------- */
 
     ctx.fillStyle =
         "#78a896";
 
     ctx.font =
-        "bold 18px monospace";
+        "bold 17px monospace";
 
 
     ctx.fillText(
-        "EXECUTABLE",
-        50,
-        115
+        "XBE EXECUTION ENVIRONMENT",
+        45,
+        95
     );
 
+
+    /* --------------------------------------------------------
+       FILE
+    -------------------------------------------------------- */
 
     ctx.fillStyle =
         "#c0c8c5";
 
     ctx.font =
-        "16px monospace";
+        "15px monospace";
 
 
     ctx.fillText(
-        selectedGameFile.name,
-        50,
+        "GAME:",
+        45,
         145
     );
 
 
     ctx.fillText(
-        `SIZE: ${formatBytes(result.image?.size || selectedGameFile.size)}`,
-        50,
+        selectedGameFile
+            ? selectedGameFile.name
+            : "UNKNOWN",
+        140,
+        145
+    );
+
+
+    ctx.fillText(
+        "SIZE:",
+        45,
+        175
+    );
+
+
+    ctx.fillText(
+        formatBytes(
+            selectedGameFile
+                ? selectedGameFile.size
+                : 0
+        ),
+        140,
         175
     );
 
@@ -1079,13 +1449,13 @@ function renderXBEDebugScreen(
         "#78a896";
 
     ctx.font =
-        "bold 18px monospace";
+        "bold 17px monospace";
 
 
     ctx.fillText(
         "ENTRY POINT",
-        50,
-        225
+        45,
+        235
     );
 
 
@@ -1096,10 +1466,19 @@ function renderXBEDebugScreen(
         "20px monospace";
 
 
+    const entryPoint =
+        result &&
+        (
+            result.entryPoint ??
+            result.entry_point ??
+            result.image?.entryPoint
+        );
+
+
     ctx.fillText(
-        hex(result.entryPoint),
-        50,
-        258
+        hex(entryPoint),
+        45,
+        270
     );
 
 
@@ -1107,35 +1486,21 @@ function renderXBEDebugScreen(
        CPU
     -------------------------------------------------------- */
 
-    let cpuState = null;
-
-
-    try {
-
-        cpuState =
-            emulatorCore.getCPUState();
-
-    } catch (error) {
-
-        console.warn(
-            "CPU state unavailable:",
-            error
-        );
-
-    }
+    const cpu =
+        getCPUState();
 
 
     ctx.fillStyle =
         "#78a896";
 
     ctx.font =
-        "bold 18px monospace";
+        "bold 17px monospace";
 
 
     ctx.fillText(
-        "CPU STATE",
-        50,
-        315
+        "CPU",
+        500,
+        145
     );
 
 
@@ -1143,47 +1508,47 @@ function renderXBEDebugScreen(
         "#c0c8c5";
 
     ctx.font =
-        "15px monospace";
+        "14px monospace";
 
 
-    if (cpuState) {
+    if (cpu) {
 
         ctx.fillText(
-            `EIP  ${hex(cpuState.EIP)}`,
-            50,
-            345
+            `EIP ${hex(cpu.EIP)}`,
+            500,
+            175
         );
 
         ctx.fillText(
-            `EAX  ${hex(cpuState.EAX)}`,
-            50,
-            370
+            `EAX ${hex(cpu.EAX)}`,
+            500,
+            200
         );
 
         ctx.fillText(
-            `EBX  ${hex(cpuState.EBX)}`,
-            50,
-            395
+            `EBX ${hex(cpu.EBX)}`,
+            500,
+            225
         );
 
         ctx.fillText(
-            `ECX  ${hex(cpuState.ECX)}`,
-            50,
-            420
+            `ECX ${hex(cpu.ECX)}`,
+            500,
+            250
         );
 
         ctx.fillText(
-            `EDX  ${hex(cpuState.EDX)}`,
-            50,
-            445
+            `EDX ${hex(cpu.EDX)}`,
+            500,
+            275
         );
 
     } else {
 
         ctx.fillText(
             "CPU STATE UNAVAILABLE",
-            50,
-            350
+            500,
+            180
         );
 
     }
@@ -1197,13 +1562,13 @@ function renderXBEDebugScreen(
         "#78a896";
 
     ctx.font =
-        "bold 18px monospace";
+        "bold 17px monospace";
 
 
     ctx.fillText(
-        "STATUS",
+        "SYSTEM STATUS",
         500,
-        115
+        335
     );
 
 
@@ -1211,39 +1576,39 @@ function renderXBEDebugScreen(
         "#c0c8c5";
 
     ctx.font =
-        "15px monospace";
+        "14px monospace";
 
 
     ctx.fillText(
-        "XBE: LOADED",
+        "XBE      : LOADED",
         500,
-        150
+        365
     );
 
 
     ctx.fillText(
-        "MEMORY: MAPPED",
+        "MEMORY   : MAPPED",
         500,
-        180
+        390
     );
 
 
     ctx.fillText(
-        "CPU: READY",
+        "CPU      : READY",
         500,
-        210
+        415
     );
 
 
     ctx.fillText(
         "EXECUTION: WAITING",
         500,
-        240
+        440
     );
 
 
     /* --------------------------------------------------------
-       DEVELOPMENT MESSAGE
+       FOOTER
     -------------------------------------------------------- */
 
     ctx.fillStyle =
@@ -1254,23 +1619,23 @@ function renderXBEDebugScreen(
 
 
     ctx.fillText(
-        "XBOX EXECUTION ENVIRONMENT UNDER DEVELOPMENT",
-        50,
-        height - 55
+        "Xbox execution environment under development.",
+        45,
+        height - 45
     );
 
 
     ctx.fillText(
-        "WebBktx 0.7",
-        50,
-        height - 30
+        "WebBktx 0.7.1",
+        45,
+        height - 22
     );
 
 }
 
 
 /* ============================================================
-   CPU TEST
+   CPU DIAGNOSTICS SCREEN
 ============================================================ */
 
 if (cpuTestButton) {
@@ -1296,9 +1661,7 @@ async function runCPUDiagnostics() {
 
 
     cpuOutput.textContent =
-        "WebBktx CPU DIAGNOSTIC\n";
-
-    cpuOutput.textContent +=
+        "WebBktx CPU DIAGNOSTIC\n" +
         "========================\n\n";
 
 
@@ -1308,7 +1671,10 @@ async function runCPUDiagnostics() {
     if (!emulatorCore) {
 
         cpuOutput.textContent +=
-            "ERROR: CORE NOT INITIALIZED\n";
+            "CORE STATUS: ERROR\n\n";
+
+        cpuOutput.textContent +=
+            "WebBktx Core is not initialized.\n";
 
         return;
 
@@ -1318,42 +1684,37 @@ async function runCPUDiagnostics() {
     try {
 
         const diagnostics =
-            emulatorCore.diagnostics();
+            runCoreDiagnostics();
 
-
-        /* ----------------------------------------------------
-           CORE
-        ---------------------------------------------------- */
 
         cpuOutput.textContent +=
             "CORE\n";
 
         cpuOutput.textContent +=
-            `VERSION: ${emulatorCore.version}\n`;
+            "STATUS: ONLINE\n";
+
+
+        if (
+            emulatorCore.version
+        ) {
+
+            cpuOutput.textContent +=
+                `VERSION: ${emulatorCore.version}\n`;
+
+        }
+
 
         cpuOutput.textContent +=
-            "STATUS: ONLINE\n\n";
-
-
-        /* ----------------------------------------------------
-           MEMORY
-        ---------------------------------------------------- */
-
-        cpuOutput.textContent +=
-            "MEMORY\n";
-
-        cpuOutput.textContent +=
-            `RAM: ${formatBytes(
-                diagnostics.memory.size
-            )}\n`;
-
-        cpuOutput.textContent +=
-            "STATUS: ONLINE\n\n";
+            "\n";
 
 
         /* ----------------------------------------------------
            CPU
         ---------------------------------------------------- */
+
+        const cpu =
+            getCPUState();
+
 
         cpuOutput.textContent +=
             "CPU\n";
@@ -1364,51 +1725,101 @@ async function runCPUDiagnostics() {
         cpuOutput.textContent +=
             "MODE: EXPERIMENTAL\n";
 
-        cpuOutput.textContent +=
-            `EIP: ${hex(
-                diagnostics.cpu.EIP
-            )}\n`;
+
+        if (cpu) {
+
+            cpuOutput.textContent +=
+                `EAX: ${hex(cpu.EAX)}\n`;
+
+            cpuOutput.textContent +=
+                `EBX: ${hex(cpu.EBX)}\n`;
+
+            cpuOutput.textContent +=
+                `ECX: ${hex(cpu.ECX)}\n`;
+
+            cpuOutput.textContent +=
+                `EDX: ${hex(cpu.EDX)}\n`;
+
+            cpuOutput.textContent +=
+                `EIP: ${hex(cpu.EIP)}\n`;
+
+            cpuOutput.textContent +=
+                `EFLAGS: ${hex(cpu.EFLAGS)}\n`;
+
+        } else {
+
+            cpuOutput.textContent +=
+                "CPU STATE: UNAVAILABLE\n";
+
+        }
+
 
         cpuOutput.textContent +=
-            `EAX: ${hex(
-                diagnostics.cpu.EAX
-            )}\n`;
-
-        cpuOutput.textContent +=
-            `EBX: ${hex(
-                diagnostics.cpu.EBX
-            )}\n`;
-
-        cpuOutput.textContent +=
-            `ECX: ${hex(
-                diagnostics.cpu.ECX
-            )}\n`;
-
-        cpuOutput.textContent +=
-            `EDX: ${hex(
-                diagnostics.cpu.EDX
-            )}\n\n`;
+            "\n";
 
 
         /* ----------------------------------------------------
-           GAME
+           MEMORY
+        ---------------------------------------------------- */
+
+        cpuOutput.textContent +=
+            "MEMORY\n";
+
+
+        if (
+            diagnostics &&
+            diagnostics.memory
+        ) {
+
+            cpuOutput.textContent +=
+                `RAM: ${formatBytes(
+                    diagnostics.memory.size
+                )}\n`;
+
+        } else if (
+            emulatorCore.memory &&
+            emulatorCore.memory.size
+        ) {
+
+            cpuOutput.textContent +=
+                `RAM: ${formatBytes(
+                    emulatorCore.memory.size
+                )}\n`;
+
+        } else {
+
+            cpuOutput.textContent +=
+                "RAM: UNKNOWN\n";
+
+        }
+
+
+        cpuOutput.textContent +=
+            "STATUS: ONLINE\n\n";
+
+
+        /* ----------------------------------------------------
+           XBE
         ---------------------------------------------------- */
 
         cpuOutput.textContent +=
             "XBE\n";
 
 
-        if (
-            diagnostics.game.loaded
-        ) {
+        if (currentGame) {
 
             cpuOutput.textContent +=
                 "STATUS: LOADED\n";
 
+
+            const entry =
+                currentGame.entryPoint ??
+                currentGame.entry_point ??
+                currentGame.image?.entryPoint;
+
+
             cpuOutput.textContent +=
-                `ENTRY POINT: ${hex(
-                    diagnostics.game.entryPoint
-                )}\n`;
+                `ENTRY POINT: ${hex(entry)}\n`;
 
         } else {
 
@@ -1421,9 +1832,11 @@ async function runCPUDiagnostics() {
         cpuOutput.textContent +=
             "\nSYSTEM DIAGNOSTICS COMPLETE.\n";
 
+
     } catch (error) {
 
         console.error(
+            "Diagnostic error:",
             error
         );
 
@@ -1496,7 +1909,7 @@ if (aboutBackButton) {
 
 
 /* ============================================================
-   EXIT EMULATOR
+   EXIT
 ============================================================ */
 
 if (backButton) {
@@ -1506,6 +1919,7 @@ if (backButton) {
         () => {
 
             stopEmulator();
+
 
             showScreen(
                 mainScreen
@@ -1533,25 +1947,33 @@ function stopEmulator() {
             animationFrame
         );
 
+
         animationFrame =
             null;
 
     }
 
 
-    if (
-        emulatorCore &&
-        typeof emulatorCore.stop ===
-        "function"
-    ) {
+    try {
 
-        emulatorCore.stop();
+        if (
+            emulatorCore &&
+            typeof emulatorCore.stop ===
+            "function"
+        ) {
+
+            emulatorCore.stop();
+
+        }
+
+    } catch (error) {
+
+        console.warn(
+            "Core stop error:",
+            error
+        );
 
     }
-
-
-    currentGame =
-        null;
 
 
     console.log(
@@ -1632,7 +2054,7 @@ window.addEventListener(
 
 
 /* ============================================================
-   DEBUG API
+   PUBLIC DEBUG API
 ============================================================ */
 
 window.WebBktxApp = {
@@ -1658,22 +2080,23 @@ window.WebBktxApp = {
     },
 
 
-    stop() {
+    getCPUState() {
 
-        stopEmulator();
+        return getCPUState();
 
     },
 
 
     diagnostics() {
 
-        if (!emulatorCore) {
+        return runCoreDiagnostics();
 
-            return null;
+    },
 
-        }
 
-        return emulatorCore.diagnostics();
+    stop() {
+
+        stopEmulator();
 
     },
 
@@ -1699,14 +2122,21 @@ window.WebBktxApp = {
 
 
 /* ============================================================
-   START
+   START APPLICATION
 ============================================================ */
 
-document.addEventListener(
-    "DOMContentLoaded",
-    () => {
+if (
+    document.readyState ===
+    "loading"
+) {
 
-        bootWebBktx();
+    document.addEventListener(
+        "DOMContentLoaded",
+        bootWebBktx
+    );
 
-    }
-);
+} else {
+
+    bootWebBktx();
+
+}
