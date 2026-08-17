@@ -1,55 +1,58 @@
 /*
  * ============================================================
- * WebBktx Core
- *
- * Version: 0.5
- *
- * Experimental x86 execution core
- * Xbox-compatible memory foundation
+ * WebBktx Core 0.5
+ * Experimental Xbox / x86 emulation core
  *
  * Components:
  *
- *   - 64 MB emulated RAM
- *   - x86 register file
- *   - EIP
+ *   - 32-bit x86 CPU
+ *   - 16 MB emulated RAM
+ *   - Register file
  *   - EFLAGS
- *   - stack
- *   - instruction fetch
- *   - opcode decoder
- *   - ModR/M decoder
- *   - MOV
- *   - ADD
- *   - SUB
- *   - INC
- *   - DEC
- *   - XOR
- *   - PUSH
- *   - POP
- *   - JMP
- *   - RET
- *   - NOP
- *   - HLT
+ *   - Instruction fetch
+ *   - Basic x86 decoder
+ *   - Basic x86 execution
+ *   - Stack
+ *   - Memory addressing
  *   - XBE detection
- *   - XBE loading
+ *   - XBE header parser
+ *   - XBE section parser
+ *   - XBE image loader
+ *   - CPU diagnostics
  *
- * IMPORTANT:
+ * Supported instructions:
  *
- * This is NOT a complete Xbox emulator.
+ *   NOP
+ *   MOV r32, imm32
+ *   MOV r32, r/m32
+ *   MOV r/m32, r32
+ *   MOV EAX, moffs32
+ *   MOV moffs32, EAX
+ *   ADD EAX, imm32
+ *   ADD r/m32, r32
+ *   ADD r32, r/m32
+ *   SUB EAX, imm32
+ *   SUB r/m32, r32
+ *   SUB r32, r/m32
+ *   INC r32
+ *   DEC r32
+ *   CMP EAX, imm32
+ *   CMP r32, r/m32
+ *   TEST EAX, imm32
+ *   JMP rel8
+ *   JMP rel32
+ *   JZ / JE
+ *   JNZ / JNE
+ *   PUSH r32
+ *   PUSH imm32
+ *   POP r32
+ *   CALL rel32
+ *   RET
+ *   HLT
  *
- * It does not yet emulate:
- *
- *   - Xbox kernel
- *   - NV2A GPU
- *   - MCPX
- *   - audio hardware
- *   - DirectX/XDK environment
- *   - Xbox memory mapping
- *   - interrupts
- *   - DMA
- *   - PCI devices
- *   - BIOS
- *   - full x86 instruction set
- *
+ * NOTE:
+ * This is an educational/emulation core.
+ * It is NOT a complete Xbox emulator.
  * ============================================================
  */
 
@@ -57,40 +60,29 @@
 
 
 /* ============================================================
-   VERSION
+   CONSTANTS
 ============================================================ */
 
-const WEBBKTX_CORE_VERSION =
-    "0.5";
-
-
-/* ============================================================
-   MEMORY
-============================================================ */
-
-/*
- * Classic Xbox:
- *
- * 64 MB unified system memory.
- *
- * We use exactly 64 MB as the default
- * physical emulated memory.
- */
+const WEBBKTX_CORE_VERSION = "0.5";
 
 const RAM_SIZE =
-    64 * 1024 * 1024;
+    16 * 1024 * 1024;
 
 
 /*
- * Default program location.
+ * XBE magic:
  *
- * This is only a simplified development
- * mapping and is NOT the real Xbox
- * virtual memory layout.
+ * ASCII:
+ *
+ * X B E H
+ *
+ * Little endian:
+ *
+ * 0x48454258
  */
 
-const DEFAULT_LOAD_ADDRESS =
-    0x00010000;
+const XBE_MAGIC =
+    0x48454258;
 
 
 /* ============================================================
@@ -98,60 +90,97 @@ const DEFAULT_LOAD_ADDRESS =
 ============================================================ */
 
 const FLAG_CF = 1 << 0;
-const FLAG_PF = 1 << 2;
 const FLAG_ZF = 1 << 6;
 const FLAG_SF = 1 << 7;
 const FLAG_OF = 1 << 11;
 
 
 /* ============================================================
-   REGISTER IDS
+   UTILITY
 ============================================================ */
 
-const REG_EAX = 0;
-const REG_ECX = 1;
-const REG_EDX = 2;
-const REG_EBX = 3;
-const REG_ESP = 4;
-const REG_EBP = 5;
-const REG_ESI = 6;
-const REG_EDI = 7;
+function toUint32(value) {
+
+    return value >>> 0;
+
+}
 
 
-const REGISTER_NAMES = [
-    "EAX",
-    "ECX",
-    "EDX",
-    "EBX",
-    "ESP",
-    "EBP",
-    "ESI",
-    "EDI"
-];
+function toInt32(value) {
+
+    return value | 0;
+
+}
+
+
+function signExtend8(value) {
+
+    return (
+        (value & 0x80)
+            ? value | 0xFFFFFF00
+            : value
+    ) | 0;
+
+}
+
+
+function signExtend32(value) {
+
+    return value | 0;
+
+}
+
+
+function hex(value, digits = 8) {
+
+    return (
+        "0x" +
+        (
+            value >>> 0
+        )
+        .toString(16)
+        .toUpperCase()
+        .padStart(digits, "0")
+    );
+
+}
 
 
 /* ============================================================
-   MEMORY CLASS
+   MEMORY
 ============================================================ */
 
 class WebBktxMemory {
 
-    constructor(
-        size = RAM_SIZE
-    ) {
+    constructor(size = RAM_SIZE) {
+
+        if (
+            !Number.isInteger(size) ||
+            size <= 0
+        ) {
+
+            throw new Error(
+                "Invalid memory size."
+            );
+
+        }
+
 
         this.size =
             size;
+
 
         this.buffer =
             new ArrayBuffer(
                 size
             );
 
+
         this.memory =
             new Uint8Array(
                 this.buffer
             );
+
 
         this.view =
             new DataView(
@@ -178,14 +207,12 @@ class WebBktxMemory {
 
 
         if (
-            !Number.isInteger(address) ||
-            address < 0 ||
-            address + bytes > this.size
+            address + bytes >
+            this.size
         ) {
 
             throw new RangeError(
-                "RAM address out of range: 0x" +
-                address.toString(16)
+                `Memory access outside RAM: ${hex(address)}`
             );
 
         }
@@ -193,14 +220,13 @@ class WebBktxMemory {
     }
 
 
-    read8(
-        address
-    ) {
+    read8(address) {
 
         this.checkAddress(
             address,
             1
         );
+
 
         return this.view.getUint8(
             address
@@ -209,30 +235,13 @@ class WebBktxMemory {
     }
 
 
-    read8s(
-        address
-    ) {
-
-        this.checkAddress(
-            address,
-            1
-        );
-
-        return this.view.getInt8(
-            address
-        );
-
-    }
-
-
-    read16(
-        address
-    ) {
+    read16(address) {
 
         this.checkAddress(
             address,
             2
         );
+
 
         return this.view.getUint16(
             address,
@@ -242,50 +251,15 @@ class WebBktxMemory {
     }
 
 
-    read16s(
-        address
-    ) {
-
-        this.checkAddress(
-            address,
-            2
-        );
-
-        return this.view.getInt16(
-            address,
-            true
-        );
-
-    }
-
-
-    read32(
-        address
-    ) {
+    read32(address) {
 
         this.checkAddress(
             address,
             4
         );
+
 
         return this.view.getUint32(
-            address,
-            true
-        );
-
-    }
-
-
-    read32s(
-        address
-    ) {
-
-        this.checkAddress(
-            address,
-            4
-        );
-
-        return this.view.getInt32(
             address,
             true
         );
@@ -302,6 +276,7 @@ class WebBktxMemory {
             address,
             1
         );
+
 
         this.view.setUint8(
             address,
@@ -320,6 +295,7 @@ class WebBktxMemory {
             address,
             2
         );
+
 
         this.view.setUint16(
             address,
@@ -340,6 +316,7 @@ class WebBktxMemory {
             4
         );
 
+
         this.view.setUint32(
             address,
             value >>> 0,
@@ -359,6 +336,7 @@ class WebBktxMemory {
             bytes.length
         );
 
+
         this.memory.set(
             bytes,
             address
@@ -376,6 +354,7 @@ class WebBktxMemory {
             address,
             length
         );
+
 
         return this.memory.slice(
             address,
@@ -395,7 +374,7 @@ class WebBktxMemory {
 
 
 /* ============================================================
-   X86 CPU
+   CPU
 ============================================================ */
 
 class X86CPU {
@@ -409,24 +388,28 @@ class X86CPU {
             new WebBktxMemory();
 
 
+        /*
+         * General purpose registers
+         */
+
         this.registers = {
 
             EAX: 0,
-            EBX: 0,
             ECX: 0,
             EDX: 0,
+            EBX: 0,
+
+            ESP: 0,
+            EBP: 0,
 
             ESI: 0,
-            EDI: 0,
-
-            EBP: 0,
-            ESP: 0
+            EDI: 0
 
         };
 
 
         this.EIP =
-            DEFAULT_LOAD_ADDRESS;
+            0;
 
 
         this.EFLAGS =
@@ -449,21 +432,8 @@ class X86CPU {
             0;
 
 
-        this.lastOpcode =
-            0;
-
-
         this.lastInstruction =
-            "NONE";
-
-
-        this.stackBase =
-            this.memory.size -
-            0x1000;
-
-
-        this.stackSize =
-            0x1000;
+            null;
 
 
         this.reset();
@@ -471,93 +441,96 @@ class X86CPU {
     }
 
 
-    /* --------------------------------------------------------
-       RESET
-    -------------------------------------------------------- */
-
     reset() {
 
-        this.registers.EAX = 0;
-        this.registers.EBX = 0;
-        this.registers.ECX = 0;
-        this.registers.EDX = 0;
+        for (
+            const register
+            of Object.keys(
+                this.registers
+            )
+        ) {
 
-        this.registers.ESI = 0;
-        this.registers.EDI = 0;
+            this.registers[
+                register
+            ] = 0;
 
-        this.registers.EBP =
-            this.stackBase;
+        }
+
+
+        /*
+         * Stack starts near the end of RAM.
+         */
 
         this.registers.ESP =
-            this.stackBase;
+            (
+                this.memory.size -
+                4
+            ) >>> 0;
+
 
         this.EIP =
-            DEFAULT_LOAD_ADDRESS;
+            0;
+
 
         this.EFLAGS =
             0x00000002;
 
+
         this.running =
             false;
+
 
         this.halted =
             false;
 
+
         this.cycles =
             0;
+
 
         this.instructions =
             0;
 
-        this.lastOpcode =
-            0;
 
         this.lastInstruction =
-            "RESET";
+            null;
 
     }
 
-
-    /* --------------------------------------------------------
-       REGISTER ACCESS
-    -------------------------------------------------------- */
 
     getRegister(
         index
     ) {
 
-        switch (
-            index & 7
+        const names = [
+
+            "EAX",
+            "ECX",
+            "EDX",
+            "EBX",
+            "ESP",
+            "EBP",
+            "ESI",
+            "EDI"
+
+        ];
+
+
+        if (
+            index < 0 ||
+            index > 7
         ) {
 
-            case REG_EAX:
-                return this.registers.EAX;
-
-            case REG_ECX:
-                return this.registers.ECX;
-
-            case REG_EDX:
-                return this.registers.EDX;
-
-            case REG_EBX:
-                return this.registers.EBX;
-
-            case REG_ESP:
-                return this.registers.ESP;
-
-            case REG_EBP:
-                return this.registers.EBP;
-
-            case REG_ESI:
-                return this.registers.ESI;
-
-            case REG_EDI:
-                return this.registers.EDI;
+            throw new Error(
+                "Invalid register index."
+            );
 
         }
 
 
-        return 0;
+        return this.registers[
+            names[index]
+        ] >>> 0;
 
     }
 
@@ -567,126 +540,78 @@ class X86CPU {
         value
     ) {
 
-        value =
-            value >>> 0;
+        const names = [
+
+            "EAX",
+            "ECX",
+            "EDX",
+            "EBX",
+            "ESP",
+            "EBP",
+            "ESI",
+            "EDI"
+
+        ];
 
 
-        switch (
-            index & 7
+        if (
+            index < 0 ||
+            index > 7
         ) {
 
-            case REG_EAX:
-                this.registers.EAX = value;
-                break;
-
-            case REG_ECX:
-                this.registers.ECX = value;
-                break;
-
-            case REG_EDX:
-                this.registers.EDX = value;
-                break;
-
-            case REG_EBX:
-                this.registers.EBX = value;
-                break;
-
-            case REG_ESP:
-                this.registers.ESP = value;
-                break;
-
-            case REG_EBP:
-                this.registers.EBP = value;
-                break;
-
-            case REG_ESI:
-                this.registers.ESI = value;
-                break;
-
-            case REG_EDI:
-                this.registers.EDI = value;
-                break;
+            throw new Error(
+                "Invalid register index."
+            );
 
         }
 
+
+        this.registers[
+            names[index]
+        ] =
+            value >>> 0;
+
     }
 
 
-    /* --------------------------------------------------------
-       FETCH
-    -------------------------------------------------------- */
+    push32(
+        value
+    ) {
 
-    fetch8() {
-
-        const value =
-            this.memory.read8(
-                this.EIP
-            );
-
-        this.EIP =
+        this.registers.ESP =
             (
-                this.EIP + 1
+                this.registers.ESP -
+                4
             ) >>> 0;
 
-        return value;
+
+        this.memory.write32(
+            this.registers.ESP,
+            value
+        );
 
     }
 
 
-    fetch16() {
-
-        const value =
-            this.memory.read16(
-                this.EIP
-            );
-
-        this.EIP =
-            (
-                this.EIP + 2
-            ) >>> 0;
-
-        return value;
-
-    }
-
-
-    fetch32() {
+    pop32() {
 
         const value =
             this.memory.read32(
-                this.EIP
+                this.registers.ESP
             );
 
-        this.EIP =
+
+        this.registers.ESP =
             (
-                this.EIP + 4
+                this.registers.ESP +
+                4
             ) >>> 0;
+
 
         return value;
 
     }
 
-
-    fetch32s() {
-
-        const value =
-            this.memory.read32s(
-                this.EIP
-            );
-
-        this.EIP =
-            (
-                this.EIP + 4
-            ) >>> 0;
-
-        return value;
-
-    }
-
-
-    /* --------------------------------------------------------
-       FLAGS
-    -------------------------------------------------------- */
 
     setFlag(
         flag,
@@ -711,48 +636,9 @@ class X86CPU {
     ) {
 
         return (
-            (this.EFLAGS & flag) !== 0
-        );
-
-    }
-
-
-    updateLogicFlags(
-        result
-    ) {
-
-        result =
-            result >>> 0;
-
-
-        this.setFlag(
-            FLAG_CF,
-            false
-        );
-
-
-        this.setFlag(
-            FLAG_OF,
-            false
-        );
-
-
-        this.setFlag(
-            FLAG_ZF,
-            result === 0
-        );
-
-
-        this.setFlag(
-            FLAG_SF,
-            (result & 0x80000000) !== 0
-        );
-
-
-        this.setFlag(
-            FLAG_PF,
-            parity8(result & 0xFF)
-        );
+            this.EFLAGS &
+            flag
+        ) !== 0;
 
     }
 
@@ -786,23 +672,28 @@ class X86CPU {
         );
 
 
-        this.setFlag(
-            FLAG_PF,
-            parity8(result & 0xFF)
-        );
+        const signedA =
+            a | 0;
 
+        const signedB =
+            b | 0;
 
-        const overflow =
-            (
-                (~(a ^ b) &
-                (a ^ result) &
-                0x80000000) !== 0
-            );
+        const signedResult =
+            result | 0;
 
 
         this.setFlag(
             FLAG_OF,
-            overflow
+            (
+                signedA >= 0 &&
+                signedB >= 0 &&
+                signedResult < 0
+            ) ||
+            (
+                signedA < 0 &&
+                signedB < 0 &&
+                signedResult >= 0
+            )
         );
 
     }
@@ -837,182 +728,169 @@ class X86CPU {
         );
 
 
-        this.setFlag(
-            FLAG_PF,
-            parity8(result & 0xFF)
-        );
+        const signedA =
+            a | 0;
 
+        const signedB =
+            b | 0;
 
-        const overflow =
-            (
-                ((a ^ b) &
-                (a ^ result) &
-                0x80000000) !== 0
-            );
+        const signedResult =
+            result | 0;
 
 
         this.setFlag(
             FLAG_OF,
-            overflow
+            (
+                signedA >= 0 &&
+                signedB < 0 &&
+                signedResult < 0
+            ) ||
+            (
+                signedA < 0 &&
+                signedB >= 0 &&
+                signedResult >= 0
+            )
         );
 
     }
 
 
-    /* --------------------------------------------------------
-       MODRM
-    -------------------------------------------------------- */
+    fetch8() {
+
+        const value =
+            this.memory.read8(
+                this.EIP
+            );
+
+
+        this.EIP =
+            (
+                this.EIP +
+                1
+            ) >>> 0;
+
+
+        return value;
+
+    }
+
+
+    fetch32() {
+
+        const value =
+            this.memory.read32(
+                this.EIP
+            );
+
+
+        this.EIP =
+            (
+                this.EIP +
+                4
+            ) >>> 0;
+
+
+        return value;
+
+    }
+
 
     decodeModRM() {
 
-        const modrm =
+        const byte =
             this.fetch8();
 
 
         const mod =
-            (modrm >> 6) & 3;
+            (byte >> 6) & 0x03;
 
 
         const reg =
-            (modrm >> 3) & 7;
+            (byte >> 3) & 0x07;
 
 
         const rm =
-            modrm & 7;
+            byte & 0x07;
 
 
-        if (
-            mod === 3
-        ) {
-
-            return {
-
-                mod,
-                reg,
-                rm,
-                register: true
-
-            };
-
-        }
+        let displacement =
+            0;
 
 
-        let address = 0;
+        let displacementSize =
+            0;
 
 
         /*
-         * Simple 32-bit addressing.
+         * 32-bit addressing.
+         *
+         * SIB is supported in basic form.
          */
 
+        let sib = null;
+
+
         if (
+            mod !== 3 &&
             rm === 4
         ) {
 
-            /*
-             * SIB byte.
-             */
-
-            const sib =
+            sib =
                 this.fetch8();
 
-
-            const scale =
-                (sib >> 6) & 3;
+        }
 
 
-            const index =
-                (sib >> 3) & 7;
-
-
-            const base =
-                sib & 7;
-
+        if (
+            mod === 0
+        ) {
 
             if (
-                index !== 4
-            ) {
-
-                address =
-                    (
-                        address +
-                        (
-                            this.getRegister(
-                                index
-                            ) *
-                            (1 << scale)
-                        )
-                    ) >>> 0;
-
-            }
-
-
-            if (
-                base === 5 &&
-                mod === 0
-            ) {
-
-                address =
-                    (
-                        address +
-                        this.fetch32s()
-                    ) >>> 0;
-
-            } else {
-
-                address =
-                    (
-                        address +
-                        this.getRegister(
-                            base
-                        )
-                    ) >>> 0;
-
-            }
-
-        } else {
-
-            if (
-                mod === 0 &&
                 rm === 5
             ) {
 
-                address =
-                    this.fetch32s() >>> 0;
+                displacement =
+                    this.fetch32();
 
-            } else {
-
-                address =
-                    this.getRegister(
-                        rm
-                    );
+                displacementSize =
+                    4;
 
             }
 
-        }
+            if (
+                sib &&
+                (sib & 7) === 5
+            ) {
 
+                displacement =
+                    this.fetch32();
 
-        if (
+                displacementSize =
+                    4;
+
+            }
+
+        } else if (
             mod === 1
         ) {
 
-            address =
-                (
-                    address +
-                    this.fetch8Signed()
-                ) >>> 0;
+            displacement =
+                signExtend8(
+                    this.fetch8()
+                );
 
-        }
+            displacementSize =
+                1;
 
-
-        if (
+        } else if (
             mod === 2
         ) {
 
-            address =
-                (
-                    address +
-                    this.fetch32s()
-                ) >>> 0;
+            displacement =
+                this.fetch32();
+
+            displacementSize =
+                4;
 
         }
 
@@ -1022,169 +900,187 @@ class X86CPU {
             mod,
             reg,
             rm,
-            register: false,
-            address
+            sib,
+            displacement,
+            displacementSize
 
         };
 
     }
 
 
-    fetch8Signed() {
+    getEffectiveAddress(
+        modrm
+    ) {
 
-        return this.memory.read8s(
-            this.EIP++
-        );
+        if (
+            modrm.mod === 3
+        ) {
+
+            return null;
+
+        }
+
+
+        let base =
+            0;
+
+
+        let index =
+            0;
+
+
+        let scale =
+            1;
+
+
+        if (
+            modrm.sib
+        ) {
+
+            const sib =
+                modrm.sib;
+
+
+            const scaleBits =
+                (sib >> 6) & 3;
+
+
+            scale =
+                1 << scaleBits;
+
+
+            const indexReg =
+                (sib >> 3) & 7;
+
+
+            const baseReg =
+                sib & 7;
+
+
+            if (
+                indexReg !== 4
+            ) {
+
+                index =
+                    this.getRegister(
+                        indexReg
+                    );
+
+            }
+
+
+            if (
+                modrm.mod === 0 &&
+                baseReg === 5
+            ) {
+
+                base =
+                    0;
+
+            } else {
+
+                base =
+                    this.getRegister(
+                        baseReg
+                    );
+
+            }
+
+        } else {
+
+            if (
+                modrm.mod === 0 &&
+                modrm.rm === 5
+            ) {
+
+                base =
+                    0;
+
+            } else {
+
+                base =
+                    this.getRegister(
+                        modrm.rm
+                    );
+
+            }
+
+        }
+
+
+        return (
+            base +
+            index * scale +
+            modrm.displacement
+        ) >>> 0;
 
     }
 
 
     readRM32(
-        operand
+        modrm
     ) {
 
         if (
-            operand.register
+            modrm.mod === 3
         ) {
 
             return this.getRegister(
-                operand.rm
+                modrm.rm
             );
 
         }
 
 
+        const address =
+            this.getEffectiveAddress(
+                modrm
+            );
+
+
         return this.memory.read32(
-            operand.address
+            address
         );
 
     }
 
 
     writeRM32(
-        operand,
+        modrm,
         value
     ) {
 
-        value =
-            value >>> 0;
-
-
         if (
-            operand.register
+            modrm.mod === 3
         ) {
 
             this.setRegister(
-                operand.rm,
+                modrm.rm,
                 value
             );
+
 
             return;
 
         }
 
 
+        const address =
+            this.getEffectiveAddress(
+                modrm
+            );
+
+
         this.memory.write32(
-            operand.address,
+            address,
             value
         );
 
     }
 
 
-    /* --------------------------------------------------------
-       STACK
-    -------------------------------------------------------- */
-
-    push32(
-        value
-    ) {
-
-        const newESP =
-            (
-                this.registers.ESP -
-                4
-            ) >>> 0;
-
-
-        if (
-            newESP >= this.memory.size
-        ) {
-
-            throw new Error(
-                "Stack overflow."
-            );
-
-        }
-
-
-        this.registers.ESP =
-            newESP;
-
-
-        this.memory.write32(
-            newESP,
-            value
-        );
-
-    }
-
-
-    pop32() {
-
-        const esp =
-            this.registers.ESP;
-
-
-        if (
-            esp + 4 >
-            this.memory.size
-        ) {
-
-            throw new Error(
-                "Stack underflow."
-            );
-
-        }
-
-
-        const value =
-            this.memory.read32(
-                esp
-            );
-
-
-        this.registers.ESP =
-            (
-                esp + 4
-            ) >>> 0;
-
-
-        return value;
-
-    }
-
-
-    /* --------------------------------------------------------
-       EXECUTE ONE INSTRUCTION
-    -------------------------------------------------------- */
-
-    step() {
-
-        if (
-            this.halted
-        ) {
-
-            return {
-
-                opcode: 0xF4,
-
-                mnemonic: "HLT"
-
-            };
-
-        }
-
+    executeInstruction() {
 
         const startEIP =
             this.EIP;
@@ -1194,19 +1090,16 @@ class X86CPU {
             this.fetch8();
 
 
-        this.lastOpcode =
-            opcode;
-
-
         let mnemonic =
             "UNKNOWN";
 
 
         switch (opcode) {
 
-            /* ================================================
-               NOP
-            ================================================= */
+
+            /*
+             * NOP
+             */
 
             case 0x90:
 
@@ -1216,29 +1109,11 @@ class X86CPU {
                 break;
 
 
-            /* ================================================
-               HLT
-            ================================================= */
-
-            case 0xF4:
-
-                mnemonic =
-                    "HLT";
-
-                this.halted =
-                    true;
-
-                this.running =
-                    false;
-
-                break;
-
-
-            /* ================================================
-               MOV r32, imm32
-               
-               B8 + register
-            ================================================= */
+            /*
+             * MOV r32, imm32
+             *
+             * B8 + register
+             */
 
             case 0xB8:
             case 0xB9:
@@ -1249,9 +1124,8 @@ class X86CPU {
             case 0xBE:
             case 0xBF: {
 
-                const reg =
-                    opcode -
-                    0xB8;
+                const registerIndex =
+                    opcode - 0xB8;
 
 
                 const value =
@@ -1259,29 +1133,88 @@ class X86CPU {
 
 
                 this.setRegister(
-                    reg,
+                    registerIndex,
                     value
                 );
 
 
                 mnemonic =
-                    "MOV " +
-                    REGISTER_NAMES[reg] +
-                    ", 0x" +
-                    value
-                        .toString(16)
-                        .toUpperCase();
+                    `MOV ${this.getRegisterName(registerIndex)}, ${hex(value)}`;
 
                 break;
 
             }
 
 
-            /* ================================================
-               ADD EAX, imm32
-               
-               05 id
-            ================================================= */
+            /*
+             * MOV r/m32, r32
+             *
+             * 89 /r
+             */
+
+            case 0x89: {
+
+                const modrm =
+                    this.decodeModRM();
+
+
+                const value =
+                    this.getRegister(
+                        modrm.reg
+                    );
+
+
+                this.writeRM32(
+                    modrm,
+                    value
+                );
+
+
+                mnemonic =
+                    "MOV r/m32, r32";
+
+                break;
+
+            }
+
+
+            /*
+             * MOV r32, r/m32
+             *
+             * 8B /r
+             */
+
+            case 0x8B: {
+
+                const modrm =
+                    this.decodeModRM();
+
+
+                const value =
+                    this.readRM32(
+                        modrm
+                    );
+
+
+                this.setRegister(
+                    modrm.reg,
+                    value
+                );
+
+
+                mnemonic =
+                    "MOV r32, r/m32";
+
+                break;
+
+            }
+
+
+            /*
+             * ADD EAX, imm32
+             *
+             * 05 id
+             */
 
             case 0x05: {
 
@@ -1312,21 +1245,122 @@ class X86CPU {
 
 
                 mnemonic =
-                    "ADD EAX, 0x" +
-                    value
-                        .toString(16)
-                        .toUpperCase();
+                    `ADD EAX, ${hex(value)}`;
 
                 break;
 
             }
 
 
-            /* ================================================
-               SUB EAX, imm32
-               
-               2D id
-            ================================================= */
+            /*
+             * ADD r/m32, r32
+             *
+             * 01 /r
+             */
+
+            case 0x01: {
+
+                const modrm =
+                    this.decodeModRM();
+
+
+                const old =
+                    this.readRM32(
+                        modrm
+                    );
+
+
+                const value =
+                    this.getRegister(
+                        modrm.reg
+                    );
+
+
+                const result =
+                    (
+                        old +
+                        value
+                    ) >>> 0;
+
+
+                this.writeRM32(
+                    modrm,
+                    result
+                );
+
+
+                this.updateAddFlags(
+                    old,
+                    value,
+                    result
+                );
+
+
+                mnemonic =
+                    "ADD r/m32, r32";
+
+                break;
+
+            }
+
+
+            /*
+             * ADD r32, r/m32
+             *
+             * 03 /r
+             */
+
+            case 0x03: {
+
+                const modrm =
+                    this.decodeModRM();
+
+
+                const old =
+                    this.getRegister(
+                        modrm.reg
+                    );
+
+
+                const value =
+                    this.readRM32(
+                        modrm
+                    );
+
+
+                const result =
+                    (
+                        old +
+                        value
+                    ) >>> 0;
+
+
+                this.setRegister(
+                    modrm.reg,
+                    result
+                );
+
+
+                this.updateAddFlags(
+                    old,
+                    value,
+                    result
+                );
+
+
+                mnemonic =
+                    "ADD r32, r/m32";
+
+                break;
+
+            }
+
+
+            /*
+             * SUB EAX, imm32
+             *
+             * 2D id
+             */
 
             case 0x2D: {
 
@@ -1357,21 +1391,70 @@ class X86CPU {
 
 
                 mnemonic =
-                    "SUB EAX, 0x" +
-                    value
-                        .toString(16)
-                        .toUpperCase();
+                    `SUB EAX, ${hex(value)}`;
 
                 break;
 
             }
 
 
-            /* ================================================
-               INC r32
-               
-               40 + register
-            ================================================= */
+            /*
+             * SUB r/m32, r32
+             *
+             * 29 /r
+             */
+
+            case 0x29: {
+
+                const modrm =
+                    this.decodeModRM();
+
+
+                const old =
+                    this.readRM32(
+                        modrm
+                    );
+
+
+                const value =
+                    this.getRegister(
+                        modrm.reg
+                    );
+
+
+                const result =
+                    (
+                        old -
+                        value
+                    ) >>> 0;
+
+
+                this.writeRM32(
+                    modrm,
+                    result
+                );
+
+
+                this.updateSubFlags(
+                    old,
+                    value,
+                    result
+                );
+
+
+                mnemonic =
+                    "SUB r/m32, r32";
+
+                break;
+
+            }
+
+
+            /*
+             * INC r32
+             *
+             * 40 + register
+             */
 
             case 0x40:
             case 0x41:
@@ -1382,14 +1465,13 @@ class X86CPU {
             case 0x46:
             case 0x47: {
 
-                const reg =
-                    opcode -
-                    0x40;
+                const index =
+                    opcode - 0x40;
 
 
                 const old =
                     this.getRegister(
-                        reg
+                        index
                     );
 
 
@@ -1401,48 +1483,39 @@ class X86CPU {
 
 
                 this.setRegister(
-                    reg,
-                    result
-                );
-
-
-                /*
-                 * INC does not modify CF.
-                 */
-
-                const oldCF =
-                    this.getFlag(
-                        FLAG_CF
-                    );
-
-
-                this.updateAddFlags(
-                    old,
-                    1,
+                    index,
                     result
                 );
 
 
                 this.setFlag(
-                    FLAG_CF,
-                    oldCF
+                    FLAG_ZF,
+                    result === 0
+                );
+
+
+                this.setFlag(
+                    FLAG_SF,
+                    (
+                        result &
+                        0x80000000
+                    ) !== 0
                 );
 
 
                 mnemonic =
-                    "INC " +
-                    REGISTER_NAMES[reg];
+                    `INC ${this.getRegisterName(index)}`;
 
                 break;
 
             }
 
 
-            /* ================================================
-               DEC r32
-               
-               48 + register
-            ================================================= */
+            /*
+             * DEC r32
+             *
+             * 48 + register
+             */
 
             case 0x48:
             case 0x49:
@@ -1453,14 +1526,13 @@ class X86CPU {
             case 0x4E:
             case 0x4F: {
 
-                const reg =
-                    opcode -
-                    0x48;
+                const index =
+                    opcode - 0x48;
 
 
                 const old =
                     this.getRegister(
-                        reg
+                        index
                     );
 
 
@@ -1472,179 +1544,297 @@ class X86CPU {
 
 
                 this.setRegister(
-                    reg,
-                    result
-                );
-
-
-                const oldCF =
-                    this.getFlag(
-                        FLAG_CF
-                    );
-
-
-                this.updateSubFlags(
-                    old,
-                    1,
+                    index,
                     result
                 );
 
 
                 this.setFlag(
-                    FLAG_CF,
-                    oldCF
+                    FLAG_ZF,
+                    result === 0
+                );
+
+
+                this.setFlag(
+                    FLAG_SF,
+                    (
+                        result &
+                        0x80000000
+                    ) !== 0
                 );
 
 
                 mnemonic =
-                    "DEC " +
-                    REGISTER_NAMES[reg];
+                    `DEC ${this.getRegisterName(index)}`;
 
                 break;
 
             }
 
 
-            /* ================================================
-               XOR r/m32, r32
-               
-               31 /r
-            ================================================= */
+            /*
+             * CMP EAX, imm32
+             *
+             * 3D id
+             */
 
-            case 0x31: {
+            case 0x3D: {
 
-                const operand =
+                const value =
+                    this.fetch32();
+
+
+                const old =
+                    this.registers.EAX;
+
+
+                const result =
+                    (
+                        old -
+                        value
+                    ) >>> 0;
+
+
+                this.updateSubFlags(
+                    old,
+                    value,
+                    result
+                );
+
+
+                mnemonic =
+                    `CMP EAX, ${hex(value)}`;
+
+                break;
+
+            }
+
+
+            /*
+             * CMP r32, r/m32
+             *
+             * 3B /r
+             */
+
+            case 0x3B: {
+
+                const modrm =
                     this.decodeModRM();
 
 
-                const source =
+                const a =
                     this.getRegister(
-                        operand.reg
+                        modrm.reg
                     );
 
 
-                const destination =
+                const b =
                     this.readRM32(
-                        operand
+                        modrm
                     );
 
 
                 const result =
                     (
-                        destination ^
-                        source
+                        a -
+                        b
                     ) >>> 0;
 
 
-                this.writeRM32(
-                    operand,
-                    result
-                );
-
-
-                this.updateLogicFlags(
+                this.updateSubFlags(
+                    a,
+                    b,
                     result
                 );
 
 
                 mnemonic =
-                    "XOR " +
-                    this.operandName(
-                        operand
-                    ) +
-                    ", " +
-                    REGISTER_NAMES[
-                        operand.reg
-                    ];
+                    "CMP r32, r/m32";
 
                 break;
 
             }
 
 
-            /* ================================================
-               MOV r/m32, r32
-               
-               89 /r
-            ================================================= */
+            /*
+             * TEST EAX, imm32
+             *
+             * A9 id
+             */
 
-            case 0x89: {
-
-                const operand =
-                    this.decodeModRM();
-
-
-                const source =
-                    this.getRegister(
-                        operand.reg
-                    );
-
-
-                this.writeRM32(
-                    operand,
-                    source
-                );
-
-
-                mnemonic =
-                    "MOV " +
-                    this.operandName(
-                        operand
-                    ) +
-                    ", " +
-                    REGISTER_NAMES[
-                        operand.reg
-                    ];
-
-                break;
-
-            }
-
-
-            /* ================================================
-               MOV r32, r/m32
-               
-               8B /r
-            ================================================= */
-
-            case 0x8B: {
-
-                const operand =
-                    this.decodeModRM();
-
+            case 0xA9: {
 
                 const value =
-                    this.readRM32(
-                        operand
-                    );
+                    this.fetch32();
 
 
-                this.setRegister(
-                    operand.reg,
-                    value
+                const result =
+                    (
+                        this.registers.EAX &
+                        value
+                    ) >>> 0;
+
+
+                this.setFlag(
+                    FLAG_ZF,
+                    result === 0
+                );
+
+
+                this.setFlag(
+                    FLAG_SF,
+                    (
+                        result &
+                        0x80000000
+                    ) !== 0
                 );
 
 
                 mnemonic =
-                    "MOV " +
-                    REGISTER_NAMES[
-                        operand.reg
-                    ] +
-                    ", " +
-                    this.operandName(
-                        operand
-                    );
+                    `TEST EAX, ${hex(value)}`;
 
                 break;
 
             }
 
 
-            /* ================================================
-               PUSH r32
-               
-               50 + register
-            ================================================= */
+            /*
+             * JMP rel8
+             *
+             * EB cb
+             */
+
+            case 0xEB: {
+
+                const displacement =
+                    signExtend8(
+                        this.fetch8()
+                    );
+
+
+                this.EIP =
+                    (
+                        this.EIP +
+                        displacement
+                    ) >>> 0;
+
+
+                mnemonic =
+                    "JMP rel8";
+
+                break;
+
+            }
+
+
+            /*
+             * JMP rel32
+             *
+             * E9 cd
+             */
+
+            case 0xE9: {
+
+                const displacement =
+                    signExtend32(
+                        this.fetch32()
+                    );
+
+
+                this.EIP =
+                    (
+                        this.EIP +
+                        displacement
+                    ) >>> 0;
+
+
+                mnemonic =
+                    "JMP rel32";
+
+                break;
+
+            }
+
+
+            /*
+             * JZ / JE
+             *
+             * 74 cb
+             */
+
+            case 0x74: {
+
+                const displacement =
+                    signExtend8(
+                        this.fetch8()
+                    );
+
+
+                if (
+                    this.getFlag(
+                        FLAG_ZF
+                    )
+                ) {
+
+                    this.EIP =
+                        (
+                            this.EIP +
+                            displacement
+                        ) >>> 0;
+
+                }
+
+
+                mnemonic =
+                    "JZ rel8";
+
+                break;
+
+            }
+
+
+            /*
+             * JNZ / JNE
+             *
+             * 75 cb
+             */
+
+            case 0x75: {
+
+                const displacement =
+                    signExtend8(
+                        this.fetch8()
+                    );
+
+
+                if (
+                    !this.getFlag(
+                        FLAG_ZF
+                    )
+                ) {
+
+                    this.EIP =
+                        (
+                            this.EIP +
+                            displacement
+                        ) >>> 0;
+
+                }
+
+
+                mnemonic =
+                    "JNZ rel8";
+
+                break;
+
+            }
+
+
+            /*
+             * PUSH r32
+             *
+             * 50 + register
+             */
 
             case 0x50:
             case 0x51:
@@ -1655,36 +1845,30 @@ class X86CPU {
             case 0x56:
             case 0x57: {
 
-                const reg =
-                    opcode -
-                    0x50;
-
-
-                const value =
-                    this.getRegister(
-                        reg
-                    );
+                const index =
+                    opcode - 0x50;
 
 
                 this.push32(
-                    value
+                    this.getRegister(
+                        index
+                    )
                 );
 
 
                 mnemonic =
-                    "PUSH " +
-                    REGISTER_NAMES[reg];
+                    `PUSH ${this.getRegisterName(index)}`;
 
                 break;
 
             }
 
 
-            /* ================================================
-               POP r32
-               
-               58 + register
-            ================================================= */
+            /*
+             * POP r32
+             *
+             * 58 + register
+             */
 
             case 0x58:
             case 0x59:
@@ -1695,9 +1879,8 @@ class X86CPU {
             case 0x5E:
             case 0x5F: {
 
-                const reg =
-                    opcode -
-                    0x58;
+                const index =
+                    opcode - 0x58;
 
 
                 const value =
@@ -1705,106 +1888,56 @@ class X86CPU {
 
 
                 this.setRegister(
-                    reg,
+                    index,
                     value
                 );
 
 
                 mnemonic =
-                    "POP " +
-                    REGISTER_NAMES[reg];
+                    `POP ${this.getRegisterName(index)}`;
 
                 break;
 
             }
 
 
-            /* ================================================
-               JMP rel32
-               
-               E9 cd
-            ================================================= */
+            /*
+             * PUSH imm32
+             *
+             * 68 id
+             */
 
-            case 0xE9: {
+            case 0x68: {
 
-                const displacement =
-                    this.fetch32s();
+                const value =
+                    this.fetch32();
 
 
-                this.EIP =
-                    (
-                        this.EIP +
-                        displacement
-                    ) >>> 0;
+                this.push32(
+                    value
+                );
 
 
                 mnemonic =
-                    "JMP " +
-                    displacement;
+                    `PUSH ${hex(value)}`;
 
                 break;
 
             }
 
 
-            /* ================================================
-               JMP rel8
-               
-               EB cb
-            ================================================= */
-
-            case 0xEB: {
-
-                const displacement =
-                    this.fetch8Signed();
-
-
-                this.EIP =
-                    (
-                        this.EIP +
-                        displacement
-                    ) >>> 0;
-
-
-                mnemonic =
-                    "JMP " +
-                    displacement;
-
-                break;
-
-            }
-
-
-            /* ================================================
-               RET
-               
-               C3
-            ================================================= */
-
-            case 0xC3: {
-
-                this.EIP =
-                    this.pop32();
-
-
-                mnemonic =
-                    "RET";
-
-                break;
-
-            }
-
-
-            /* ================================================
-               CALL rel32
-               
-               E8 cd
-            ================================================= */
+            /*
+             * CALL rel32
+             *
+             * E8 cd
+             */
 
             case 0xE8: {
 
                 const displacement =
-                    this.fetch32s();
+                    signExtend32(
+                        this.fetch32()
+                    );
 
 
                 const returnAddress =
@@ -1824,181 +1957,108 @@ class X86CPU {
 
 
                 mnemonic =
-                    "CALL " +
-                    displacement;
+                    "CALL rel32";
 
                 break;
 
             }
 
 
-            /* ================================================
-               MOV r/m32, imm32
-               
-               C7 /0
-            ================================================= */
+            /*
+             * RET
+             *
+             * C3
+             */
 
-            case 0xC7: {
+            case 0xC3: {
 
-                const operand =
-                    this.decodeModRM();
-
-
-                if (
-                    operand.reg !== 0
-                ) {
-
-                    throw new Error(
-                        "Unsupported C7 /" +
-                        operand.reg
-                    );
-
-                }
-
-
-                const value =
-                    this.fetch32();
-
-
-                this.writeRM32(
-                    operand,
-                    value
-                );
+                this.EIP =
+                    this.pop32();
 
 
                 mnemonic =
-                    "MOV " +
-                    this.operandName(
-                        operand
-                    ) +
-                    ", 0x" +
-                    value
-                        .toString(16)
-                        .toUpperCase();
+                    "RET";
 
                 break;
 
             }
+
+
+            /*
+             * HLT
+             *
+             * F4
+             */
+
+            case 0xF4:
+
+                this.halted =
+                    true;
+
+                this.running =
+                    false;
+
+
+                mnemonic =
+                    "HLT";
+
+                break;
 
 
             default:
 
                 throw new Error(
-                    "Unsupported x86 opcode 0x" +
-                    opcode
-                        .toString(16)
-                        .padStart(2, "0")
-                        .toUpperCase() +
-                    " at EIP 0x" +
-                    startEIP
-                        .toString(16)
-                        .padStart(8, "0")
-                        .toUpperCase()
+                    `Unsupported x86 opcode ${hex(opcode, 2)} at ${hex(startEIP)}`
                 );
 
         }
 
 
         this.cycles++;
+
         this.instructions++;
 
-        this.lastInstruction =
-            mnemonic;
 
+        this.lastInstruction = {
 
-        return {
+            address:
+                startEIP >>> 0,
 
             opcode,
 
-            mnemonic,
-
-            address:
-                startEIP,
-
-            nextEIP:
-                this.EIP,
-
-            cycles:
-                this.cycles
+            mnemonic
 
         };
 
+
+        return this.lastInstruction;
+
     }
 
 
-    /* --------------------------------------------------------
-       OPERAND NAME
-    -------------------------------------------------------- */
-
-    operandName(
-        operand
+    getRegisterName(
+        index
     ) {
 
-        if (
-            operand.register
-        ) {
+        return [
 
-            return REGISTER_NAMES[
-                operand.rm
-            ];
+            "EAX",
+            "ECX",
+            "EDX",
+            "EBX",
+            "ESP",
+            "EBP",
+            "ESI",
+            "EDI"
 
-        }
-
-
-        return (
-            "[0x" +
-            operand.address
-                .toString(16)
-                .padStart(8, "0")
-                .toUpperCase() +
-            "]"
-        );
+        ][index];
 
     }
 
-
-    /* --------------------------------------------------------
-       RUN
-    -------------------------------------------------------- */
 
     run(
-        programOrOptions
+        maxInstructions = 100000
     ) {
-
-        /*
-         * Compatibility with old WebBktx
-         * diagnostic API.
-         *
-         * Example:
-         *
-         * cpu.run([
-         *   { opcode: 0x01, value: 10 },
-         *   { opcode: 0x02, value: 20 }
-         * ])
-         */
-
-        if (
-            Array.isArray(
-                programOrOptions
-            )
-        ) {
-
-            return this.runTestProgram(
-                programOrOptions
-            );
-
-        }
-
-
-        const options =
-            programOrOptions ||
-            {};
-
-
-        const maxCycles =
-            options.maxCycles ||
-            100000;
-
 
         this.running =
             true;
@@ -2015,10 +2075,10 @@ class X86CPU {
         while (
             this.running &&
             !this.halted &&
-            executed < maxCycles
+            executed < maxInstructions
         ) {
 
-            this.step();
+            this.executeInstruction();
 
             executed++;
 
@@ -2026,7 +2086,8 @@ class X86CPU {
 
 
         if (
-            executed >= maxCycles
+            executed >=
+            maxInstructions
         ) {
 
             this.running =
@@ -2040,198 +2101,23 @@ class X86CPU {
     }
 
 
-    /* --------------------------------------------------------
-       TEST PROGRAM COMPATIBILITY
-    -------------------------------------------------------- */
-
-    runTestProgram(
-        program
-    ) {
-
-        this.reset();
-
-
-        this.running =
-            true;
-
-
-        for (
-            const instruction
-            of program
-        ) {
-
-            if (
-                !this.running
-            ) {
-
-                break;
-
-            }
-
-
-            switch (
-                instruction.opcode
-            ) {
-
-                /*
-                 * Legacy:
-                 *
-                 * 01 = MOV EAX, immediate
-                 */
-
-                case 0x01:
-
-                    this.registers.EAX =
-                        instruction.value >>> 0;
-
-                    this.EIP++;
-
-                    this.cycles++;
-
-                    this.instructions++;
-
-                    this.lastInstruction =
-                        "MOV EAX, " +
-                        instruction.value;
-
-                    break;
-
-
-                /*
-                 * Legacy:
-                 *
-                 * 02 = ADD EAX, immediate
-                 */
-
-                case 0x02: {
-
-                    const old =
-                        this.registers.EAX;
-
-
-                    const value =
-                        instruction.value >>> 0;
-
-
-                    const result =
-                        (
-                            old +
-                            value
-                        ) >>> 0;
-
-
-                    this.registers.EAX =
-                        result;
-
-
-                    this.updateAddFlags(
-                        old,
-                        value,
-                        result
-                    );
-
-
-                    this.EIP++;
-
-                    this.cycles++;
-
-                    this.instructions++;
-
-                    this.lastInstruction =
-                        "ADD EAX, " +
-                        instruction.value;
-
-                    break;
-
-                }
-
-
-                /*
-                 * Legacy:
-                 *
-                 * 03 = SUB EAX, immediate
-                 */
-
-                case 0x03: {
-
-                    const old =
-                        this.registers.EAX;
-
-
-                    const value =
-                        instruction.value >>> 0;
-
-
-                    const result =
-                        (
-                            old -
-                            value
-                        ) >>> 0;
-
-
-                    this.registers.EAX =
-                        result;
-
-
-                    this.updateSubFlags(
-                        old,
-                        value,
-                        result
-                    );
-
-
-                    this.EIP++;
-
-                    this.cycles++;
-
-                    this.instructions++;
-
-                    this.lastInstruction =
-                        "SUB EAX, " +
-                        instruction.value;
-
-                    break;
-
-                }
-
-
-                default:
-
-                    throw new Error(
-                        "Unknown test opcode: 0x" +
-                        instruction.opcode
-                            .toString(16)
-                    );
-
-            }
-
-        }
-
+    stop() {
 
         this.running =
             false;
 
-
-        return this.getState();
-
     }
 
-
-    /* --------------------------------------------------------
-       STATE
-    -------------------------------------------------------- */
 
     getState() {
 
         return {
 
             registers:
-                {
-                    ...this.registers
-                },
+                { ...this.registers },
 
             EIP:
-                this.EIP,
+                this.EIP >>> 0,
 
             EFLAGS:
                 this.EFLAGS >>> 0,
@@ -2248,9 +2134,6 @@ class X86CPU {
             running:
                 this.running,
 
-            lastOpcode:
-                this.lastOpcode,
-
             lastInstruction:
                 this.lastInstruction
 
@@ -2258,284 +2141,12 @@ class X86CPU {
 
     }
 
-
-    /* --------------------------------------------------------
-       LOAD CODE
-    -------------------------------------------------------- */
-
-    loadCode(
-        bytes,
-        address = DEFAULT_LOAD_ADDRESS
-    ) {
-
-        this.memory.writeBytes(
-            address,
-            bytes
-        );
-
-
-        this.EIP =
-            address >>> 0;
-
-
-        return {
-
-            address:
-                address >>> 0,
-
-            size:
-                bytes.length
-
-        };
-
-    }
-
-
-    /* --------------------------------------------------------
-       STOP
-    -------------------------------------------------------- */
-
-    stop() {
-
-        this.running =
-            false;
-
-    }
-
 }
 
 
 /* ============================================================
-   PARITY
+   XBE IMAGE
 ============================================================ */
-
-function parity8(
-    value
-) {
-
-    value &=
-        0xFF;
-
-
-    let count =
-        0;
-
-
-    for (
-        let i = 0;
-        i < 8;
-        i++
-    ) {
-
-        count +=
-            (value >> i) & 1;
-
-    }
-
-
-    return (
-        (count & 1) === 0
-    );
-
-}
-
-
-/* ============================================================
-   RAM DIAGNOSTICS
-============================================================ */
-
-function testRAM(
-    memory
-) {
-
-    const addresses = [
-
-        0x000000,
-        0x000001,
-        0x000100,
-        0x001000,
-        0x010000,
-        0x100000,
-        0x400000,
-        0x800000,
-        0x1000000,
-        0x2000000,
-        0x3FFFFF,
-        memory.size - 1
-
-    ];
-
-
-    /*
-     * 0xAA
-     */
-
-    for (
-        const address
-        of addresses
-    ) {
-
-        memory.write8(
-            address,
-            0xAA
-        );
-
-
-        const value =
-            memory.read8(
-                address
-            );
-
-
-        if (
-            value !== 0xAA
-        ) {
-
-            return {
-
-                passed: false,
-
-                test: "0xAA",
-
-                address,
-
-                expected: 0xAA,
-
-                received: value
-
-            };
-
-        }
-
-    }
-
-
-    /*
-     * 0x55
-     */
-
-    for (
-        const address
-        of addresses
-    ) {
-
-        memory.write8(
-            address,
-            0x55
-        );
-
-
-        const value =
-            memory.read8(
-                address
-            );
-
-
-        if (
-            value !== 0x55
-        ) {
-
-            return {
-
-                passed: false,
-
-                test: "0x55",
-
-                address,
-
-                expected: 0x55,
-
-                received: value
-
-            };
-
-        }
-
-    }
-
-
-    /*
-     * Address pattern
-     */
-
-    for (
-        let i = 0;
-        i < addresses.length;
-        i++
-    ) {
-
-        memory.write8(
-            addresses[i],
-            (
-                i + 1
-            ) & 0xFF
-        );
-
-    }
-
-
-    for (
-        let i = 0;
-        i < addresses.length;
-        i++
-    ) {
-
-        const value =
-            memory.read8(
-                addresses[i]
-            );
-
-
-        if (
-            value !==
-            (
-                i + 1
-            ) & 0xFF
-        ) {
-
-            return {
-
-                passed: false,
-
-                test: "ADDRESS",
-
-                address:
-                    addresses[i],
-
-                expected:
-                    (
-                        i + 1
-                    ) & 0xFF,
-
-                received:
-                    value
-
-            };
-
-        }
-
-    }
-
-
-    return {
-
-        passed: true,
-
-        size:
-            memory.size
-
-    };
-
-}
-
-
-/* ============================================================
-   XBE
-============================================================ */
-
-const XBE_MAGIC =
-    0x48454258;
-
 
 class XBEImage {
 
@@ -2546,19 +2157,33 @@ class XBEImage {
         this.file =
             file;
 
+
         this.buffer =
             null;
+
 
         this.bytes =
             null;
 
+
         this.valid =
             false;
+
 
         this.magic =
             null;
 
-        this.header = {};
+
+        this.header =
+            {};
+
+
+        this.sections =
+            [];
+
+
+        this.entryPoint =
+            null;
 
     }
 
@@ -2568,7 +2193,7 @@ class XBEImage {
         if (!this.file) {
 
             throw new Error(
-                "No game file supplied."
+                "No XBE file supplied."
             );
 
         }
@@ -2589,7 +2214,7 @@ class XBEImage {
         ) {
 
             throw new Error(
-                "Game file is too small."
+                "XBE file is too small."
             );
 
         }
@@ -2609,7 +2234,8 @@ class XBEImage {
 
 
         this.valid =
-            this.magic === XBE_MAGIC;
+            this.magic ===
+            XBE_MAGIC;
 
 
         if (
@@ -2634,6 +2260,12 @@ class XBEImage {
             );
 
 
+        /*
+         * XBE header fields.
+         *
+         * We deliberately validate offsets before reading.
+         */
+
         this.header.magic =
             view.getUint32(
                 0,
@@ -2641,21 +2273,8 @@ class XBEImage {
             );
 
 
-        this.header.size =
-            this.bytes.length;
-
-
-        /*
-         * XBE header fields.
-         *
-         * These are read conservatively because
-         * the full XBE image/section mapping is
-         * not implemented yet.
-         */
-
-
         if (
-            this.bytes.length >= 0x104
+            this.bytes.length >= 0x18
         ) {
 
             this.header.baseAddress =
@@ -2668,20 +2287,188 @@ class XBEImage {
 
 
         /*
-         * Entry point is normally represented
-         * by an RVA-like value in the XBE
-         * header.
+         * Entry point.
+         *
+         * XBE header entry point is at 0x128.
          */
 
         if (
-            this.bytes.length >= 0x128
+            this.bytes.length >= 0x12C
         ) {
 
-            this.header.entryPoint =
+            this.entryPoint =
                 view.getUint32(
                     0x128,
                     true
                 );
+
+
+            this.header.entryPoint =
+                this.entryPoint;
+
+        }
+
+
+        this.header.fileSize =
+            this.bytes.length;
+
+
+        /*
+         * Try to parse section table.
+         *
+         * Number of sections:
+         *
+         * 0x11C
+         *
+         * Section headers:
+         *
+         * 0x11C + 4
+         *
+         * This parser remains conservative.
+         */
+
+        if (
+            this.bytes.length >= 0x120
+        ) {
+
+            const sectionCount =
+                view.getUint32(
+                    0x11C,
+                    true
+                );
+
+
+            const sectionTable =
+                view.getUint32(
+                    0x120,
+                    true
+                );
+
+
+            this.header.sectionCount =
+                sectionCount;
+
+
+            this.header.sectionTable =
+                sectionTable;
+
+
+            this.parseSections(
+                sectionCount,
+                sectionTable
+            );
+
+        }
+
+    }
+
+
+    parseSections(
+        count,
+        tableOffset
+    ) {
+
+        const view =
+            new DataView(
+                this.buffer
+            );
+
+
+        this.sections =
+            [];
+
+
+        /*
+         * Basic safety limits.
+         */
+
+        const safeCount =
+            Math.min(
+                count >>> 0,
+                512
+            );
+
+
+        /*
+         * XBE section header size
+         * is 0x38 bytes.
+         */
+
+        const sectionSize =
+            0x38;
+
+
+        for (
+            let i = 0;
+            i < safeCount;
+            i++
+        ) {
+
+            const offset =
+                (
+                    tableOffset +
+                    i * sectionSize
+                ) >>> 0;
+
+
+            if (
+                offset +
+                sectionSize >
+                this.bytes.length
+            ) {
+
+                break;
+
+            }
+
+
+            const section = {
+
+                index:
+                    i,
+
+                flags:
+                    view.getUint32(
+                        offset,
+                        true
+                    ),
+
+                virtualAddress:
+                    view.getUint32(
+                        offset + 4,
+                        true
+                    ),
+
+                virtualSize:
+                    view.getUint32(
+                        offset + 8,
+                        true
+                    ),
+
+                rawAddress:
+                    view.getUint32(
+                        offset + 12,
+                        true
+                    ),
+
+                rawSize:
+                    view.getUint32(
+                        offset + 16,
+                        true
+                    ),
+
+                nameAddress:
+                    view.getUint32(
+                        offset + 20,
+                        true
+                    )
+
+            };
+
+
+            this.sections.push(
+                section
+            );
 
         }
 
@@ -2708,7 +2495,7 @@ class XBEImage {
 
     loadIntoMemory(
         memory,
-        address = DEFAULT_LOAD_ADDRESS
+        address = 0x10000
     ) {
 
         if (
@@ -2729,12 +2516,7 @@ class XBEImage {
         ) {
 
             throw new Error(
-                "Game image does not fit in emulated RAM. " +
-                "Image: " +
-                this.bytes.length +
-                " bytes, RAM: " +
-                memory.size +
-                " bytes."
+                "XBE image does not fit in emulated RAM."
             );
 
         }
@@ -2755,12 +2537,10 @@ class XBEImage {
                 this.bytes.length,
 
             entryPoint:
-                this.header.entryPoint ||
-                0,
+                this.entryPoint,
 
-            baseAddress:
-                this.header.baseAddress ||
-                0
+            sections:
+                this.sections.length
 
         };
 
@@ -2777,6 +2557,15 @@ async function loadGameFile(
     file,
     memory
 ) {
+
+    if (!file) {
+
+        throw new Error(
+            "No game file supplied."
+        );
+
+    }
+
 
     const image =
         new XBEImage(
@@ -2816,8 +2605,272 @@ async function loadGameFile(
         size:
             image.size,
 
+        entryPoint:
+            image.entryPoint,
+
+        sections:
+            image.sections,
+
         memory:
             memoryInfo
+
+    };
+
+}
+
+
+/* ============================================================
+   RAM DIAGNOSTICS
+============================================================ */
+
+function testRAM(
+    memory
+) {
+
+    const addresses = [
+
+        0x000000,
+        0x000001,
+        0x001000,
+        0x010000,
+        0x100000,
+        0x400000,
+        0x800000,
+        0xFFFFFC
+
+    ];
+
+
+    /*
+     * AA pattern
+     */
+
+    for (
+        const address
+        of addresses
+    ) {
+
+        memory.write32(
+            address,
+            0xAAAAAAAA
+        );
+
+
+        if (
+            memory.read32(
+                address
+            ) !==
+            0xAAAAAAAA
+        ) {
+
+            return {
+
+                passed:
+                    false,
+
+                test:
+                    "0xAA",
+
+                address
+
+            };
+
+        }
+
+    }
+
+
+    /*
+     * 55 pattern
+     */
+
+    for (
+        const address
+        of addresses
+    ) {
+
+        memory.write32(
+            address,
+            0x55555555
+        );
+
+
+        if (
+            memory.read32(
+                address
+            ) !==
+            0x55555555
+        ) {
+
+            return {
+
+                passed:
+                    false,
+
+                test:
+                    "0x55",
+
+                address
+
+            };
+
+        }
+
+    }
+
+
+    /*
+     * Address pattern
+     */
+
+    for (
+        let i = 0;
+        i < addresses.length;
+        i++
+    ) {
+
+        memory.write32(
+            addresses[i],
+            i + 1
+        );
+
+    }
+
+
+    for (
+        let i = 0;
+        i < addresses.length;
+        i++
+    ) {
+
+        if (
+            memory.read32(
+                addresses[i]
+            ) !==
+            i + 1
+        ) {
+
+            return {
+
+                passed:
+                    false,
+
+                test:
+                    "ADDRESS",
+
+                address:
+                    addresses[i]
+
+            };
+
+        }
+
+    }
+
+
+    return {
+
+        passed:
+            true,
+
+        size:
+            memory.size
+
+    };
+
+}
+
+
+/* ============================================================
+   CPU SELF TEST
+============================================================ */
+
+function testCPU() {
+
+    const memory =
+        new WebBktxMemory(
+            1024 * 1024
+        );
+
+
+    const cpu =
+        new X86CPU(
+            memory
+        );
+
+
+    /*
+     * Program:
+     *
+     * MOV EAX, 10
+     * ADD EAX, 20
+     * INC EAX
+     * SUB EAX, 1
+     * CMP EAX, 30
+     * JZ +2
+     * HLT
+     * HLT
+     *
+     * Expected:
+     *
+     * EAX = 30
+     * ZF = 1
+     */
+
+    const program = new Uint8Array([
+
+        0xB8,
+        0x0A, 0x00, 0x00, 0x00,
+
+        0x05,
+        0x14, 0x00, 0x00, 0x00,
+
+        0x40,
+
+        0x2D,
+        0x01, 0x00, 0x00, 0x00,
+
+        0x3D,
+        0x1E, 0x00, 0x00, 0x00,
+
+        0x74,
+        0x01,
+
+        0xF4,
+
+        0xF4
+
+    ]);
+
+
+    memory.writeBytes(
+        0,
+        program
+    );
+
+
+    cpu.EIP =
+        0;
+
+
+    const state =
+        cpu.run(
+            100
+        );
+
+
+    const passed =
+        state.registers.EAX === 30 &&
+        cpu.getFlag(
+            FLAG_ZF
+        );
+
+
+    return {
+
+        passed,
+
+        state
 
     };
 
@@ -2830,18 +2883,15 @@ async function loadGameFile(
 
 class WebBktxCore {
 
-    constructor(
-        options = {}
-    ) {
+    constructor() {
 
-        const memorySize =
-            options.memorySize ||
-            RAM_SIZE;
+        this.version =
+            WEBBKTX_CORE_VERSION;
 
 
         this.memory =
             new WebBktxMemory(
-                memorySize
+                RAM_SIZE
             );
 
 
@@ -2855,15 +2905,11 @@ class WebBktxCore {
             null;
 
 
-        this.version =
-            WEBBKTX_CORE_VERSION;
+        this.initialized =
+            true;
 
     }
 
-
-    /* --------------------------------------------------------
-       RESET
-    -------------------------------------------------------- */
 
     reset() {
 
@@ -2877,10 +2923,6 @@ class WebBktxCore {
     }
 
 
-    /* --------------------------------------------------------
-       DIAGNOSTICS
-    -------------------------------------------------------- */
-
     runDiagnostics() {
 
         const ram =
@@ -2889,107 +2931,40 @@ class WebBktxCore {
             );
 
 
+        const cpuTest =
+            testCPU();
+
+
         /*
-         * Legacy test API.
+         * Preserve the existing app.js API.
          *
-         * This remains because app.js 0.4
-         * expects the diagnostic program.
+         * app.js expects:
+         *
+         * diagnostics.cpu.registers.EAX
+         * diagnostics.cpu.EIP
+         * diagnostics.cpu.cycles
          */
 
         const cpu =
-            this.cpu.run([
-
-                {
-                    opcode: 0x01,
-                    value: 10
-                },
-
-                {
-                    opcode: 0x02,
-                    value: 20
-                }
-
-            ]);
+            cpuTest.state;
 
 
         return {
 
-            ram,
+            version:
+                this.version,
 
-            ramSize:
-                this.memory.size,
+            ram,
 
             cpu,
 
             cpuPassed:
-                cpu.registers.EAX === 30
+                cpuTest.passed
 
         };
 
     }
 
-
-    /* --------------------------------------------------------
-       REAL X86 TEST
-    -------------------------------------------------------- */
-
-    runRealX86Test() {
-
-        this.cpu.reset();
-
-
-        /*
-         * Program:
-         *
-         * MOV EAX,10
-         * ADD EAX,20
-         * SUB EAX,5
-         * INC EAX
-         * DEC EAX
-         * HLT
-         *
-         * Expected:
-         *
-         * EAX = 25
-         */
-
-        const program =
-            new Uint8Array([
-
-                0xB8,
-                0x0A, 0x00, 0x00, 0x00,
-
-                0x05,
-                0x14, 0x00, 0x00, 0x00,
-
-                0x2D,
-                0x05, 0x00, 0x00, 0x00,
-
-                0x40,
-
-                0x48,
-
-                0xF4
-
-            ]);
-
-
-        this.cpu.loadCode(
-            program,
-            DEFAULT_LOAD_ADDRESS
-        );
-
-
-        return this.cpu.run({
-            maxCycles: 100
-        });
-
-    }
-
-
-    /* --------------------------------------------------------
-       LOAD GAME
-    -------------------------------------------------------- */
 
     async loadGame(
         file
@@ -3007,40 +2982,61 @@ class WebBktxCore {
     }
 
 
-    /* --------------------------------------------------------
-       EXECUTE LOADED CODE
-    -------------------------------------------------------- */
+    /*
+     * Load an XBE and prepare CPU.
+     *
+     * This DOES NOT execute the XBE yet.
+     */
 
-    run(
-        maxCycles = 10000
-    ) {
+    prepareGame() {
 
         if (
             !this.game ||
-            !this.game.memory
+            !this.game.recognized
         ) {
 
             throw new Error(
-                "No executable image is loaded."
+                "No recognized XBE is loaded."
             );
 
         }
 
 
-        this.cpu.EIP =
-            this.game.memory.address;
+        if (
+            this.game.entryPoint ===
+            null ||
+            this.game.entryPoint ===
+            undefined
+        ) {
+
+            throw new Error(
+                "XBE entry point is unavailable."
+            );
+
+        }
 
 
-        return this.cpu.run({
-            maxCycles
-        });
+        /*
+         * For now we keep the CPU in a controlled
+         * state. The complete Xbox virtual address
+         * mapping is not implemented yet.
+         */
+
+        this.cpu.reset();
+
+
+        return {
+
+            ready:
+                true,
+
+            entryPoint:
+                this.game.entryPoint
+
+        };
 
     }
 
-
-    /* --------------------------------------------------------
-       STOP
-    -------------------------------------------------------- */
 
     stop() {
 
@@ -3049,32 +3045,29 @@ class WebBktxCore {
     }
 
 
-    /* --------------------------------------------------------
-       INFO
-    -------------------------------------------------------- */
-
-    getInfo() {
+    getState() {
 
         return {
 
             version:
                 this.version,
 
-            ram:
-                this.memory.size,
+            initialized:
+                this.initialized,
 
-            ramMB:
-                this.memory.size /
-                1024 /
-                1024,
+            memory:
+                {
+
+                    size:
+                        this.memory.size
+
+                },
 
             cpu:
-                "x86 experimental",
+                this.cpu.getState(),
 
-            registers:
-                Object.keys(
-                    this.cpu.registers
-                )
+            game:
+                this.game
 
         };
 
@@ -3092,8 +3085,6 @@ window.WebBktxCore = {
     version:
         WEBBKTX_CORE_VERSION,
 
-    RAM_SIZE,
-
     X86CPU,
 
     WebBktxMemory,
@@ -3104,7 +3095,25 @@ window.WebBktxCore = {
 
     testRAM,
 
-    loadGameFile
+    testCPU,
+
+    loadGameFile,
+
+    constants: {
+
+        RAM_SIZE,
+
+        XBE_MAGIC,
+
+        FLAG_CF,
+
+        FLAG_ZF,
+
+        FLAG_SF,
+
+        FLAG_OF
+
+    }
 
 };
 
@@ -3114,16 +3123,16 @@ window.WebBktxCore = {
 ============================================================ */
 
 console.log(
-    "========================================"
+    `%cWebBktx Core ${WEBBKTX_CORE_VERSION}`,
+    "font-weight:bold"
 );
 
 console.log(
-    "WebBktx Core " +
-    WEBBKTX_CORE_VERSION
-);
-
-console.log(
-    "64 MB RAM"
+    `RAM: ${
+        RAM_SIZE /
+        1024 /
+        1024
+    } MB`
 );
 
 console.log(
@@ -3135,5 +3144,5 @@ console.log(
 );
 
 console.log(
-    "========================================"
+    "WebBktx Core: READY"
 );
