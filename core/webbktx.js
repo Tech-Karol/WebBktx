@@ -2,370 +2,243 @@
 
 /*
  * ============================================================
- * WebBktx
- * Xbox emulator runtime for the browser
+ * WebBktx Runtime
+ * Fresh implementation
+ * ============================================================
  *
- * Fresh runtime architecture.
+ * Architecture:
  *
- * This file contains:
+ *   XBE
+ *    |
+ *    v
+ *   Loader
+ *    |
+ *    v
+ *   Memory <----> CPU <----> Decoder
+ *      |            |
+ *      |            +---- Kernel
+ *      |            +---- XAPI
+ *      |            +---- Thunks
+ *      |
+ *      +---- Graphics
+ *      +---- Input
+ *      +---- Audio
  *
- *  - physical memory
- *  - x86 CPU
- *  - x86 decoder/executor
- *  - XBE parser
- *  - executable image loader
- *  - Xbox kernel abstraction
- *  - XAPI
- *  - XFile
- *  - XInput
- *  - XGraphics
- *  - emulator machine
- *
- * No external runtime files are required.
- *
+ * This is an experimental Xbox-compatible execution runtime.
  * ============================================================
  */
 
-(() => {
+const WEBBKTX_VERSION = "2.0.0";
 
-    const VERSION = "2.0.0";
+const DEFAULT_RAM = 64 * 1024 * 1024;
+const XBE_ENTRY_XOR = 0xA8FC57AB;
 
-    const DEFAULT_RAM = 64 * 1024 * 1024;
+/* ============================================================
+ * UTILITIES
+ * ============================================================ */
 
-    const U32 = value => Number(value) >>> 0;
+function u32(value) {
+    return Number(value) >>> 0;
+}
 
-    const I32 = value => Number(value) | 0;
+function i32(value) {
+    return Number(value) | 0;
+}
 
-    const HEX = (value, width = 8) =>
-        U32(value).toString(16).toUpperCase().padStart(width, "0");
+function hex(value, width = 8) {
+    return "0x" + u32(value).toString(16).padStart(width, "0");
+}
 
-    const clamp = (value, min, max) =>
-        Math.max(min, Math.min(max, value));
+function assert(condition, message) {
+    if (!condition) {
+        throw new Error(message);
+    }
+}
 
+/* ============================================================
+ * MEMORY
+ * ============================================================ */
 
-    /* ========================================================
-       MEMORY
-    ======================================================== */
+class Memory {
 
-    class Memory {
+    constructor(size = DEFAULT_RAM) {
 
-        constructor(size = DEFAULT_RAM) {
+        this.size = u32(size);
 
-            size = Number(size);
+        assert(
+            this.size >= 1024 * 1024,
+            "Memory size is too small."
+        );
 
-            if (
-                !Number.isInteger(size) ||
-                size < 1024 * 1024
-            ) {
-                throw new Error("Invalid RAM size.");
-            }
-
-            this.size = size;
-
-            this.buffer = new ArrayBuffer(size);
-
-            this.u8 = new Uint8Array(this.buffer);
-
-            this.view = new DataView(this.buffer);
-        }
-
-
-        reset() {
-
-            this.u8.fill(0);
-        }
-
-
-        check(address, length = 1) {
-
-            address = U32(address);
-            length = Number(length);
-
-            if (
-                !Number.isInteger(length) ||
-                length < 0
-            ) {
-                throw new RangeError("Invalid memory length.");
-            }
-
-            if (
-                address > this.size ||
-                length > this.size - address
-            ) {
-                throw new RangeError(
-                    `Memory access violation at 0x${HEX(address)}`
-                );
-            }
-
-            return address;
-        }
-
-
-        read8(address) {
-
-            return this.u8[this.check(address)];
-        }
-
-
-        read16(address) {
-
-            return this.view.getUint16(
-                this.check(address, 2),
-                true
-            );
-        }
-
-
-        read32(address) {
-
-            return this.view.getUint32(
-                this.check(address, 4),
-                true
-            );
-        }
-
-
-        readS8(address) {
-
-            return this.view.getInt8(
-                this.check(address)
-            );
-        }
-
-
-        readS16(address) {
-
-            return this.view.getInt16(
-                this.check(address, 2),
-                true
-            );
-        }
-
-
-        readS32(address) {
-
-            return this.view.getInt32(
-                this.check(address, 4),
-                true
-            );
-        }
-
-
-        write8(address, value) {
-
-            this.u8[this.check(address)] =
-                U32(value) & 0xFF;
-        }
-
-
-        write16(address, value) {
-
-            this.view.setUint16(
-                this.check(address, 2),
-                U32(value) & 0xFFFF,
-                true
-            );
-        }
-
-
-        write32(address, value) {
-
-            this.view.setUint32(
-                this.check(address, 4
-                ),
-                U32(value),
-                true
-            );
-        }
-
-
-        readBytes(address, length) {
-
-            this.check(address, length);
-
-            return this.u8.slice(
-                address,
-                address + length
-            );
-        }
-
-
-        writeBytes(address, bytes) {
-
-            const data =
-                bytes instanceof Uint8Array
-                    ? bytes
-                    : new Uint8Array(bytes);
-
-            this.check(address, data.length);
-
-            this.u8.set(data, address);
-        }
-
-
-        load(address, bytes) {
-
-            this.writeBytes(address, bytes);
-        }
-
-
-        fill(address, length, value = 0) {
-
-            this.check(address, length);
-
-            this.u8.fill(
-                U32(value) & 0xFF,
-                address,
-                address + length
-            );
-        }
-
-
-        readCString(address, max = 4096) {
-
-            const bytes = [];
-
-            for (
-                let i = 0;
-                i < max;
-                i++
-            ) {
-
-                const value = this.read8(
-                    address + i
-                );
-
-                if (value === 0) {
-                    break;
-                }
-
-                bytes.push(value);
-            }
-
-            return new TextDecoder().decode(
-                new Uint8Array(bytes)
-            );
-        }
-
-
-        getStatus() {
-
-            return {
-                bytes: this.size,
-                megabytes: this.size / 1024 / 1024
-            };
-        }
+        this.buffer = new ArrayBuffer(this.size);
+        this.u8 = new Uint8Array(this.buffer);
+        this.view = new DataView(this.buffer);
     }
 
+    check(address, length = 1) {
 
-    /* ========================================================
-       X86 FLAGS
-    ======================================================== */
+        address = u32(address);
+        length = Number(length);
 
-    const FLAGS = Object.freeze({
+        if (!Number.isInteger(length) || length < 0) {
+            throw new RangeError("Invalid memory length.");
+        }
 
-        CF: 0x00000001,
-        PF: 0x00000004,
-        AF: 0x00000010,
-        ZF: 0x00000040,
-        SF: 0x00000080,
-        TF: 0x00000100,
-        IF: 0x00000200,
-        DF: 0x00000400,
-        OF: 0x00000800
-    });
+        if (
+            address > this.size ||
+            length > this.size - address
+        ) {
+            throw new RangeError(
+                `Memory access violation at ${hex(address)} length=${length}`
+            );
+        }
 
+        return address;
+    }
 
-    /* ========================================================
-       CPU
-    ======================================================== */
+    reset() {
+        this.u8.fill(0);
+    }
 
-    class CPU {
+    read8(address) {
+        return this.u8[this.check(address)];
+    }
+
+    readS8(address) {
+        return this.view.getInt8(this.check(address));
+    }
+
+    read16(address) {
+        return this.view.getUint16(
+            this.check(address, 2),
+            true
+        );
+    }
+
+    readS16(address) {
+        return this.view.getInt16(
+            this.check(address, 2),
+            true
+        );
+    }
+
+    read32(address) {
+        return this.view.getUint32(
+            this.check(address, 4),
+            true
+        );
+    }
+
+    readS32(address) {
+        return this.view.getInt32(
+            this.check(address, 4),
+            true
+        );
+    }
+
+    write8(address, value) {
+        this.u8[this.check(address)] = u32(value) & 0xff;
+    }
+
+    write16(address, value) {
+        this.view.setUint16(
+            this.check(address, 2),
+            u32(value) & 0xffff,
+            true
+        );
+    }
+
+    write32(address, value) {
+        this.view.setUint32(
+            this.check(address, 4),
+            u32(value),
+            true
+        );
+    }
+
+    copyFrom(address, source) {
+
+        const data =
+            source instanceof Uint8Array
+                ? source
+                : new Uint8Array(source);
+
+        this.check(address, data.length);
+
+        this.u8.set(data, address);
+    }
+
+    slice(address, length) {
+
+        this.check(address, length);
+
+        return this.u8.slice(
+            address,
+            address + length
+        );
+    }
+
+    getBuffer() {
+        return this.buffer;
+    }
+}
+
+/* ============================================================
+ * FLAGS
+ * ============================================================ */
+
+const FLAGS = Object.freeze({
+
+    CF: 0x00000001,
+    PF: 0x00000004,
+    AF: 0x00000010,
+    ZF: 0x00000040,
+    SF: 0x00000080,
+    TF: 0x00000100,
+    IF: 0x00000200,
+    DF: 0x00000400,
+    OF: 0x00000800
+});
+
+/* ============================================================
+ * CPU
+ * ============================================================ */
+
+class CPU {
 
     constructor(memory) {
 
-        if (!memory) {
-            throw new Error("CPU requires memory.");
-        }
+        assert(
+            memory instanceof Memory,
+            "CPU requires Memory."
+        );
 
         this.memory = memory;
 
-        /*
-         * Decoder jest podpinany przez Machine/Core.
-         */
         this.decoder = null;
 
         /*
-         * Execution configuration.
+         * Initialize ALL state before reset().
+         * This avoids the old trace initialization crash.
          */
-        this.maxInstructions = 100000;
 
-        /*
-         * Debugger.
-         */
+        this.trace = [];
+        this.traceEnabled = false;
+        this.maxTrace = 2000;
+
         this.breakpoints = new Set();
 
-        this.traceEnabled = false;
-        this.trace = [];
-        this.maxTraceEntries = 1000;
-
-        /*
-         * Callbacks.
-         */
-        this.onInstruction = null;
-        this.onBreakpoint = null;
-        this.onHalt = null;
-        this.onFault = null;
-
-        /*
-         * CPU state.
-         *
-         * x86 32-bit general purpose registers.
-         */
-        this.EAX = 0;
-        this.EBX = 0;
-        this.ECX = 0;
-        this.EDX = 0;
-
-        this.ESI = 0;
-        this.EDI = 0;
-
-        this.EBP = 0;
-        this.ESP = 0;
-
-        this.EIP = 0;
-
-        /*
-         * x86 EFLAGS.
-         * Bit 1 is reserved and normally set.
-         */
-        this.EFLAGS = 0x00000002;
-
-        /*
-         * Runtime state.
-         */
         this.running = false;
         this.halted = false;
         this.faulted = false;
 
+        this.cycles = 0;
+        this.instructions = 0;
+
         this.lastError = null;
 
-        this.cycles = 0;
-        this.instructionsExecuted = 0;
-
-        /*
-         * IMPORTANT:
-         *
-         * Wszystkie pola istnieją już tutaj,
-         * zanim reset() zostanie wywołany.
-         */
         this.reset();
     }
-
-
-    /* =========================================================
-       RESET
-    ========================================================= */
 
     reset() {
 
@@ -379,726 +252,232 @@
 
         this.EBP = 0;
 
-        /*
-         * Stack grows downward.
-         */
         this.ESP =
-            Math.max(
-                0,
-                this.memory.size - 4
-            ) >>> 0;
+            u32(
+                Math.min(
+                    this.memory.size - 4,
+                    0x01FFFFFC
+                )
+            );
 
         this.EIP = 0;
 
-        /*
-         * Reserved bit 1.
-         */
-        this.EFLAGS = 0x00000002;
+        this.EFLAGS = 0x202;
 
         this.running = false;
         this.halted = false;
         this.faulted = false;
 
+        this.cycles = 0;
+        this.instructions = 0;
+
         this.lastError = null;
 
-        this.cycles = 0;
-        this.instructionsExecuted = 0;
-
-        /*
-         * trace MUST already exist.
-         */
-        if (!Array.isArray(this.trace)) {
-            this.trace = [];
-        } else {
-            this.trace.length = 0;
-        }
+        this.trace.length = 0;
     }
-
-
-    /* =========================================================
-       DECODER
-    ========================================================= */
 
     attachDecoder(decoder) {
 
-        if (!decoder) {
-            throw new Error(
-                "CPU: invalid decoder."
-            );
-        }
-
-        if (
-            typeof decoder.decode !== "function"
-        ) {
-            throw new Error(
-                "CPU: decoder must provide decode()."
-            );
-        }
+        assert(
+            decoder &&
+            typeof decoder.decode === "function",
+            "CPU: decoder must provide decode()."
+        );
 
         this.decoder = decoder;
-
-        return true;
     }
-
-
-    /* =========================================================
-       REGISTER ACCESS
-    ========================================================= */
-
-    getRegister(name) {
-
-        const register =
-            String(name)
-                .toUpperCase();
-
-        switch (register) {
-
-            case "EAX":
-            case "EBX":
-            case "ECX":
-            case "EDX":
-            case "ESI":
-            case "EDI":
-            case "EBP":
-            case "ESP":
-            case "EIP":
-            case "EFLAGS":
-
-                return this[register] >>> 0;
-
-            default:
-
-                throw new Error(
-                    `Unknown CPU register: ${register}`
-                );
-        }
-    }
-
-
-    setRegister(name, value) {
-
-        const register =
-            String(name)
-                .toUpperCase();
-
-        const v =
-            Number(value) >>> 0;
-
-        switch (register) {
-
-            case "EAX":
-            case "EBX":
-            case "ECX":
-            case "EDX":
-            case "ESI":
-            case "EDI":
-            case "EBP":
-            case "ESP":
-            case "EIP":
-
-                this[register] = v;
-
-                return;
-
-            case "EFLAGS":
-
-                this.EFLAGS =
-                    (v | 0x02) >>> 0;
-
-                return;
-
-            default:
-
-                throw new Error(
-                    `Unknown CPU register: ${register}`
-                );
-        }
-    }
-
 
     getRegisters() {
 
         return {
-
-            EAX: this.EAX >>> 0,
-            EBX: this.EBX >>> 0,
-            ECX: this.ECX >>> 0,
-            EDX: this.EDX >>> 0,
-
-            ESI: this.ESI >>> 0,
-            EDI: this.EDI >>> 0,
-
-            EBP: this.EBP >>> 0,
-            ESP: this.ESP >>> 0,
-
-            EIP: this.EIP >>> 0,
-
-            EFLAGS:
-                this.EFLAGS >>> 0
+            EAX: u32(this.EAX),
+            EBX: u32(this.EBX),
+            ECX: u32(this.ECX),
+            EDX: u32(this.EDX),
+            ESI: u32(this.ESI),
+            EDI: u32(this.EDI),
+            EBP: u32(this.EBP),
+            ESP: u32(this.ESP),
+            EIP: u32(this.EIP),
+            EFLAGS: u32(this.EFLAGS)
         };
     }
 
+    setRegister(name, value) {
 
-    /* =========================================================
-       FLAGS
-    ========================================================= */
+        name = String(name).toUpperCase();
 
-    getFlag(flag) {
+        if (!(name in this.getRegisters())) {
+            throw new Error(
+                `Unknown register ${name}`
+            );
+        }
 
-        return (
-            (
-                this.EFLAGS &
-                flag
-            ) !== 0
-        );
+        this[name] = u32(value);
     }
 
+    flag(flag) {
+        return (this.EFLAGS & flag) !== 0;
+    }
 
-    setFlag(flag, enabled) {
+    setFlag(flag, value) {
 
-        if (enabled) {
-
+        if (value) {
             this.EFLAGS |= flag;
-
         } else {
-
             this.EFLAGS &= ~flag;
         }
 
-        /*
-         * x86 reserved bit 1.
-         */
-        this.EFLAGS |= 0x02;
-
+        this.EFLAGS |= 2;
         this.EFLAGS >>>= 0;
     }
 
+    parity(value) {
 
-    parity8(value) {
+        value &= 0xff;
 
-        value =
-            Number(value) & 0xFF;
+        let count = 0;
 
-        let ones = 0;
-
-        while (value !== 0) {
-
-            ones ^=
-                value & 1;
-
-            value >>>= 1;
+        for (let i = 0; i < 8; i++) {
+            count += (value >> i) & 1;
         }
 
-        /*
-         * PF = 1 for even parity.
-         */
-        return ones === 0;
+        return (count & 1) === 0;
     }
 
+    logicFlags(result) {
 
-    updateLogicFlags(result) {
+        result = u32(result);
 
-        result =
-            Number(result) >>> 0;
-
+        this.setFlag(FLAGS.CF, false);
+        this.setFlag(FLAGS.OF, false);
+        this.setFlag(FLAGS.ZF, result === 0);
         this.setFlag(
-            0x00000001,
-            false
+            FLAGS.SF,
+            (result & 0x80000000) !== 0
         );
-
         this.setFlag(
-            0x00000800,
-            false
-        );
-
-        this.setFlag(
-            0x00000040,
-            result === 0
-        );
-
-        this.setFlag(
-            0x00000080,
-            (
-                result &
-                0x80000000
-            ) !== 0
-        );
-
-        this.setFlag(
-            0x00000004,
-            this.parity8(result)
+            FLAGS.PF,
+            this.parity(result)
         );
     }
 
+    add(a, b) {
 
-    updateAddFlags(
-        a,
-        b,
-        result
-    ) {
+        a = u32(a);
+        b = u32(b);
 
-        a =
-            Number(a) >>> 0;
+        const result = u32(a + b);
 
-        b =
-            Number(b) >>> 0;
-
-        result =
-            Number(result) >>> 0;
-
-        /*
-         * Carry.
-         */
         this.setFlag(
-            0x00000001,
+            FLAGS.CF,
             result < a
         );
 
-        /*
-         * Auxiliary carry.
-         */
         this.setFlag(
-            0x00000010,
-            (
-                (
-                    a ^
-                    b ^
-                    result
-                ) &
-                0x10
-            ) !== 0
-        );
-
-        /*
-         * Zero.
-         */
-        this.setFlag(
-            0x00000040,
+            FLAGS.ZF,
             result === 0
         );
 
-        /*
-         * Sign.
-         */
         this.setFlag(
-            0x00000080,
-            (
-                result &
-                0x80000000
-            ) !== 0
+            FLAGS.SF,
+            !!(result & 0x80000000)
         );
 
-        /*
-         * Parity.
-         */
         this.setFlag(
-            0x00000004,
-            this.parity8(result)
+            FLAGS.PF,
+            this.parity(result)
         );
 
-        /*
-         * Signed overflow.
-         */
         this.setFlag(
-            0x00000800,
-            (
-                (
-                    (~(a ^ b)) &
-                    (a ^ result) &
-                    0x80000000
-                ) !== 0
+            FLAGS.AF,
+            !!((a ^ b ^ result) & 0x10)
+        );
+
+        this.setFlag(
+            FLAGS.OF,
+            !!(
+                (~(a ^ b) &
+                (a ^ result) &
+                0x80000000)
             )
         );
+
+        return result;
     }
 
+    sub(a, b) {
 
-    updateSubFlags(
-        a,
-        b,
-        result
-    ) {
+        a = u32(a);
+        b = u32(b);
 
-        a =
-            Number(a) >>> 0;
+        const result = u32(a - b);
 
-        b =
-            Number(b) >>> 0;
-
-        result =
-            Number(result) >>> 0;
-
-        /*
-         * Borrow.
-         */
         this.setFlag(
-            0x00000001,
+            FLAGS.CF,
             a < b
         );
 
-        /*
-         * Auxiliary borrow.
-         */
         this.setFlag(
-            0x00000010,
-            (
-                (
-                    a ^
-                    b ^
-                    result
-                ) &
-                0x10
-            ) !== 0
-        );
-
-        /*
-         * Zero.
-         */
-        this.setFlag(
-            0x00000040,
+            FLAGS.ZF,
             result === 0
         );
 
-        /*
-         * Sign.
-         */
         this.setFlag(
-            0x00000080,
-            (
-                result &
-                0x80000000
-            ) !== 0
+            FLAGS.SF,
+            !!(result & 0x80000000)
         );
 
-        /*
-         * Parity.
-         */
         this.setFlag(
-            0x00000004,
-            this.parity8(result)
+            FLAGS.PF,
+            this.parity(result)
         );
 
-        /*
-         * Signed overflow.
-         */
         this.setFlag(
-            0x00000800,
-            (
-                (
-                    (a ^ b) &
-                    (a ^ result) &
-                    0x80000000
-                ) !== 0
+            FLAGS.AF,
+            !!((a ^ b ^ result) & 0x10)
+        );
+
+        this.setFlag(
+            FLAGS.OF,
+            !!(
+                ((a ^ b) &
+                (a ^ result) &
+                0x80000000)
             )
         );
-    }
-
-
-    /* =========================================================
-       ARITHMETIC
-    ========================================================= */
-
-    add32(a, b) {
-
-        a =
-            Number(a) >>> 0;
-
-        b =
-            Number(b) >>> 0;
-
-        const result =
-            (
-                a +
-                b
-            ) >>> 0;
-
-        this.updateAddFlags(
-            a,
-            b,
-            result
-        );
 
         return result;
     }
 
+    inc(value) {
 
-    sub32(a, b) {
-
-        a =
-            Number(a) >>> 0;
-
-        b =
-            Number(b) >>> 0;
+        const cf = this.flag(FLAGS.CF);
 
         const result =
-            (
-                a -
-                b
-            ) >>> 0;
+            this.add(value, 1);
 
-        this.updateSubFlags(
-            a,
-            b,
-            result
-        );
+        this.setFlag(FLAGS.CF, cf);
 
         return result;
     }
 
+    dec(value) {
 
-    inc32(value) {
-
-        const oldCarry =
-            this.getFlag(
-                0x00000001
-            );
+        const cf = this.flag(FLAGS.CF);
 
         const result =
-            (
-                (
-                    Number(value) >>> 0
-                ) +
-                1
-            ) >>> 0;
+            this.sub(value, 1);
 
-        this.updateAddFlags(
-            value,
-            1,
-            result
-        );
-
-        /*
-         * INC does NOT modify CF.
-         */
-        this.setFlag(
-            0x00000001,
-            oldCarry
-        );
+        this.setFlag(FLAGS.CF, cf);
 
         return result;
     }
-
-
-    dec32(value) {
-
-        const oldCarry =
-            this.getFlag(
-                0x00000001
-            );
-
-        const result =
-            (
-                (
-                    Number(value) >>> 0
-                ) -
-                1
-            ) >>> 0;
-
-        this.updateSubFlags(
-            value,
-            1,
-            result
-        );
-
-        /*
-         * DEC does NOT modify CF.
-         */
-        this.setFlag(
-            0x00000001,
-            oldCarry
-        );
-
-        return result;
-    }
-
-
-    /* =========================================================
-       LOGICAL
-    ========================================================= */
-
-    xor32(a, b) {
-
-        const result =
-            (
-                (
-                    Number(a) >>> 0
-                ) ^
-                (
-                    Number(b) >>> 0
-                )
-            ) >>> 0;
-
-        this.updateLogicFlags(
-            result
-        );
-
-        return result;
-    }
-
-
-    and32(a, b) {
-
-        const result =
-            (
-                (
-                    Number(a) >>> 0
-                ) &
-                (
-                    Number(b) >>> 0
-                )
-            ) >>> 0;
-
-        this.updateLogicFlags(
-            result
-        );
-
-        return result;
-    }
-
-
-    or32(a, b) {
-
-        const result =
-            (
-                (
-                    Number(a) >>> 0
-                ) |
-                (
-                    Number(b) >>> 0
-                )
-            ) >>> 0;
-
-        this.updateLogicFlags(
-            result
-        );
-
-        return result;
-    }
-
-
-    /* =========================================================
-       MEMORY ACCESS
-    ========================================================= */
-
-    read8(address) {
-
-        return this.memory.read8(
-            Number(address) >>> 0
-        );
-    }
-
-
-    read16(address) {
-
-        return this.memory.read16(
-            Number(address) >>> 0
-        );
-    }
-
-
-    read32(address) {
-
-        return this.memory.read32(
-            Number(address) >>> 0
-        );
-    }
-
-
-    readSigned8(address) {
-
-        if (
-            typeof this.memory.readSigned8 ===
-            "function"
-        ) {
-            return this.memory.readSigned8(
-                Number(address) >>> 0
-            );
-        }
-
-        return (
-            this.read8(address) << 24
-        ) >> 24;
-    }
-
-
-    readSigned16(address) {
-
-        if (
-            typeof this.memory.readSigned16 ===
-            "function"
-        ) {
-            return this.memory.readSigned16(
-                Number(address) >>> 0
-            );
-        }
-
-        return (
-            this.read16(address) << 16
-        ) >> 16;
-    }
-
-
-    readSigned32(address) {
-
-        if (
-            typeof this.memory.readSigned32 ===
-            "function"
-        ) {
-            return this.memory.readSigned32(
-                Number(address) >>> 0
-            );
-        }
-
-        return (
-            this.read32(address) | 0
-        );
-    }
-
-
-    write8(address, value) {
-
-        this.memory.write8(
-            Number(address) >>> 0,
-            value
-        );
-    }
-
-
-    write16(address, value) {
-
-        this.memory.write16(
-            Number(address) >>> 0,
-            value
-        );
-    }
-
-
-    write32(address, value) {
-
-        this.memory.write32(
-            Number(address) >>> 0,
-            value
-        );
-    }
-
-
-    /* =========================================================
-       STACK
-    ========================================================= */
 
     push32(value) {
 
-        if (this.ESP < 4) {
-
-            throw new Error(
-                "CPU stack underflow."
-            );
-        }
-
         this.ESP =
-            (
-                this.ESP -
-                4
-            ) >>> 0;
+            u32(this.ESP - 4);
 
         this.memory.write32(
             this.ESP,
@@ -1106,402 +485,163 @@
         );
     }
 
-
     pop32() {
 
-        if (
-            this.ESP >
-            this.memory.size - 4
-        ) {
-
-            throw new Error(
-                "CPU stack overflow."
-            );
-        }
-
         const value =
-            this.memory.read32(
-                this.ESP
-            );
+            this.memory.read32(this.ESP);
 
         this.ESP =
-            (
-                this.ESP +
-                4
-            ) >>> 0;
+            u32(this.ESP + 4);
 
-        return value >>> 0;
+        return value;
     }
 
-
-    peekStack32(offset = 0) {
-
-        const numericOffset =
-            Number(offset) | 0;
-
-        const address =
-            (
-                this.ESP +
-                numericOffset
-            ) >>> 0;
-
-        return this.memory.read32(
-            address
-        ) >>> 0;
+    read8(a) {
+        return this.memory.read8(a);
     }
 
+    read16(a) {
+        return this.memory.read16(a);
+    }
 
-    /* =========================================================
-       BREAKPOINTS
-    ========================================================= */
+    read32(a) {
+        return this.memory.read32(a);
+    }
+
+    write8(a, v) {
+        this.memory.write8(a, v);
+    }
+
+    write16(a, v) {
+        this.memory.write16(a, v);
+    }
+
+    write32(a, v) {
+        this.memory.write32(a, v);
+    }
 
     addBreakpoint(address) {
-
-        this.breakpoints.add(
-            Number(address) >>> 0
-        );
+        this.breakpoints.add(u32(address));
     }
-
 
     removeBreakpoint(address) {
-
-        this.breakpoints.delete(
-            Number(address) >>> 0
-        );
+        this.breakpoints.delete(u32(address));
     }
 
-
-    clearBreakpoints() {
-
-        this.breakpoints.clear();
+    enableTrace(value = true) {
+        this.traceEnabled = !!value;
     }
 
-
-    hasBreakpoint(address) {
-
-        return this.breakpoints.has(
-            Number(address) >>> 0
-        );
-    }
-
-
-    getBreakpoints() {
-
-        return Array.from(
-            this.breakpoints
-        );
-    }
-
-
-    /* =========================================================
-       TRACE
-    ========================================================= */
-
-    enableTrace(enabled = true) {
-
-        this.traceEnabled =
-            Boolean(enabled);
-
-        return this.traceEnabled;
-    }
-
-
-    clearTrace() {
-
-        /*
-         * Defensive check.
-         */
-        if (!Array.isArray(this.trace)) {
-            this.trace = [];
-        }
-
-        this.trace.length = 0;
-    }
-
-
-    getTrace() {
-
-        if (!Array.isArray(this.trace)) {
-            this.trace = [];
-        }
-
-        return [
-            ...this.trace
-        ];
-    }
-
-
-    addTrace(entry) {
+    recordTrace(item) {
 
         if (!this.traceEnabled) {
             return;
         }
 
-        if (!Array.isArray(this.trace)) {
-            this.trace = [];
-        }
+        this.trace.push(item);
 
-        this.trace.push(
-            entry
-        );
-
-        while (
-            this.trace.length >
-            this.maxTraceEntries
-        ) {
+        if (this.trace.length > this.maxTrace) {
             this.trace.shift();
         }
     }
 
-
-    /* =========================================================
-       EXECUTION
-    ========================================================= */
-
     step() {
 
         if (this.halted) {
-
             return {
                 executed: false,
-                halted: true,
-                reason: "CPU HALTED"
+                halted: true
             };
         }
 
-
         if (this.faulted) {
-
             return {
                 executed: false,
                 faulted: true,
-                reason: this.lastError
+                error: this.lastError
             };
         }
 
-
         if (!this.decoder) {
-
             throw new Error(
-                "CPU decoder is not attached."
+                "CPU has no decoder."
             );
         }
 
-
         const address =
-            this.EIP >>> 0;
+            u32(this.EIP);
 
-
-        /*
-         * Breakpoint check.
-         */
-        if (
-            this.hasBreakpoint(address)
-        ) {
+        if (this.breakpoints.has(address)) {
 
             this.running = false;
 
-            const result = {
+            return {
                 executed: false,
                 breakpoint: true,
                 address
             };
-
-            if (
-                typeof this.onBreakpoint ===
-                "function"
-            ) {
-                this.onBreakpoint(
-                    result
-                );
-            }
-
-            return result;
         }
-
-
-        let instruction = null;
-
 
         try {
 
-            instruction =
+            const instruction =
                 this.decoder.decode(
                     this,
                     address
                 );
 
-
-            if (!instruction) {
-
-                throw new Error(
-                    `Decoder returned no instruction at 0x${
-                        address
-                            .toString(16)
-                            .padStart(8, "0")
-                    }`
-                );
-            }
-
-
-            if (
-                typeof instruction.execute !==
-                "function"
-            ) {
-
-                throw new Error(
-                    "Decoded instruction has no execute() method."
-                );
-            }
-
-
-            instruction.execute(
-                this
+            assert(
+                instruction &&
+                typeof instruction.execute === "function",
+                `Invalid instruction at ${hex(address)}`
             );
 
+            instruction.execute(this);
 
+            this.instructions++;
             this.cycles++;
 
-            this.instructionsExecuted++;
-
-
             const result = {
-
                 executed: true,
-
                 address,
-
-                opcode:
-                    instruction.opcode ??
-                    null,
-
-                mnemonic:
-                    instruction.mnemonic ??
-                    instruction.name ??
-                    "UNKNOWN",
-
-                size:
-                    instruction.size ??
-                    1,
-
-                cycles:
-                    this.cycles,
-
-                instructions:
-                    this.instructionsExecuted,
-
-                registers:
-                    this.getRegisters(),
-
-                halted:
-                    this.halted,
-
-                faulted:
-                    this.faulted
+                opcode: instruction.opcode,
+                mnemonic: instruction.mnemonic,
+                size: instruction.size,
+                registers: this.getRegisters()
             };
 
-
-            this.addTrace(
-                result
-            );
-
-
-            if (
-                typeof this.onInstruction ===
-                "function"
-            ) {
-
-                this.onInstruction(
-                    result
-                );
-            }
-
-
-            if (
-                this.halted &&
-                typeof this.onHalt ===
-                "function"
-            ) {
-
-                this.onHalt(
-                    result
-                );
-            }
-
+            this.recordTrace(result);
 
             return result;
 
         } catch (error) {
 
-            this.raiseFault(
-                error
-            );
+            this.faulted = true;
+            this.running = false;
+
+            this.lastError =
+                error instanceof Error
+                    ? error.message
+                    : String(error);
 
             throw error;
         }
     }
 
+    run(limit = 100000) {
 
-    /* =========================================================
-       RUN
-    ========================================================= */
+        limit = Number(limit);
 
-    run(limit = this.maxInstructions) {
-
-        limit =
-            Number(limit);
-
-
-        if (
-            !Number.isInteger(limit) ||
-            limit <= 0
-        ) {
-
-            throw new Error(
-                "Invalid CPU execution limit."
-            );
-        }
-
-
-        if (this.halted) {
-
-            return {
-                executed: 0,
-                cycles: this.cycles,
-                instructions:
-                    this.instructionsExecuted,
-                halted: true,
-                faulted: false,
-                registers:
-                    this.getRegisters(),
-                last: null
-            };
-        }
-
-
-        if (this.faulted) {
-
-            return {
-                executed: 0,
-                cycles: this.cycles,
-                instructions:
-                    this.instructionsExecuted,
-                halted: false,
-                faulted: true,
-                registers:
-                    this.getRegisters(),
-                last: null
-            };
-        }
-
+        assert(
+            Number.isInteger(limit) &&
+            limit > 0,
+            "Invalid CPU run limit."
+        );
 
         this.running = true;
 
-
         let executed = 0;
-
         let last = null;
-
 
         try {
 
@@ -1512,23 +652,14 @@
                 executed < limit
             ) {
 
-                last =
-                    this.step();
+                last = this.step();
 
-
-                if (
-                    last &&
-                    last.breakpoint
-                ) {
-                    break;
+                if (last.executed) {
+                    executed++;
                 }
 
-
-                if (
-                    last &&
-                    last.executed
-                ) {
-                    executed++;
+                if (last.breakpoint) {
+                    break;
                 }
             }
 
@@ -1537,2215 +668,1886 @@
             this.running = false;
         }
 
-
         return {
-
             executed,
-
-            cycles:
-                this.cycles,
-
-            instructions:
-                this.instructionsExecuted,
-
-            halted:
-                this.halted,
-
-            faulted:
-                this.faulted,
-
-            registers:
-                this.getRegisters(),
-
-            last
+            cycles: this.cycles,
+            instructions: this.instructions,
+            halted: this.halted,
+            faulted: this.faulted,
+            last,
+            registers: this.getRegisters()
         };
     }
 
-
-    /* =========================================================
-       CONTROL
-    ========================================================= */
-
     stop() {
-
         this.running = false;
     }
 
-
     halt() {
-
         this.halted = true;
         this.running = false;
     }
 
-
-    resume() {
-
-        if (this.faulted) {
-
-            throw new Error(
-                "Cannot resume a faulted CPU."
-            );
-        }
-
-        this.halted = false;
-        this.running = true;
-    }
-
-
-    clearFault() {
-
-        this.faulted = false;
-        this.lastError = null;
-    }
-
-
-    raiseFault(error) {
-
-        this.faulted = true;
-        this.running = false;
-
-        this.lastError =
-            error instanceof Error
-                ? error.message
-                : String(error);
-
-
-        if (
-            typeof this.onFault ===
-            "function"
-        ) {
-
-            try {
-
-                this.onFault(
-                    error
-                );
-
-            } catch (_) {
-
-                /*
-                 * Nie pozwalamy, żeby callback diagnostyczny
-                 * zamaskował prawdziwy błąd CPU.
-                 */
-            }
-        }
-    }
-
-
-    /* =========================================================
-       STATE
-    ========================================================= */
-
-    getStatus() {
+    status() {
 
         return {
-
             available: true,
-
-            running:
-                this.running,
-
-            halted:
-                this.halted,
-
-            faulted:
-                this.faulted,
-
-            error:
-                this.lastError,
-
-            cycles:
-                this.cycles,
-
-            instructionsExecuted:
-                this.instructionsExecuted,
-
-            registers:
-                this.getRegisters(),
-
-            breakpoints:
-                this.breakpoints.size,
-
-            traceEnabled:
-                this.traceEnabled,
-
-            traceEntries:
-                Array.isArray(this.trace)
-                    ? this.trace.length
-                    : 0
+            running: this.running,
+            halted: this.halted,
+            faulted: this.faulted,
+            cycles: this.cycles,
+            instructions: this.instructions,
+            registers: this.getRegisters(),
+            error: this.lastError
         };
     }
-
-
-    getState() {
-
-        return this.getStatus();
-    }
-
-
-    snapshot() {
-
-        return {
-
-            EAX:
-                this.EAX >>> 0,
-
-            EBX:
-                this.EBX >>> 0,
-
-            ECX:
-                this.ECX >>> 0,
-
-            EDX:
-                this.EDX >>> 0,
-
-            ESI:
-                this.ESI >>> 0,
-
-            EDI:
-                this.EDI >>> 0,
-
-            EBP:
-                this.EBP >>> 0,
-
-            ESP:
-                this.ESP >>> 0,
-
-            EIP:
-                this.EIP >>> 0,
-
-            EFLAGS:
-                this.EFLAGS >>> 0,
-
-            cycles:
-                this.cycles,
-
-            instructionsExecuted:
-                this.instructionsExecuted,
-
-            running:
-                this.running,
-
-            halted:
-                this.halted,
-
-            faulted:
-                this.faulted,
-
-            error:
-                this.lastError
-        };
-    }
-
-
-    /* =========================================================
-       SELF TEST
-    ========================================================= */
 
     selfTest() {
 
-        const originalTrace =
-            this.traceEnabled;
-
-        this.traceEnabled = false;
-
+        const oldEax = this.EAX;
 
         const tests = [];
 
+        tests.push({
+            name: "ADD",
+            pass: this.add(10, 20) === 30
+        });
 
-        try {
+        tests.push({
+            name: "SUB",
+            pass: this.sub(50, 20) === 30
+        });
 
-            /*
-             * ADD
-             */
-            this.reset();
+        tests.push({
+            name: "XOR",
+            pass:
+                ((0xFF00 ^ 0x0F00) >>> 0)
+                === 0xF000
+        });
 
-            tests.push({
-                name: "ADD",
-                pass:
-                    this.add32(
-                        10,
-                        20
-                    ) === 30
-            });
+        this.push32(0x12345678);
 
+        tests.push({
+            name: "STACK",
+            pass:
+                this.pop32() === 0x12345678
+        });
 
-            /*
-             * SUB
-             */
-            this.reset();
+        this.write32(
+            0x1000,
+            0xDEADBEEF
+        );
 
-            tests.push({
-                name: "SUB",
-                pass:
-                    this.sub32(
-                        50,
-                        20
-                    ) === 30
-            });
+        tests.push({
+            name: "MEMORY",
+            pass:
+                this.read32(0x1000)
+                === 0xDEADBEEF
+        });
 
+        this.EAX = oldEax;
 
-            /*
-             * XOR
-             */
-            this.reset();
+        return {
+            passed:
+                tests.every(x => x.pass),
+            tests
+        };
+    }
+}
 
-            tests.push({
-                name: "XOR",
-                pass:
-                    this.xor32(
-                        0xFF00,
-                        0x0F00
-                    ) === 0xF000
-            });
+/* ============================================================
+ * X86 DECODER
+ * ============================================================ */
 
+class Decoder {
 
-            /*
-             * AND
-             */
-            this.reset();
+    constructor(memory) {
+        this.memory = memory;
+    }
 
-            tests.push({
-                name: "AND",
-                pass:
-                    this.and32(
-                        0xFFFF,
-                        0x00FF
-                    ) === 0x00FF
-            });
+    imm8(address) {
+        return this.memory.read8(address);
+    }
 
+    imm32(address) {
+        return this.memory.read32(address);
+    }
 
-            /*
-             * OR
-             */
-            this.reset();
+    decode(cpu, address) {
 
-            tests.push({
-                name: "OR",
-                pass:
-                    this.or32(
-                        0xF000,
-                        0x000F
-                    ) === 0xF00F
-            });
+        const op =
+            this.memory.read8(address);
 
+        switch (op) {
 
-            /*
-             * STACK
-             */
-            this.reset();
+            case 0x90:
+                return {
+                    opcode: op,
+                    mnemonic: "NOP",
+                    size: 1,
+                    execute(c) {
+                        c.EIP = u32(c.EIP + 1);
+                    }
+                };
 
-            const oldESP =
-                this.ESP;
-
-            this.push32(
-                0x12345678
-            );
-
-            const stackValue =
-                this.pop32();
-
-            tests.push({
-                name: "STACK",
-                pass:
-                    stackValue ===
-                        0x12345678 &&
-                    this.ESP ===
-                        oldESP
-            });
-
+            case 0xF4:
+                return {
+                    opcode: op,
+                    mnemonic: "HLT",
+                    size: 1,
+                    execute(c) {
+                        c.EIP = u32(c.EIP + 1);
+                        c.halt();
+                    }
+                };
 
             /*
-             * MEMORY
+             * MOV EAX..EDI, imm32
              */
-            this.reset();
 
-            this.write32(
-                0x1000,
-                0xDEADBEEF
-            );
+            case 0xB8:
+            case 0xB9:
+            case 0xBA:
+            case 0xBB:
+            case 0xBC:
+            case 0xBD:
+            case 0xBE:
+            case 0xBF: {
 
-            tests.push({
-                name: "MEMORY",
-                pass:
-                    this.read32(
-                        0x1000
-                    ) ===
-                    0xDEADBEEF
-            });
+                const names = [
+                    "EAX",
+                    "ECX",
+                    "EDX",
+                    "EBX",
+                    "ESP",
+                    "EBP",
+                    "ESI",
+                    "EDI"
+                ];
 
+                const reg =
+                    op - 0xB8;
+
+                const value =
+                    this.imm32(address + 1);
+
+                return {
+                    opcode: op,
+                    mnemonic:
+                        `MOV ${names[reg]},${hex(value)}`,
+                    size: 5,
+                    execute(c) {
+                        c[names[reg]] = value;
+                        c.EIP = u32(c.EIP + 5);
+                    }
+                };
+            }
+
+            case 0x05: {
+
+                const value =
+                    this.imm32(address + 1);
+
+                return {
+                    opcode: op,
+                    mnemonic: "ADD EAX,imm32",
+                    size: 5,
+                    execute(c) {
+                        c.EAX =
+                            c.add(c.EAX, value);
+                        c.EIP = u32(c.EIP + 5);
+                    }
+                };
+            }
+
+            case 0x2D: {
+
+                const value =
+                    this.imm32(address + 1);
+
+                return {
+                    opcode: op,
+                    mnemonic: "SUB EAX,imm32",
+                    size: 5,
+                    execute(c) {
+                        c.EAX =
+                            c.sub(c.EAX, value);
+                        c.EIP = u32(c.EIP + 5);
+                    }
+                };
+            }
+
+            case 0x35: {
+
+                const value =
+                    this.imm32(address + 1);
+
+                return {
+                    opcode: op,
+                    mnemonic: "XOR EAX,imm32",
+                    size: 5,
+                    execute(c) {
+                        c.EAX =
+                            u32(c.EAX ^ value);
+                        c.logicFlags(c.EAX);
+                        c.EIP = u32(c.EIP + 5);
+                    }
+                };
+            }
+
+            case 0x25: {
+
+                const value =
+                    this.imm32(address + 1);
+
+                return {
+                    opcode: op,
+                    mnemonic: "AND EAX,imm32",
+                    size: 5,
+                    execute(c) {
+                        c.EAX =
+                            u32(c.EAX & value);
+                        c.logicFlags(c.EAX);
+                        c.EIP = u32(c.EIP + 5);
+                    }
+                };
+            }
+
+            case 0x0D: {
+
+                const value =
+                    this.imm32(address + 1);
+
+                return {
+                    opcode: op,
+                    mnemonic: "OR EAX,imm32",
+                    size: 5,
+                    execute(c) {
+                        c.EAX =
+                            u32(c.EAX | value);
+                        c.logicFlags(c.EAX);
+                        c.EIP = u32(c.EIP + 5);
+                    }
+                };
+            }
+
+            case 0x40:
+                return {
+                    opcode: op,
+                    mnemonic: "INC EAX",
+                    size: 1,
+                    execute(c) {
+                        c.EAX = c.inc(c.EAX);
+                        c.EIP = u32(c.EIP + 1);
+                    }
+                };
+
+            case 0x48:
+                return {
+                    opcode: op,
+                    mnemonic: "DEC EAX",
+                    size: 1,
+                    execute(c) {
+                        c.EAX = c.dec(c.EAX);
+                        c.EIP = u32(c.EIP + 1);
+                    }
+                };
+
+            case 0x50:
+                return {
+                    opcode: op,
+                    mnemonic: "PUSH EAX",
+                    size: 1,
+                    execute(c) {
+                        c.push32(c.EAX);
+                        c.EIP = u32(c.EIP + 1);
+                    }
+                };
+
+            case 0x51:
+                return {
+                    opcode: op,
+                    mnemonic: "PUSH ECX",
+                    size: 1,
+                    execute(c) {
+                        c.push32(c.ECX);
+                        c.EIP = u32(c.EIP + 1);
+                    }
+                };
+
+            case 0x52:
+                return {
+                    opcode: op,
+                    mnemonic: "PUSH EDX",
+                    size: 1,
+                    execute(c) {
+                        c.push32(c.EDX);
+                        c.EIP = u32(c.EIP + 1);
+                    }
+                };
+
+            case 0x53:
+                return {
+                    opcode: op,
+                    mnemonic: "PUSH EBX",
+                    size: 1,
+                    execute(c) {
+                        c.push32(c.EBX);
+                        c.EIP = u32(c.EIP + 1);
+                    }
+                };
+
+            case 0x58:
+                return {
+                    opcode: op,
+                    mnemonic: "POP EAX",
+                    size: 1,
+                    execute(c) {
+                        c.EAX = c.pop32();
+                        c.EIP = u32(c.EIP + 1);
+                    }
+                };
+
+            case 0x59:
+                return {
+                    opcode: op,
+                    mnemonic: "POP ECX",
+                    size: 1,
+                    execute(c) {
+                        c.ECX = c.pop32();
+                        c.EIP = u32(c.EIP + 1);
+                    }
+                };
+
+            case 0x5A:
+                return {
+                    opcode: op,
+                    mnemonic: "POP EDX",
+                    size: 1,
+                    execute(c) {
+                        c.EDX = c.pop32();
+                        c.EIP = u32(c.EIP + 1);
+                    }
+                };
+
+            case 0x5B:
+                return {
+                    opcode: op,
+                    mnemonic: "POP EBX",
+                    size: 1,
+                    execute(c) {
+                        c.EBX = c.pop32();
+                        c.EIP = u32(c.EIP + 1);
+                    }
+                };
 
             /*
-             * INC
+             * RET
              */
-            this.reset();
 
-            tests.push({
-                name: "INC",
-                pass:
-                    this.inc32(
-                        9
-                    ) === 10
-            });
-
+            case 0xC3:
+                return {
+                    opcode: op,
+                    mnemonic: "RET",
+                    size: 1,
+                    execute(c) {
+                        c.EIP = c.pop32();
+                    }
+                };
 
             /*
-             * DEC
+             * CALL rel32
              */
-            this.reset();
 
-            tests.push({
-                name: "DEC",
-                pass:
-                    this.dec32(
-                        10
-                    ) === 9
-            });
+            case 0xE8: {
 
+                const rel =
+                    this.memory.readS32(
+                        address + 1
+                    );
+
+                return {
+                    opcode: op,
+                    mnemonic: "CALL rel32",
+                    size: 5,
+                    execute(c) {
+
+                        const next =
+                            u32(c.EIP + 5);
+
+                        c.push32(next);
+
+                        c.EIP =
+                            u32(next + rel);
+                    }
+                };
+            }
 
             /*
-             * Register write/read.
+             * JMP rel32
              */
-            this.reset();
 
-            this.setRegister(
-                "EAX",
-                0xCAFEBABE
-            );
+            case 0xE9: {
 
-            tests.push({
-                name: "REGISTERS",
-                pass:
-                    this.getRegister(
-                        "EAX"
-                    ) ===
-                    0xCAFEBABE
-            });
+                const rel =
+                    this.memory.readS32(
+                        address + 1
+                    );
 
+                return {
+                    opcode: op,
+                    mnemonic: "JMP rel32",
+                    size: 5,
+                    execute(c) {
+
+                        c.EIP =
+                            u32(
+                                c.EIP +
+                                5 +
+                                rel
+                            );
+                    }
+                };
+            }
 
             /*
-             * EFLAGS reserved bit.
+             * JMP rel8
              */
-            this.reset();
 
-            this.setRegister(
-                "EFLAGS",
-                0
-            );
+            case 0xEB: {
 
-            tests.push({
-                name: "EFLAGS",
-                pass:
-                    (
-                        this.EFLAGS &
-                        0x02
-                    ) !== 0
-            });
+                const rel =
+                    this.memory.readS8(
+                        address + 1
+                    );
 
+                return {
+                    opcode: op,
+                    mnemonic: "JMP rel8",
+                    size: 2,
+                    execute(c) {
 
-            return {
+                        c.EIP =
+                            u32(
+                                c.EIP +
+                                2 +
+                                rel
+                            );
+                    }
+                };
+            }
 
-                available: true,
+            /*
+             * CMP EAX, imm32
+             */
 
-                passed:
-                    tests.every(
-                        test =>
-                            test.pass
-                    ),
+            case 0x3D: {
 
-                tests,
+                const value =
+                    this.memory.read32(
+                        address + 1
+                    );
 
-                registers:
-                    this.getRegisters(),
+                return {
+                    opcode: op,
+                    mnemonic: "CMP EAX,imm32",
+                    size: 5,
+                    execute(c) {
 
-                cycles:
-                    this.cycles,
+                        c.sub(
+                            c.EAX,
+                            value
+                        );
 
-                instructionsExecuted:
-                    this.instructionsExecuted
-            };
+                        c.EIP =
+                            u32(c.EIP + 5);
+                    }
+                };
+            }
 
-        } finally {
+            /*
+             * JE/JZ rel8
+             */
 
-            this.traceEnabled =
-                originalTrace;
+            case 0x74: {
+
+                const rel =
+                    this.memory.readS8(
+                        address + 1
+                    );
+
+                return {
+                    opcode: op,
+                    mnemonic: "JE rel8",
+                    size: 2,
+                    execute(c) {
+
+                        if (c.flag(FLAGS.ZF)) {
+                            c.EIP =
+                                u32(
+                                    c.EIP +
+                                    2 +
+                                    rel
+                                );
+                        } else {
+                            c.EIP =
+                                u32(c.EIP + 2);
+                        }
+                    }
+                };
+            }
+
+            /*
+             * JNE/JNZ rel8
+             */
+
+            case 0x75: {
+
+                const rel =
+                    this.memory.readS8(
+                        address + 1
+                    );
+
+                return {
+                    opcode: op,
+                    mnemonic: "JNE rel8",
+                    size: 2,
+                    execute(c) {
+
+                        if (!c.flag(FLAGS.ZF)) {
+                            c.EIP =
+                                u32(
+                                    c.EIP +
+                                    2 +
+                                    rel
+                                );
+                        } else {
+                            c.EIP =
+                                u32(c.EIP + 2);
+                        }
+                    }
+                };
+            }
+
+            default:
+
+                throw new Error(
+                    `Unsupported x86 opcode ${hex(op, 2)} at ${hex(address)}`
+                );
         }
     }
 }
-    /* ========================================================
-       X86 DECODER
-    ======================================================== */
 
-    class Decoder {
+/* ============================================================
+ * XBE
+ * ============================================================ */
 
-        constructor(memory) {
+class XBE {
 
-            this.memory = memory;
-        }
+    constructor() {
 
+        this.loaded = false;
 
-        modrm(cpu) {
+        this.buffer = null;
 
-            const value = cpu.fetch8();
+        this.baseAddress = 0;
+        this.entryPoint = 0;
+        this.rawEntryPoint = 0;
 
-            return {
-                mod: value >> 6,
-                reg: (value >> 3) & 7,
-                rm: value & 7
-            };
-        }
+        this.imageSize = 0;
+        this.headerSize = 0;
 
+        this.sections = [];
 
-        registerName(index) {
-
-            return [
-                "EAX",
-                "ECX",
-                "EDX",
-                "EBX",
-                "ESP",
-                "EBP",
-                "ESI",
-                "EDI"
-            ][index];
-        }
-
-
-        readReg(cpu, index) {
-
-            return cpu[
-                this.registerName(index)
-            ];
-        }
-
-
-        writeReg(cpu, index, value) {
-
-            cpu[
-                this.registerName(index)
-            ] = U32(value);
-        }
-
-
-        execute(cpu) {
-
-            const opcode =
-                cpu.fetch8();
-
-            switch (opcode) {
-
-                case 0x90:
-
-                    return {
-                        opcode,
-                        mnemonic: "NOP"
-                    };
-
-
-                case 0xF4:
-
-                    cpu.halt();
-
-                    return {
-                        opcode,
-                        mnemonic: "HLT"
-                    };
-
-
-                case 0xB8:
-                case 0xB9:
-                case 0xBA:
-                case 0xBB:
-                case 0xBC:
-                case 0xBD:
-                case 0xBE:
-                case 0xBF: {
-
-                    const reg =
-                        opcode - 0xB8;
-
-                    const value =
-                        cpu.fetch32();
-
-                    this.writeReg(
-                        cpu,
-                        reg,
-                        value
-                    );
-
-                    return {
-                        opcode,
-                        mnemonic:
-                            `MOV ${this.registerName(reg)}, 0x${HEX(value)}`
-                    };
-                }
-
-
-                case 0x05: {
-
-                    const value =
-                        cpu.fetch32();
-
-                    cpu.EAX =
-                        cpu.add(
-                            cpu.EAX,
-                            value
-                        );
-
-                    return {
-                        opcode,
-                        mnemonic: "ADD EAX, imm32"
-                    };
-                }
-
-
-                case 0x2D: {
-
-                    const value =
-                        cpu.fetch32();
-
-                    cpu.EAX =
-                        cpu.sub(
-                            cpu.EAX,
-                            value
-                        );
-
-                    return {
-                        opcode,
-                        mnemonic: "SUB EAX, imm32"
-                    };
-                }
-
-
-                case 0x40:
-                case 0x41:
-                case 0x42:
-                case 0x43:
-                case 0x44:
-                case 0x45:
-                case 0x46:
-                case 0x47: {
-
-                    const reg =
-                        opcode - 0x40;
-
-                    this.writeReg(
-                        cpu,
-                        reg,
-                        cpu.inc(
-                            this.readReg(
-                                cpu,
-                                reg
-                            )
-                        )
-                    );
-
-                    return {
-                        opcode,
-                        mnemonic:
-                            `INC ${this.registerName(reg)}`
-                    };
-                }
-
-
-                case 0x48:
-                case 0x49:
-                case 0x4A:
-                case 0x4B:
-                case 0x4C:
-                case 0x4D:
-                case 0x4E:
-                case 0x4F: {
-
-                    const reg =
-                        opcode - 0x48;
-
-                    this.writeReg(
-                        cpu,
-                        reg,
-                        cpu.dec(
-                            this.readReg(
-                                cpu,
-                                reg
-                            )
-                        )
-                    );
-
-                    return {
-                        opcode,
-                        mnemonic:
-                            `DEC ${this.registerName(reg)}`
-                    };
-                }
-
-
-                case 0x50:
-                case 0x51:
-                case 0x52:
-                case 0x53:
-                case 0x54:
-                case 0x55:
-                case 0x56:
-                case 0x57: {
-
-                    const reg =
-                        opcode - 0x50;
-
-                    cpu.push(
-                        this.readReg(
-                            cpu,
-                            reg
-                        )
-                    );
-
-                    return {
-                        opcode,
-                        mnemonic:
-                            `PUSH ${this.registerName(reg)}`
-                    };
-                }
-
-
-                case 0x58:
-                case 0x59:
-                case 0x5A:
-                case 0x5B:
-                case 0x5C:
-                case 0x5D:
-                case 0x5E:
-                case 0x5F: {
-
-                    const reg =
-                        opcode - 0x58;
-
-                    this.writeReg(
-                        cpu,
-                        reg,
-                        cpu.pop()
-                    );
-
-                    return {
-                        opcode,
-                        mnemonic:
-                            `POP ${this.registerName(reg)}`
-                    };
-                }
-
-
-                case 0x31: {
-
-                    const m =
-                        this.modrm(cpu);
-
-                    if (m.mod !== 3) {
-                        throw new Error(
-                            "XOR memory operand not implemented."
-                        );
-                    }
-
-                    const left =
-                        this.readReg(
-                            cpu,
-                            m.rm
-                        );
-
-                    const right =
-                        this.readReg(
-                            cpu,
-                            m.reg
-                        );
-
-                    const result =
-                        U32(left ^ right);
-
-                    this.writeReg(
-                        cpu,
-                        m.rm,
-                        result
-                    );
-
-                    cpu.logicFlags(result);
-
-                    return {
-                        opcode,
-                        mnemonic:
-                            "XOR r32,r32"
-                    };
-                }
-
-
-                case 0x21: {
-
-                    const m =
-                        this.modrm(cpu);
-
-                    if (m.mod !== 3) {
-                        throw new Error(
-                            "AND memory operand not implemented."
-                        );
-                    }
-
-                    const result =
-                        U32(
-                            this.readReg(cpu, m.rm) &
-                            this.readReg(cpu, m.reg)
-                        );
-
-                    this.writeReg(
-                        cpu,
-                        m.rm,
-                        result
-                    );
-
-                    cpu.logicFlags(result);
-
-                    return {
-                        opcode,
-                        mnemonic:
-                            "AND r32,r32"
-                    };
-                }
-
-
-                case 0x09: {
-
-                    const m =
-                        this.modrm(cpu);
-
-                    if (m.mod !== 3) {
-                        throw new Error(
-                            "OR memory operand not implemented."
-                        );
-                    }
-
-                    const result =
-                        U32(
-                            this.readReg(cpu, m.rm) |
-                            this.readReg(cpu, m.reg)
-                        );
-
-                    this.writeReg(
-                        cpu,
-                        m.rm,
-                        result
-                    );
-
-                    cpu.logicFlags(result);
-
-                    return {
-                        opcode,
-                        mnemonic:
-                            "OR r32,r32"
-                    };
-                }
-
-
-                case 0xE8: {
-
-                    const displacement =
-                        cpu.fetchS32();
-
-                    const returnAddress =
-                        cpu.EIP;
-
-                    cpu.push(returnAddress);
-
-                    cpu.EIP =
-                        U32(
-                            cpu.EIP +
-                            displacement
-                        );
-
-                    return {
-                        opcode,
-                        mnemonic:
-                            "CALL rel32"
-                    };
-                }
-
-
-                case 0xE9: {
-
-                    const displacement =
-                        cpu.fetchS32();
-
-                    cpu.EIP =
-                        U32(
-                            cpu.EIP +
-                            displacement
-                        );
-
-                    return {
-                        opcode,
-                        mnemonic:
-                            "JMP rel32"
-                    };
-                }
-
-
-                case 0xEB: {
-
-                    const displacement =
-                        cpu.fetchS8();
-
-                    cpu.EIP =
-                        U32(
-                            cpu.EIP +
-                            displacement
-                        );
-
-                    return {
-                        opcode,
-                        mnemonic:
-                            "JMP rel8"
-                    };
-                }
-
-
-                case 0xC3:
-
-                    cpu.EIP =
-                        cpu.pop();
-
-                    return {
-                        opcode,
-                        mnemonic:
-                            "RET"
-                    };
-
-
-                case 0x74: {
-
-                    const displacement =
-                        cpu.fetchS8();
-
-                    if (
-                        cpu.flag(FLAGS.ZF)
-                    ) {
-                        cpu.EIP =
-                            U32(
-                                cpu.EIP +
-                                displacement
-                            );
-                    }
-
-                    return {
-                        opcode,
-                        mnemonic:
-                            "JE rel8"
-                    };
-                }
-
-
-                case 0x75: {
-
-                    const displacement =
-                        cpu.fetchS8();
-
-                    if (
-                        !cpu.flag(FLAGS.ZF)
-                    ) {
-                        cpu.EIP =
-                            U32(
-                                cpu.EIP +
-                                displacement
-                            );
-                    }
-
-                    return {
-                        opcode,
-                        mnemonic:
-                            "JNE rel8"
-                    };
-                }
-
-
-                case 0x39: {
-
-                    const m =
-                        this.modrm(cpu);
-
-                    if (m.mod !== 3) {
-                        throw new Error(
-                            "CMP memory operand not implemented."
-                        );
-                    }
-
-                    cpu.sub(
-                        this.readReg(cpu, m.rm),
-                        this.readReg(cpu, m.reg)
-                    );
-
-                    return {
-                        opcode,
-                        mnemonic:
-                            "CMP r32,r32"
-                    };
-                }
-
-
-                case 0x3B: {
-
-                    const m =
-                        this.modrm(cpu);
-
-                    if (m.mod !== 3) {
-                        throw new Error(
-                            "CMP memory operand not implemented."
-                        );
-                    }
-
-                    cpu.sub(
-                        this.readReg(cpu, m.reg),
-                        this.readReg(cpu, m.rm)
-                    );
-
-                    return {
-                        opcode,
-                        mnemonic:
-                            "CMP r32,r32"
-                    };
-                }
-
-
-                default:
-
-                    throw new Error(
-                        `Unsupported x86 opcode 0x${HEX(opcode, 2)} at EIP=0x${HEX(
-                            U32(cpu.EIP - 1)
-                        )}`
-                    );
-            }
-        }
+        this.timestamp = 0;
     }
 
+    async load(source) {
 
-    /* ========================================================
-       XBE
-    ======================================================== */
+        let buffer;
 
-    class XBE {
+        if (source instanceof ArrayBuffer) {
 
-        constructor() {
+            buffer =
+                source.slice(0);
 
-            this.buffer = null;
+        } else if (source instanceof Uint8Array) {
 
-            this.view = null;
+            buffer =
+                source.buffer.slice(
+                    source.byteOffset,
+                    source.byteOffset +
+                    source.byteLength
+                );
 
-            this.loaded = false;
+        } else if (
+            source &&
+            typeof source.arrayBuffer === "function"
+        ) {
 
-            this.header = null;
+            buffer =
+                await source.arrayBuffer();
 
-            this.sections = [];
+        } else {
 
-            this.entryPoint = 0;
-
-            this.imageBase = 0;
-
-            this.rawEntryPoint = 0;
-
-            this.initFlags = 0;
+            throw new Error(
+                "XBE: unsupported source."
+            );
         }
 
+        const data =
+            new Uint8Array(buffer);
 
-        async load(source) {
+        assert(
+            data.length >= 0x200,
+            "XBE is too small."
+        );
 
-            let buffer;
+        const view =
+            new DataView(buffer);
+
+        const magic =
+            String.fromCharCode(
+                data[0],
+                data[1],
+                data[2],
+                data[3]
+            );
+
+        assert(
+            magic === "XBEH",
+            `Invalid XBE signature: ${magic}`
+        );
+
+        this.buffer = buffer;
+
+        this.baseAddress =
+            view.getUint32(
+                0x104,
+                true
+            );
+
+        this.headerSize =
+            view.getUint32(
+                0x108,
+                true
+            );
+
+        this.imageSize =
+            view.getUint32(
+                0x10C,
+                true
+            );
+
+        this.timestamp =
+            view.getUint32(
+                0x114,
+                true
+            );
+
+        this.rawEntryPoint =
+            view.getUint32(
+                0x128,
+                true
+            );
+
+        /*
+         * XBE stores the entry point encoded
+         * with the standard Xbox XOR value.
+         */
+
+        this.entryPoint =
+            u32(
+                this.rawEntryPoint ^
+                XBE_ENTRY_XOR
+            );
+
+        this.sectionCount =
+            view.getUint32(
+                0x11C,
+                true
+            );
+
+        this.sectionHeaders =
+            view.getUint32(
+                0x120,
+                true
+            );
+
+        this.sections = [];
+
+        for (
+            let i = 0;
+            i < this.sectionCount;
+            i++
+        ) {
+
+            const off =
+                this.sectionHeaders +
+                i * 0x38;
 
             if (
-                source instanceof ArrayBuffer
+                off + 0x38 >
+                data.length
             ) {
-                buffer = source;
+                break;
             }
-            else if (
-                source instanceof Uint8Array
+
+            const flags =
+                view.getUint32(
+                    off,
+                    true
+                );
+
+            const virtualAddress =
+                view.getUint32(
+                    off + 4,
+                    true
+                );
+
+            const virtualSize =
+                view.getUint32(
+                    off + 8,
+                    true
+                );
+
+            const rawAddress =
+                view.getUint32(
+                    off + 12,
+                    true
+                );
+
+            const rawSize =
+                view.getUint32(
+                    off + 16,
+                    true
+                );
+
+            const nameAddress =
+                view.getUint32(
+                    off + 20,
+                    true
+                );
+
+            let name = `section_${i}`;
+
+            if (
+                nameAddress < data.length
             ) {
-                buffer =
-                    source.buffer.slice(
-                        source.byteOffset,
-                        source.byteOffset +
-                        source.byteLength
+
+                let chars = [];
+
+                for (
+                    let p = nameAddress;
+                    p < data.length &&
+                    p < nameAddress + 64;
+                    p++
+                ) {
+
+                    const c =
+                        data[p];
+
+                    if (c === 0) {
+                        break;
+                    }
+
+                    chars.push(
+                        String.fromCharCode(c)
                     );
+                }
+
+                if (chars.length) {
+                    name =
+                        chars.join("");
+                }
             }
-            else if (
-                source &&
-                typeof source.arrayBuffer ===
-                "function"
-            ) {
-                buffer =
-                    await source.arrayBuffer();
-            }
-            else {
-                throw new Error(
-                    "Unsupported XBE source."
-                );
-            }
-
-            if (buffer.byteLength < 0x1000) {
-                throw new Error(
-                    "XBE file is too small."
-                );
-            }
-
-            this.buffer = buffer;
-
-            this.view =
-                new DataView(buffer);
-
-            const magic =
-                String.fromCharCode(
-                    this.view.getUint8(0),
-                    this.view.getUint8(1),
-                    this.view.getUint8(2),
-                    this.view.getUint8(3)
-                );
-
-            if (magic !== "XBEH") {
-                throw new Error(
-                    `Invalid XBE signature: ${magic}`
-                );
-            }
-
-            this.imageBase =
-                this.view.getUint32(
-                    0x104,
-                    true
-                );
-
-            this.rawEntryPoint =
-                this.view.getUint32(
-                    0x128,
-                    true
-                );
-
-            this.initFlags =
-                this.view.getUint32(
-                    0x12C,
-                    true
-                );
-
-            this.entryPoint =
-                U32(
-                    this.rawEntryPoint
-                );
-
-            this.header = {
-                magic,
-                size:
-                    buffer.byteLength,
-                imageBase:
-                    this.imageBase,
-                rawEntryPoint:
-                    this.rawEntryPoint,
-                initFlags:
-                    this.initFlags
-            };
-
-            this.parseSections();
-
-            this.loaded = true;
-
-            return this;
-        }
-
-
-        parseSections() {
-
-            this.sections = [];
-
-            /*
-             * XBE certificate/header fields differ slightly
-             * between revisions. We deliberately inspect the
-             * image structure rather than pretending that every
-             * XBE uses identical offsets.
-             *
-             * At minimum the executable header is validated.
-             */
-
-            const size =
-                this.buffer.byteLength;
 
             this.sections.push({
-                name: ".xbe",
-                rawOffset: 0,
-                rawSize: size,
-                virtualAddress: this.imageBase,
-                virtualSize: size
+
+                index: i,
+
+                flags,
+
+                virtualAddress,
+
+                virtualSize,
+
+                rawAddress,
+
+                rawSize,
+
+                name
             });
         }
 
+        this.loaded = true;
 
-        mapInto(memory, base = null) {
+        return this;
+    }
 
-            if (!this.loaded) {
-                throw new Error(
-                    "XBE is not loaded."
-                );
+    map(memory) {
+
+        assert(
+            this.loaded,
+            "XBE is not loaded."
+        );
+
+        /*
+         * Map image sections.
+         *
+         * XBE virtual addresses normally use the
+         * Xbox image base. For a browser emulator
+         * we translate them into a flat RAM address.
+         */
+
+        for (const section of this.sections) {
+
+            if (section.rawSize === 0) {
+                continue;
             }
 
-            const source =
-                new Uint8Array(
-                    this.buffer
-                );
+            const rawEnd =
+                section.rawAddress +
+                section.rawSize;
 
-            const targetBase =
-                base === null
-                    ? this.imageBase
-                    : U32(base);
+            if (
+                rawEnd >
+                this.buffer.byteLength
+            ) {
+                throw new Error(
+                    `XBE section ${section.name} exceeds file.`
+                );
+            }
 
             /*
-             * The browser memory object is a flat physical
-             * address space. Real Xbox virtual-memory mapping
-             * will be added as a dedicated MMU layer.
+             * Translate virtual image address into
+             * emulator RAM.
              */
 
-            if (
-                targetBase + source.length >
-                memory.size
-            ) {
-
-                throw new Error(
-                    `XBE image does not fit RAM: base=0x${HEX(
-                        targetBase
-                    )}, size=${source.length}`
+            const relative =
+                u32(
+                    section.virtualAddress -
+                    this.baseAddress
                 );
+
+            const target =
+                relative;
+
+            if (
+                target >= memory.size
+            ) {
+                continue;
             }
 
-            memory.writeBytes(
-                targetBase,
-                source
+            const available =
+                memory.size -
+                target;
+
+            const amount =
+                Math.min(
+                    section.rawSize,
+                    available
+                );
+
+            const bytes =
+                new Uint8Array(
+                    this.buffer,
+                    section.rawAddress,
+                    amount
+                );
+
+            memory.copyFrom(
+                target,
+                bytes
+            );
+        }
+
+        /*
+         * Entry point translation.
+         */
+
+        const relativeEntry =
+            u32(
+                this.entryPoint -
+                this.baseAddress
             );
 
-            return {
-                base: targetBase,
-                size: source.length,
-                entryPoint:
-                    U32(
-                        targetBase +
-                        this.rawEntryPoint
-                    )
-            };
-        }
+        assert(
+            relativeEntry < memory.size,
+            `XBE entry point outside RAM: ${hex(relativeEntry)}`
+        );
 
-
-        status() {
-
-            return {
-                loaded: this.loaded,
-                size:
-                    this.buffer
-                        ? this.buffer.byteLength
-                        : 0,
-                imageBase:
-                    U32(this.imageBase),
-                rawEntryPoint:
-                    U32(this.rawEntryPoint),
-                entryPoint:
-                    U32(this.entryPoint),
-                initFlags:
-                    U32(this.initFlags),
-                sections:
-                    this.sections
-            };
-        }
+        return {
+            entryPoint: relativeEntry
+        };
     }
 
+    status() {
 
-    /* ========================================================
-       XAPI
-    ======================================================== */
+        return {
+            loaded: this.loaded,
+            size:
+                this.buffer
+                    ? this.buffer.byteLength
+                    : 0,
+            baseAddress:
+                hex(this.baseAddress),
+            rawEntryPoint:
+                hex(this.rawEntryPoint),
+            entryPoint:
+                hex(this.entryPoint),
+            sections:
+                this.sections.map(s => ({
+                    name: s.name,
+                    virtualAddress:
+                        hex(s.virtualAddress),
+                    virtualSize: s.virtualSize,
+                    rawAddress:
+                        hex(s.rawAddress),
+                    rawSize: s.rawSize
+                }))
+        };
+    }
+}
 
-    class XAPI {
+/* ============================================================
+ * KERNEL
+ * ============================================================ */
 
-        constructor() {
+class Kernel {
 
-            this.functions = new Map();
+    constructor(machine) {
 
-            this.registerDefaults();
-        }
+        this.machine = machine;
 
+        this.ready = false;
 
-        register(name, fn) {
-
-            if (
-                typeof fn !== "function"
-            ) {
-                throw new Error(
-                    `Invalid XAPI handler: ${name}`
-                );
-            }
-
-            this.functions.set(
-                String(name),
-                fn
-            );
-        }
-
-
-        call(name, ...args) {
-
-            const fn =
-                this.functions.get(
-                    String(name)
-                );
-
-            if (!fn) {
-                throw new Error(
-                    `XAPI function not implemented: ${name}`
-                );
-            }
-
-            return fn(...args);
-        }
-
-
-        registerDefaults() {
-
-            this.register(
-                "DbgPrint",
-                (...args) => {
-                    console.log(
-                        "[XAPI]",
-                        ...args
-                    );
-                    return 0;
-                }
-            );
-
-
-            this.register(
-                "GetTickCount",
-                () =>
-                    U32(
-                        typeof performance !==
-                        "undefined"
-                            ? performance.now()
-                            : Date.now()
-                    )
-            );
-
-
-            this.register(
-                "KeQueryPerformanceCounter",
-                () =>
-                    U32(
-                        typeof performance !==
-                        "undefined"
-                            ? performance.now() * 1000
-                            : Date.now() * 1000
-                    )
-            );
-        }
-
-
-        status() {
-
-            return {
-                available: true,
-                functions:
-                    this.functions.size
-            };
-        }
+        this.services = new Map();
     }
 
+    initialize() {
 
-    /* ========================================================
-       XFILE
-    ======================================================== */
+        this.ready = true;
 
-    class XFile {
+        return true;
+    }
 
-        constructor() {
+    register(name, handler) {
 
-            this.files = new Map();
+        this.services.set(
+            String(name),
+            handler
+        );
+    }
 
-            this.nextHandle = 1;
+    call(name, ...args) {
+
+        const handler =
+            this.services.get(
+                String(name)
+            );
+
+        if (!handler) {
+            throw new Error(
+                `Kernel service not implemented: ${name}`
+            );
         }
 
+        return handler(...args);
+    }
 
-        async open(file) {
+    status() {
 
-            if (
-                !file ||
-                typeof file.arrayBuffer !==
-                "function"
-            ) {
-                throw new Error(
-                    "XFile requires a File object."
+        return {
+            ready: this.ready,
+            services:
+                [...this.services.keys()]
+        };
+    }
+}
+
+/* ============================================================
+ * THUNKS
+ * ============================================================ */
+
+class Thunks {
+
+    constructor() {
+        this.map = new Map();
+    }
+
+    register(address, handler) {
+
+        assert(
+            typeof handler === "function",
+            "Thunk must be a function."
+        );
+
+        this.map.set(
+            u32(address),
+            handler
+        );
+    }
+
+    has(address) {
+        return this.map.has(u32(address));
+    }
+
+    call(address, ...args) {
+
+        const fn =
+            this.map.get(u32(address));
+
+        if (!fn) {
+            throw new Error(
+                `Unknown thunk ${hex(address)}`
+            );
+        }
+
+        return fn(...args);
+    }
+
+    status() {
+        return {
+            available: true,
+            count: this.map.size
+        };
+    }
+}
+
+/* ============================================================
+ * XAPI
+ * ============================================================ */
+
+class XAPI {
+
+    constructor(machine) {
+
+        this.machine = machine;
+
+        this.functions = new Map();
+
+        this.installDefaults();
+    }
+
+    register(name, fn) {
+
+        this.functions.set(
+            String(name),
+            fn
+        );
+    }
+
+    call(name, ...args) {
+
+        const fn =
+            this.functions.get(
+                String(name)
+            );
+
+        if (!fn) {
+            throw new Error(
+                `XAPI function unavailable: ${name}`
+            );
+        }
+
+        return fn(...args);
+    }
+
+    installDefaults() {
+
+        this.register(
+            "DbgPrint",
+            (...args) => {
+
+                console.log(
+                    "[XAPI]",
+                    ...args
                 );
+
+                return 0;
             }
+        );
 
-            const buffer =
-                await file.arrayBuffer();
+        this.register(
+            "GetTickCount",
+            () =>
+                typeof performance !== "undefined"
+                    ? u32(performance.now())
+                    : u32(Date.now())
+        );
 
-            const handle =
-                this.nextHandle++;
+        this.register(
+            "XGetVideoMode",
+            () => ({
+                width: 640,
+                height: 480,
+                refresh: 60
+            })
+        );
 
-            this.files.set(
-                handle,
-                {
-                    name:
-                        file.name || "unknown",
-                    size:
-                        buffer.byteLength,
-                    buffer
-                }
-            );
+        this.register(
+            "XInputGetState",
+            index =>
+                this.machine.input.getState(index)
+        );
 
-            return handle;
-        }
-
-
-        get(handle) {
-
-            return (
-                this.files.get(
-                    U32(handle)
-                ) ||
-                null
-            );
-        }
-
-
-        close(handle) {
-
-            return this.files.delete(
-                U32(handle)
-            );
-        }
-
-
-        status() {
-
-            return {
-                available: true,
-                openFiles:
-                    this.files.size
-            };
-        }
+        this.register(
+            "XGetAVPack",
+            () => 0
+        );
     }
 
+    status() {
+        return {
+            available: true,
+            count: this.functions.size
+        };
+    }
+}
 
-    /* ========================================================
-       KERNEL
-    ======================================================== */
+/* ============================================================
+ * INPUT
+ * ============================================================ */
 
-    class Kernel {
+class Input {
 
-        constructor(machine) {
+    constructor() {
 
-            this.machine = machine;
+        this.keys = Object.create(null);
 
-            this.ready = false;
+        this.gamepad = null;
 
-            this.services = new Map();
-        }
+        this.started = false;
 
-
-        initialize() {
-
-            this.ready = true;
-
-            return true;
-        }
-
-
-        register(name, service) {
-
-            this.services.set(
-                String(name),
-                service
-            );
-        }
-
-
-        get(name) {
-
-            return (
-                this.services.get(
-                    String(name)
-                ) ||
-                null
-            );
-        }
-
-
-        status() {
-
-            return {
-                ready: this.ready,
-                services:
-                    [...this.services.keys()]
+        this.onKeyDown =
+            e => {
+                this.keys[e.code] = true;
             };
-        }
+
+        this.onKeyUp =
+            e => {
+                this.keys[e.code] = false;
+            };
     }
 
+    initialize() {
 
-    /* ========================================================
-       INPUT
-    ======================================================== */
-
-    class XInput {
-
-        constructor() {
-
-            this.ready = false;
-
-            this.keyboard =
-                Object.create(null);
-
-            this.gamepad = null;
-
-            this.boundDown =
-                event => {
-                    this.keyboard[
-                        event.code
-                    ] = true;
-                };
-
-            this.boundUp =
-                event => {
-                    this.keyboard[
-                        event.code
-                    ] = false;
-                };
+        if (this.started) {
+            return;
         }
 
+        window.addEventListener(
+            "keydown",
+            this.onKeyDown
+        );
 
-        initialize() {
+        window.addEventListener(
+            "keyup",
+            this.onKeyUp
+        );
 
-            if (
-                typeof window === "undefined"
-            ) {
-                return false;
-            }
+        this.started = true;
+    }
 
-            window.addEventListener(
-                "keydown",
-                this.boundDown
-            );
+    update() {
 
-            window.addEventListener(
-                "keyup",
-                this.boundUp
-            );
-
-            this.ready = true;
-
-            return true;
-        }
-
-
-        poll() {
-
-            if (
-                typeof navigator ===
-                "undefined" ||
-                typeof navigator.getGamepads !==
-                "function"
-            ) {
-                return null;
-            }
+        if (
+            typeof navigator !== "undefined" &&
+            navigator.getGamepads
+        ) {
 
             const pads =
                 navigator.getGamepads();
 
-            for (const pad of pads) {
-
-                if (pad) {
-                    this.gamepad = pad;
-                    return pad;
-                }
-            }
-
-            this.gamepad = null;
-
-            return null;
-        }
-
-
-        status() {
-
-            return {
-                available: true,
-                ready: this.ready,
-                gamepad:
-                    !!this.gamepad
-            };
+            this.gamepad =
+                pads[0] || null;
         }
     }
 
+    getState() {
 
-    /* ========================================================
-       GRAPHICS
-    ======================================================== */
+        this.update();
 
-    class Graphics {
+        const pad =
+            this.gamepad;
 
-        constructor() {
+        return {
 
-            this.canvas = null;
+            A:
+                !!(
+                    this.keys.KeyZ ||
+                    (
+                        pad &&
+                        pad.buttons[0] &&
+                        pad.buttons[0].pressed
+                    )
+                ),
 
-            this.ctx = null;
+            B:
+                !!(
+                    this.keys.KeyX ||
+                    (
+                        pad &&
+                        pad.buttons[1] &&
+                        pad.buttons[1].pressed
+                    )
+                ),
 
-            this.width = 1280;
+            START:
+                !!(
+                    this.keys.Enter ||
+                    (
+                        pad &&
+                        pad.buttons[9] &&
+                        pad.buttons[9].pressed
+                    )
+                ),
 
-            this.height = 720;
+            BACK:
+                !!(
+                    this.keys.Backspace ||
+                    (
+                        pad &&
+                        pad.buttons[8] &&
+                        pad.buttons[8].pressed
+                    )
+                ),
 
-            this.frameCount = 0;
+            UP:
+                !!this.keys.ArrowUp,
 
-            this.ready = false;
-        }
+            DOWN:
+                !!this.keys.ArrowDown,
 
+            LEFT:
+                !!this.keys.ArrowLeft,
 
-        attach(canvas) {
-
-            if (!canvas) {
-                throw new Error(
-                    "Canvas required."
-                );
-            }
-
-            this.canvas = canvas;
-
-            this.ctx =
-                canvas.getContext(
-                    "2d",
-                    {
-                        alpha: false
-                    }
-                );
-
-            if (!this.ctx) {
-                throw new Error(
-                    "2D canvas unavailable."
-                );
-            }
-
-            this.canvas.width =
-                this.width;
-
-            this.canvas.height =
-                this.height;
-
-            this.ready = true;
-
-            this.clear();
-
-            return this;
-        }
-
-
-        resize(width, height) {
-
-            this.width =
-                Math.max(
-                    1,
-                    Number(width) | 0
-                );
-
-            this.height =
-                Math.max(
-                    1,
-                    Number(height) | 0
-                );
-
-            if (this.canvas) {
-
-                this.canvas.width =
-                    this.width;
-
-                this.canvas.height =
-                    this.height;
-            }
-        }
-
-
-        clear() {
-
-            if (!this.ctx) {
-                return;
-            }
-
-            this.ctx.fillStyle =
-                "#000000";
-
-            this.ctx.fillRect(
-                0,
-                0,
-                this.width,
-                this.height
-            );
-        }
-
-
-        presentBootScreen(info) {
-
-            if (!this.ctx) {
-                return;
-            }
-
-            this.clear();
-
-            this.ctx.fillStyle =
-                "#101820";
-
-            this.ctx.fillRect(
-                0,
-                0,
-                this.width,
-                this.height
-            );
-
-            this.ctx.fillStyle =
-                "#78ff00";
-
-            this.ctx.font =
-                "bold 42px monospace";
-
-            this.ctx.fillText(
-                "WebBktx",
-                60,
-                80
-            );
-
-            this.ctx.font =
-                "20px monospace";
-
-            this.ctx.fillText(
-                "XBE BOOT RUNTIME",
-                60,
-                120
-            );
-
-            this.ctx.fillStyle =
-                "#FFFFFF";
-
-            this.ctx.fillText(
-                `Image: ${info.size} bytes`,
-                60,
-                190
-            );
-
-            this.ctx.fillText(
-                `Base: 0x${HEX(info.base)}`,
-                60,
-                225
-            );
-
-            this.ctx.fillText(
-                `Entry: 0x${HEX(info.entryPoint)}`,
-                60,
-                260
-            );
-
-            this.ctx.fillText(
-                `CPU EIP: 0x${HEX(info.eip)}`,
-                60,
-                295
-            );
-
-            this.ctx.fillStyle =
-                "#8A8A8A";
-
-            this.ctx.fillText(
-                "CPU execution active",
-                60,
-                350
-            );
-
-            this.ctx.fillText(
-                "Audio: disabled",
-                60,
-                380
-            );
-
-            this.ctx.fillText(
-                "GPU backend: Canvas 2D",
-                60,
-                410
-            );
-
-            this.frameCount++;
-        }
-
-
-        status() {
-
-            return {
-                available: true,
-                ready: this.ready,
-                width: this.width,
-                height: this.height,
-                frames: this.frameCount
-            };
-        }
+            RIGHT:
+                !!this.keys.ArrowRight
+        };
     }
 
-
-    /* ========================================================
-       MACHINE
-    ======================================================== */
-
-    class Machine {
-
-        constructor(options = {}) {
-
-            this.version = VERSION;
-
-            this.memory =
-                new Memory(
-                    options.ramSize ||
-                    DEFAULT_RAM
-                );
-
-            this.cpu =
-                new CPU(
-                    this.memory
-                );
-
-            this.decoder =
-                new Decoder(
-                    this.memory
-                );
-
-            this.cpu.attachDecoder(
-                this.decoder
-            );
-
-            this.xapi =
-                new XAPI();
-
-            this.xfile =
-                new XFile();
-
-            this.kernel =
-                new Kernel(
-                    this
-                );
-
-            this.input =
-                new XInput();
-
-            this.graphics =
-                new Graphics();
-
-            this.xbe = null;
-
-            this.bootInfo = null;
-
-            this.initialized = false;
-
-            this.running = false;
-
-            this.booted = false;
-
-            this.frameHandle = null;
-
-            this.frameBudget = 5000;
-        }
-
-
-        initialize(canvas = null) {
-
-            if (this.initialized) {
-                return true;
-            }
-
-            this.kernel.initialize();
-
-            this.input.initialize();
-
-            if (canvas) {
-                this.graphics.attach(canvas);
-            }
-
-            this.initialized = true;
-
-            console.log(
-                `[WebBktx ${VERSION}] machine initialized`
-            );
-
-            return true;
-        }
-
-
-        async loadXBE(source) {
-
-            this.xbe =
-                new XBE();
-
-            await this.xbe.load(source);
-
-            console.log(
-                "[WebBktx] XBE:",
-                this.xbe.status()
-            );
-
-            return this.xbe.status();
-        }
-
-
-        bootXBE() {
-
-            if (!this.xbe) {
-                throw new Error(
-                    "No XBE loaded."
-                );
-            }
-
-            if (!this.initialized) {
-                this.initialize();
-            }
-
-            this.memory.reset();
-
-            const mapped =
-                this.xbe.mapInto(
-                    this.memory
-                );
-
-            this.bootInfo = mapped;
-
-            /*
-             * XBE's raw entry point is represented as an
-             * address relative to the image mapping in this
-             * simplified flat-memory execution model.
-             */
-
-            this.cpu.reset();
-
-            this.cpu.EIP =
-                U32(mapped.entryPoint);
-
-            this.cpu.ESP =
-                this.memory.size - 0x1000;
-
-            /*
-             * Initial stack.
-             */
-
-            this.cpu.push(0);
-
-            this.booted = true;
-
-            this.running = true;
-
-            console.log(
-                "[WebBktx] XBE boot:",
-                mapped
-            );
-
-            return mapped;
-        }
-
-
-        executeFrame() {
-
-            if (!this.booted) {
-                return {
-                    executed: 0,
-                    booted: false
-                };
-            }
-
-            if (
-                this.cpu.halted ||
-                this.cpu.faulted
-            ) {
-
-                this.running = false;
-
-                return {
-                    executed: 0,
-                    halted:
-                        this.cpu.halted,
-                    faulted:
-                        this.cpu.faulted,
-                    fault:
-                        this.cpu.lastFault
-                };
-            }
-
-            let executed = 0;
-
-            try {
-
-                while (
-                    executed <
-                    this.frameBudget
-                ) {
-
-                    const result =
-                        this.cpu.step();
-
-                    if (
-                        !result.executed
-                    ) {
-                        break;
-                    }
-
-                    executed++;
+    status() {
+
+        return {
+            available: true,
+            started: this.started,
+            gamepad:
+                !!this.gamepad
+        };
+    }
+}
+
+/* ============================================================
+ * GRAPHICS
+ * ============================================================ */
+
+class Graphics {
+
+    constructor(canvas) {
+
+        this.canvas = canvas;
+
+        this.ctx =
+            canvas.getContext(
+                "2d",
+                {
+                    alpha: false
                 }
+            );
 
-            } catch (error) {
+        assert(
+            this.ctx,
+            "Cannot create graphics context."
+        );
 
-                this.running = false;
+        this.width = canvas.width;
+        this.height = canvas.height;
 
-                return {
-                    executed,
-                    error:
-                        error instanceof Error
-                            ? error.message
-                            : String(error)
-                };
-            }
+        this.frame = 0;
+    }
 
-            return {
-                executed,
-                eip:
+    clear() {
+
+        this.ctx.fillStyle = "#050708";
+
+        this.ctx.fillRect(
+            0,
+            0,
+            this.width,
+            this.height
+        );
+    }
+
+    text(
+        text,
+        x,
+        y,
+        size = 20
+    ) {
+
+        this.ctx.fillStyle = "#72ff72";
+
+        this.ctx.font =
+            `${size}px monospace`;
+
+        this.ctx.fillText(
+            text,
+            x,
+            y
+        );
+    }
+
+    boot(info) {
+
+        this.clear();
+
+        this.text(
+            "WEBBKTX XBOX RUNTIME",
+            40,
+            60,
+            30
+        );
+
+        this.text(
+            "XBE BOOT",
+            40,
+            105,
+            22
+        );
+
+        this.text(
+            `ENTRY: ${hex(info.entryPoint)}`,
+            40,
+            150
+        );
+
+        this.text(
+            `SECTIONS: ${info.sections}`,
+            40,
+            180
+        );
+
+        this.text(
+            `CPU: ${info.cpu}`,
+            40,
+            210
+        );
+
+        this.text(
+            `GPU: ${info.gpu}`,
+            40,
+            240
+        );
+
+        this.text(
+            `AUDIO: ${info.audio}`,
+            40,
+            270
+        );
+
+        this.text(
+            `FPS: ${info.fps}`,
+            40,
+            300
+        );
+
+        this.frame++;
+    }
+
+    status() {
+
+        return {
+            available: true,
+            width: this.width,
+            height: this.height,
+            frame: this.frame
+        };
+    }
+}
+
+/* ============================================================
+ * AUDIO
+ * ============================================================ */
+
+class Audio {
+
+    constructor() {
+
+        this.enabled = false;
+        this.context = null;
+    }
+
+    initialize() {
+
+        /*
+         * Audio is deliberately optional.
+         * The emulator does not depend on it.
+         */
+
+        this.enabled = false;
+
+        return false;
+    }
+
+    status() {
+
+        return {
+            available: true,
+            enabled: this.enabled
+        };
+    }
+}
+
+/* ============================================================
+ * MACHINE
+ * ============================================================ */
+
+class Machine {
+
+    constructor(options = {}) {
+
+        this.version =
+            WEBBKTX_VERSION;
+
+        this.memory =
+            new Memory(
+                options.ram ||
+                DEFAULT_RAM
+            );
+
+        this.cpu =
+            new CPU(
+                this.memory
+            );
+
+        this.decoder =
+            new Decoder(
+                this.memory
+            );
+
+        this.cpu.attachDecoder(
+            this.decoder
+        );
+
+        this.xbe =
+            new XBE();
+
+        this.kernel =
+            new Kernel(this);
+
+        this.thunks =
+            new Thunks();
+
+        this.xapi =
+            new XAPI(this);
+
+        this.input =
+            new Input();
+
+        this.graphics =
+            null;
+
+        this.audio =
+            new Audio();
+
+        this.loaded = false;
+        this.booted = false;
+        this.running = false;
+
+        this.lastBoot = null;
+
+        this.frameBudget = 5000;
+
+        this.fps = 0;
+        this.frames = 0;
+
+        this.lastFrameTime =
+            performance.now();
+
+        this.initialize();
+    }
+
+    initialize() {
+
+        this.kernel.initialize();
+
+        this.input.initialize();
+
+        console.log(
+            `[WebBktx ${this.version}] initialized`
+        );
+    }
+
+    attachCanvas(canvas) {
+
+        this.graphics =
+            new Graphics(canvas);
+
+        return this.graphics;
+    }
+
+    async loadXBE(source) {
+
+        await this.xbe.load(source);
+
+        const mapping =
+            this.xbe.map(
+                this.memory
+            );
+
+        this.cpu.reset();
+
+        /*
+         * Start execution at the mapped XBE entry.
+         */
+
+        this.cpu.EIP =
+            u32(mapping.entryPoint);
+
+        this.loaded = true;
+
+        console.log(
+            "[WebBktx] XBE loaded",
+            this.xbe.status()
+        );
+
+        return {
+            success: true,
+            xbe: this.xbe.status(),
+            entryPoint:
+                this.cpu.EIP
+        };
+    }
+
+    boot() {
+
+        assert(
+            this.loaded,
+            "No XBE loaded."
+        );
+
+        this.booted = true;
+        this.running = true;
+
+        this.lastBoot = {
+            entryPoint: this.cpu.EIP,
+            sections:
+                this.xbe.sections.length,
+            cpu: "ONLINE",
+            gpu:
+                this.graphics
+                    ? "ONLINE"
+                    : "HEADLESS",
+            audio:
+                this.audio.enabled
+                    ? "ONLINE"
+                    : "DISABLED"
+        };
+
+        if (this.graphics) {
+
+            this.graphics.boot({
+                entryPoint:
                     this.cpu.EIP,
-                eax:
-                    this.cpu.EAX,
-                halted:
-                    this.cpu.halted,
-                faulted:
-                    this.cpu.faulted
+                sections:
+                    this.xbe.sections.length,
+                cpu: "ONLINE",
+                gpu: "ONLINE",
+                audio: "DISABLED",
+                fps: this.fps
+            });
+        }
+
+        return this.lastBoot;
+    }
+
+    runInstructions(limit) {
+
+        if (!this.booted) {
+            return {
+                executed: 0,
+                reason: "NOT_BOOTED"
             };
         }
 
+        try {
 
-        runFrame() {
+            return this.cpu.run(
+                limit ||
+                this.frameBudget
+            );
 
-            const result =
-                this.executeFrame();
+        } catch (error) {
 
-            if (this.graphics.ready) {
-
-                this.graphics.presentBootScreen({
-                    size:
-                        this.xbe
-                            ? this.xbe.status().size
-                            : 0,
-                    base:
-                        this.bootInfo
-                            ? this.bootInfo.base
-                            : 0,
-                    entryPoint:
-                        this.bootInfo
-                            ? this.bootInfo.entryPoint
-                            : 0,
-                    eip:
-                        this.cpu.EIP
-                });
-            }
-
-            return result;
-        }
-
-
-        start() {
-
-            if (!this.booted) {
-                throw new Error(
-                    "XBE has not been booted."
-                );
-            }
-
-            this.running = true;
-
-            const loop = () => {
-
-                if (!this.running) {
-                    return;
-                }
-
-                this.runFrame();
-
-                this.frameHandle =
-                    requestAnimationFrame(
-                        loop
-                    );
-            };
-
-            loop();
-        }
-
-
-        stop() {
+            /*
+             * Do not kill the browser application.
+             * Stop the CPU and report the actual fault.
+             */
 
             this.running = false;
 
-            this.cpu.stop();
-
-            if (
-                this.frameHandle !== null
-            ) {
-
-                cancelAnimationFrame(
-                    this.frameHandle
-                );
-
-                this.frameHandle = null;
-            }
-        }
-
-
-        reset() {
-
-            this.stop();
-
-            this.memory.reset();
-
-            this.cpu.reset();
-
-            this.xbe = null;
-
-            this.bootInfo = null;
-
-            this.booted = false;
-        }
-
-
-        selfTest() {
-
-            const cpu =
-                this.cpu.selfTest();
+            console.error(
+                "[WebBktx CPU]",
+                error
+            );
 
             return {
-                version: VERSION,
-                memory: true,
-                cpu,
-                decoder: true,
-                kernel:
-                    this.kernel.ready,
-                xapi: true,
-                xfile: true,
-                graphics: true,
-                passed:
-                    cpu.passed &&
-                    this.kernel.ready
+                executed: 0,
+                faulted: true,
+                error: error.message
             };
         }
+    }
 
+    runFrame() {
 
-        status() {
+        if (!this.running) {
+            return;
+        }
 
-            return {
-                runtime: VERSION,
+        const start =
+            performance.now();
 
-                initialized:
-                    this.initialized,
+        this.input.update();
 
-                booted:
-                    this.booted,
+        const result =
+            this.runInstructions(
+                this.frameBudget
+            );
 
-                running:
-                    this.running,
+        const elapsed =
+            performance.now() - start;
 
-                memory:
-                    this.memory.getStatus(),
+        if (elapsed > 0) {
+            this.fps =
+                Math.round(
+                    1000 / elapsed
+                );
+        }
+
+        this.frames++;
+
+        if (this.graphics) {
+
+            this.graphics.boot({
+
+                entryPoint:
+                    this.cpu.EIP,
+
+                sections:
+                    this.xbe.sections.length,
 
                 cpu:
-                    this.cpu.status(),
+                    this.cpu.halted
+                        ? "HALTED"
+                        : "ONLINE",
 
-                decoder:
-                    {
-                        available: true
-                    },
+                gpu: "ONLINE",
 
-                xbe:
-                    this.xbe
-                        ? this.xbe.status()
-                        : null,
+                audio: "DISABLED",
 
-                kernel:
-                    this.kernel.status(),
-
-                xapi:
-                    this.xapi.status(),
-
-                xfile:
-                    this.xfile.status(),
-
-                xinput:
-                    this.input.status(),
-
-                xgraphics:
-                    this.graphics.status()
-            };
+                fps:
+                    Math.min(
+                        60,
+                        this.fps || 0
+                    )
+            });
         }
+
+        return result;
     }
 
+    stop() {
 
-    /* ========================================================
-       GLOBAL API
-    ======================================================== */
+        this.running = false;
+        this.cpu.stop();
+    }
 
-    const WebBktx = {
+    status() {
 
-        version: VERSION,
+        return {
 
-        VERSION,
+            runtime:
+                this.version,
 
-        Memory,
+            memory:
+                `${Math.round(
+                    this.memory.size /
+                    1024 /
+                    1024
+                )} MB`,
 
-        CPU,
+            cpu:
+                this.cpu.status(),
 
-        Decoder,
+            decoder:
+                "available",
 
-        XBE,
+            xbe:
+                this.loaded
+                    ? this.xbe.status()
+                    : null,
 
-        XAPI,
+            kernel:
+                this.kernel.status(),
 
-        XFile,
+            thunks:
+                this.thunks.status(),
 
-        Kernel,
+            xapi:
+                this.xapi.status(),
 
-        XInput,
+            xinput:
+                this.input.status(),
 
-        Graphics,
+            graphics:
+                this.graphics
+                    ? this.graphics.status()
+                    : {
+                        available: true,
+                        attached: false
+                    },
 
-        Machine,
+            audio:
+                this.audio.status(),
 
-        create(options = {}) {
+            booted:
+                this.booted,
 
-            return new Machine(options);
-        }
-    };
+            running:
+                this.running
+        };
+    }
 
+    selfTest() {
 
-    window.WebBktx = WebBktx;
+        const cpu =
+            this.cpu.selfTest();
 
-    window.WebBktxMemory = Memory;
-    window.WebBktxCPU = CPU;
-    window.WebBktxDecoder = Decoder;
-    window.WebBktxXBE = XBE;
-    window.WebBktxXAPI = XAPI;
-    window.WebBktxXFile = XFile;
-    window.WebBktxKernel = Kernel;
-    window.WebBktxXInput = XInput;
-    window.WebBktxXGraphics = Graphics;
-    window.WebBktxCore = Machine;
+        return {
 
-    /*
-     * One default machine.
-     */
+            version:
+                this.version,
 
-    window.WebBktxRuntime =
-        new Machine();
+            memory: true,
 
-    window.WebBktxRuntime.initialize();
+            cpu,
 
-    console.log(
-        "[WebBktx] Runtime:",
-        VERSION
-    );
+            decoder:
+                !!this.decoder,
 
-    console.log(
-        "[WebBktx] Self-test:",
-        window.WebBktxRuntime.selfTest()
-    );
+            kernel:
+                this.kernel.ready,
 
-})();
+            thunks:
+                true,
+
+            xapi:
+                true,
+
+            graphics:
+                true,
+
+            input:
+                true,
+
+            audio:
+                true,
+
+            passed:
+                cpu.passed &&
+                !!this.decoder &&
+                this.kernel.ready
+        };
+    }
+}
+
+/* ============================================================
+ * GLOBAL API
+ * ============================================================ */
+
+const machine =
+    new Machine();
+
+const WebBktx = {
+
+    version:
+        WEBBKTX_VERSION,
+
+    Machine,
+
+    machine,
+
+    Memory,
+    CPU,
+    Decoder,
+    XBE,
+    Kernel,
+    Thunks,
+    XAPI,
+    Input,
+    Graphics,
+    Audio,
+
+    initialize() {
+        return true;
+    },
+
+    async loadXBE(source) {
+        return machine.loadXBE(source);
+    },
+
+    boot() {
+        return machine.boot();
+    },
+
+    runFrame() {
+        return machine.runFrame();
+    },
+
+    stop() {
+        return machine.stop();
+    },
+
+    status() {
+        return machine.status();
+    },
+
+    selfTest() {
+        return machine.selfTest();
+    }
+};
+
+/* ============================================================
+ * EXPORTS
+ * ============================================================ */
+
+window.WebBktx = WebBktx;
+
+window.WebBktxMachine = Machine;
+window.WebBktxMemory = Memory;
+window.WebBktxCPU = CPU;
+window.WebBktxDecoder = Decoder;
+window.WebBktxXBE = XBE;
+window.WebBktxKernel = Kernel;
+window.WebBktxThunks = Thunks;
+window.WebBktxXAPI = XAPI;
+window.WebBktxXInput = Input;
+window.WebBktxXGraphics = Graphics;
+window.WebBktxAudio = Audio;
+
+console.log(
+    `[WebBktx ${WEBBKTX_VERSION}] Unified runtime loaded.`
+);
+
+console.log(
+    "[WebBktx] Self-test:",
+    machine.selfTest()
+);
+
+console.log(
+    "[WebBktx] Runtime status:",
+    machine.status()
+);
