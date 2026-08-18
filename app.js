@@ -1,20 +1,28 @@
 /*
  * ============================================================
- * WebBktx Application Controller
+ * WebBktx APP
  *
  * Version: 1.0
  *
- * LOCAL / NO CACHE / NO PWA / OFFLINE
+ * Local launcher / UI controller
  *
- * Responsible for:
- *   - UI
- *   - Core initialization
- *   - Kernel initialization
- *   - XBE loading
- *   - CPU diagnostics
- *   - Canvas initialization
- *   - Emulator start/stop
- *   - Safe module detection
+ * Designed for:
+ *   memory.js
+ *   cpu.js
+ *   decoder.js
+ *   xbe.js
+ *   core.js
+ *   kernel.js
+ *   thunks.js
+ *   xapi.js
+ *   xfile.js
+ *   xinput.js
+ *   xgraphics.js
+ *
+ * No PWA
+ * No cache
+ * No service worker
+ * No online dependency
  *
  * ============================================================
  */
@@ -23,1768 +31,1526 @@
 
 
 /* ============================================================
-   VERSION
+   APP CONFIG
 ============================================================ */
 
 const WEBBKTX_APP_VERSION = "1.0";
 
 
-/* ============================================================
-   GLOBAL APPLICATION
-============================================================ */
-
-window.WebBktxApp = {
+const WebBktxApp = {
 
     version: WEBBKTX_APP_VERSION,
 
-    core: null,
-    kernel: null,
-    xbe: null,
+    initialized: false,
+
     gameFile: null,
 
-    canvas: null,
-    context: null,
+    gameImage: null,
 
-    initialized: false,
-    running: false,
+    core: null,
 
-    modules: {},
+    kernel: null,
+
+    graphics: null,
+
+    input: null,
 
     animationFrame: null,
 
-    lastFrameTime: 0,
-    frameCount: 0,
-    fps: 0,
-    fpsTimer: 0
+    running: false,
 
-};
+    elements: {},
 
 
-/* ============================================================
-   DOM HELPERS
-============================================================ */
+    /* ========================================================
+       START
+    ======================================================== */
 
-function $(id) {
-
-    return document.getElementById(id);
-
-}
-
-
-function showScreen(id) {
-
-    document
-        .querySelectorAll(".screen")
-        .forEach(screen => {
-
-            screen.classList.add("hidden");
-
-        });
-
-
-    const screen = $(id);
-
-    if (screen) {
-
-        screen.classList.remove("hidden");
-
-    }
-
-}
-
-
-function setModuleStatus(
-    name,
-    status
-) {
-
-    const element =
-        document.querySelector(
-            `.module[data-module="${name}"] strong`
-        );
-
-
-    if (!element) {
-
-        return;
-
-    }
-
-
-    element.textContent =
-        status;
-
-}
-
-
-function setLoadingText(text) {
-
-    const element =
-        $("loadingText");
-
-
-    if (element) {
-
-        element.textContent =
-            text;
-
-    }
-
-}
-
-
-function setProgress(value) {
-
-    const element =
-        $("progress");
-
-
-    if (!element) {
-
-        return;
-
-    }
-
-
-    value =
-        Math.max(
-            0,
-            Math.min(
-                100,
-                value
-            )
-        );
-
-
-    element.style.width =
-        `${value}%`;
-
-}
-
-
-function message(
-    text,
-    type = "info"
-) {
-
-    const element =
-        $("message");
-
-
-    if (!element) {
-
-        return;
-
-    }
-
-
-    element.textContent =
-        text;
-
-
-    element.dataset.type =
-        type;
-
-}
-
-
-/* ============================================================
-   SAFE ERROR DISPLAY
-============================================================ */
-
-function showFatalError(error) {
-
-    console.error(
-        "[WebBktx App]",
-        error
-    );
-
-
-    const text =
-        error instanceof Error
-            ? error.message
-            : String(error);
-
-
-    setLoadingText(
-        `ERROR: ${text}`
-    );
-
-
-    setProgress(100);
-
-
-    message(
-        text,
-        "error"
-    );
-
-}
-
-
-/* ============================================================
-   MODULE DETECTION
-============================================================ */
-
-function detectModules() {
-
-    const modules = {
-
-        memory:
-            typeof window.WebBktxMemory ===
-            "function",
-
-        cpu:
-            typeof window.WebBktxCPU ===
-            "function",
-
-        xbe:
-            typeof window.WebBktxXBE ===
-            "function",
-
-        core:
-            typeof window.WebBktxCore ===
-            "function",
-
-        decoder:
-            typeof window.WebBktxDecoder !==
-            "undefined",
-
-        kernel:
-            typeof window.WebBktxKernel !==
-            "undefined",
-
-        thunks:
-            typeof window.WebBktxThunks !==
-            "undefined",
-
-        xapi:
-            typeof window.WebBktxXAPI !==
-            "undefined",
-
-        xfile:
-            typeof window.WebBktxXFile !==
-            "undefined",
-
-        xinput:
-            typeof window.WebBktxXInput !==
-            "undefined",
-
-        graphics:
-            typeof window.WebBktxGraphics !==
-            "undefined"
-
-    };
-
-
-    WebBktxApp.modules =
-        modules;
-
-
-    console.table(
-        modules
-    );
-
-
-    return modules;
-
-}
-
-
-/* ============================================================
-   REQUIRED MODULE CHECK
-============================================================ */
-
-function checkRequiredModules() {
-
-    const modules =
-        WebBktxApp.modules;
-
-
-    const required = [
-
-        "memory",
-        "cpu",
-        "xbe",
-        "core"
-
-    ];
-
-
-    const missing =
-        required.filter(
-            name =>
-                !modules[name]
-        );
-
-
-    if (missing.length) {
-
-        throw new Error(
-            "Brak wymaganych modułów: " +
-            missing.join(", ") +
-            ". Sprawdź kolejność <script>."
-        );
-
-    }
-
-
-    return true;
-
-}
-
-
-/* ============================================================
-   OPTIONAL MODULE REPORT
-============================================================ */
-
-function reportOptionalModules() {
-
-    const modules =
-        WebBktxApp.modules;
-
-
-    const optional = [
-
-        "decoder",
-        "kernel",
-        "thunks",
-        "xapi",
-        "xfile",
-        "xinput",
-        "graphics"
-
-    ];
-
-
-    optional.forEach(
-        name => {
-
-            if (modules[name]) {
-
-                console.log(
-                    `[WebBktx] ${name}: ONLINE`
-                );
-
-            } else {
-
-                console.warn(
-                    `[WebBktx] ${name}: NOT LOADED`
-                );
-
-            }
-
-        }
-    );
-
-}
-
-
-/* ============================================================
-   INITIALIZE CANVAS
-============================================================ */
-
-function initializeGraphics() {
-
-    const canvas =
-        $("screen");
-
-
-    if (!canvas) {
-
-        console.warn(
-            "[WebBktx] Canvas #screen not found."
-        );
-
-        return;
-
-    }
-
-
-    WebBktxApp.canvas =
-        canvas;
-
-
-    const context =
-        canvas.getContext(
-            "2d",
-            {
-                alpha: false,
-                desynchronized: true
-            }
-        );
-
-
-    if (!context) {
-
-        throw new Error(
-            "Nie można utworzyć Canvas 2D."
-        );
-
-    }
-
-
-    WebBktxApp.context =
-        context;
-
-
-    context.imageSmoothingEnabled =
-        false;
-
-
-    context.fillStyle =
-        "#000000";
-
-
-    context.fillRect(
-        0,
-        0,
-        canvas.width,
-        canvas.height
-    );
-
-
-    /*
-     * If xgraphics.js exists, connect it.
-     */
-
-    if (
-        window.WebBktxGraphics
-    ) {
+    async start() {
 
         try {
 
-            WebBktxApp.graphics =
-                new window.WebBktxGraphics(
-                    canvas
-                );
+            this.cacheElements();
+
+            this.setLoading(
+                "Checking emulator modules..."
+            );
+
+            this.updateModule(
+                "cache",
+                "SKIP"
+            );
+
+
+            /*
+             * No cache.
+             *
+             * The application intentionally does
+             * not use localStorage, IndexedDB,
+             * Cache API or Service Worker.
+             */
+
+            this.updateModule(
+                "core",
+                "CHECK"
+            );
+
+
+            this.checkModules();
+
+
+            this.updateModule(
+                "core",
+                "OK"
+            );
+
+
+            this.setLoading(
+                "Initializing WebBktx Core..."
+            );
+
+
+            await this.initializeCore();
+
+
+            this.updateModule(
+                "graphics",
+                window.WebBktxGraphics ||
+                window.WebBktxXGraphics
+                    ? "OK"
+                    : "WAIT"
+            );
+
+
+            this.updateModule(
+                "input",
+                window.WebBktxInput ||
+                window.WebBktxXInput
+                    ? "OK"
+                    : "WAIT"
+            );
+
+
+            this.setProgress(
+                100
+            );
+
+
+            this.setLoading(
+                "System ready."
+            );
+
+
+            await this.delay(150);
+
+
+            this.showScreen(
+                "mainScreen"
+            );
+
+
+            this.initialized =
+                true;
+
+
+            this.showMessage(
+                "WebBktx initialized successfully.",
+                "success"
+            );
+
 
             console.log(
-                "[WebBktx] XGraphics connected."
+                `[WebBktx App ${this.version}] Ready.`
             );
+
 
         } catch (error) {
 
-            console.warn(
-                "[WebBktx] XGraphics initialization failed.",
+            console.error(
+                "[WebBktx App] Startup error:",
+                error
+            );
+
+
+            this.showCoreError(
                 error
             );
 
         }
 
-    }
+    },
 
 
-    setModuleStatus(
-        "graphics",
-        WebBktxApp.modules.graphics
-            ? "READY"
-            : "BASIC"
-    );
+    /* ========================================================
+       ELEMENTS
+    ======================================================== */
 
-}
+    cacheElements() {
 
+        const ids = [
 
-/* ============================================================
-   INITIALIZE KERNEL
-============================================================ */
+            "loadingScreen",
+            "mainScreen",
+            "cpuScreen",
+            "aboutScreen",
+            "gameScreen",
 
-function initializeKernel() {
+            "progress",
+            "loadingText",
 
-    /*
-     * Kernel is optional for basic UI/Core startup.
-     */
+            "gameFile",
+            "fileInfo",
+            "startButton",
+            "message",
 
-    if (
-        !WebBktxApp.modules.kernel
-    ) {
+            "cpuOutput",
 
-        console.warn(
-            "[WebBktx] Kernel not loaded."
-        );
+            "cpuTestButton",
+            "cpuBackButton",
 
-        return null;
+            "aboutButton",
+            "aboutBackButton",
 
-    }
+            "backButton",
 
+            "screen",
+            "gameName"
 
-    const Kernel =
-        window.WebBktxKernel;
-
-
-    try {
-
-        let kernel = null;
+        ];
 
 
-        /*
-         * Try common constructor patterns.
-         */
-
-        try {
-
-            kernel =
-                new Kernel(
-                    {
-                        core:
-                            WebBktxApp.core,
-
-                        memory:
-                            WebBktxApp.core.memory,
-
-                        cpu:
-                            WebBktxApp.core.cpu,
-
-                        graphics:
-                            WebBktxApp.graphics
-                    }
-                );
-
-        } catch (firstError) {
-
-            kernel =
-                new Kernel();
-
-        }
-
-
-        WebBktxApp.kernel =
-            kernel;
-
-
-        /*
-         * Optional initialize().
-         */
-
-        if (
-            kernel &&
-            typeof kernel.initialize ===
-            "function"
+        for (
+            const id of ids
         ) {
 
-            kernel.initialize();
+            this.elements[id] =
+                document.getElementById(id);
 
         }
 
 
-        console.log(
-            "[WebBktx] Kernel initialized."
-        );
-
-
-        return kernel;
-
-    } catch (error) {
-
-        console.error(
-            "[WebBktx] Kernel initialization failed.",
-            error
-        );
-
-
-        return null;
-
-    }
-
-}
-
-
-/* ============================================================
-   INITIALIZE CORE
-============================================================ */
-
-function initializeCore() {
-
-    setLoadingText(
-        "Initializing WebBktx Core..."
-    );
-
-
-    setProgress(25);
-
-
-    const Core =
-        window.WebBktxCore;
-
-
-    if (
-        typeof Core !==
-        "function"
-    ) {
-
-        throw new Error(
-            "Nie znaleziono WebBktxCore."
-        );
-
-    }
-
-
-    WebBktxApp.core =
-        new Core({
-
-            debug: true,
-
-            /*
-             * 64 MB Xbox-style baseline.
-             *
-             * The Memory module can later
-             * expose a different configuration.
-             */
-
-            ramSize:
-                64 * 1024 * 1024,
-
-            maxInstructions:
-                100000
-
-        });
-
-
-    /*
-     * Explicit initialization.
-     */
-
-    if (
-        typeof WebBktxApp.core.initialize ===
-        "function"
-    ) {
-
-        WebBktxApp.core.initialize();
-
-    }
-
-
-    console.log(
-        "[WebBktx] Core initialized."
-    );
-
-
-    setModuleStatus(
-        "core",
-        "READY"
-    );
-
-
-    return WebBktxApp.core;
-
-}
-
-
-/* ============================================================
-   CONNECT DECODER
-============================================================ */
-
-function connectDecoder() {
-
-    if (
-        !WebBktxApp.core ||
-        !WebBktxApp.core.cpu
-    ) {
-
-        return false;
-
-    }
-
-
-    const cpu =
-        WebBktxApp.core.cpu;
-
-
-    /*
-     * Different decoder versions can expose
-     * different names.
-     */
-
-    let decoder =
-        window.WebBktxDecoder ||
-        window.WebBktxX86Decoder ||
-        window.WebBktxCPUDecoder ||
-        null;
-
-
-    if (
-        !decoder
-    ) {
-
-        console.warn(
-            "[WebBktx] No decoder detected."
-        );
-
-        return false;
-
-    }
-
-
-    try {
-
         /*
-         * Existing decoder instance.
+         * Required UI.
          */
 
-        if (
-            typeof decoder.decode ===
-            "function"
+        const required = [
+
+            "loadingScreen",
+            "mainScreen",
+            "gameFile",
+            "startButton",
+            "screen"
+
+        ];
+
+
+        for (
+            const id of required
         ) {
-
-            cpu.attachDecoder(
-                decoder
-            );
-
-            return true;
-
-        }
-
-
-        /*
-         * Constructor.
-         */
-
-        if (
-            typeof decoder ===
-            "function"
-        ) {
-
-            const instance =
-                new decoder(
-                    WebBktxApp.core.memory
-                );
-
-
-            cpu.attachDecoder(
-                instance
-            );
-
-
-            return true;
-
-        }
-
-    } catch (error) {
-
-        console.warn(
-            "[WebBktx] Decoder connection failed.",
-            error
-        );
-
-    }
-
-
-    return false;
-
-}
-
-
-/* ============================================================
-   INITIALIZATION
-============================================================ */
-
-async function initializeApp() {
-
-    try {
-
-        setLoadingText(
-            "Starting WebBktx..."
-        );
-
-
-        setProgress(5);
-
-
-        /*
-         * No cache.
-         *
-         * This application deliberately does
-         * NOT use localStorage, IndexedDB,
-         * ServiceWorker, Cache API or PWA.
-         */
-
-        setModuleStatus(
-            "cache",
-            "OFF"
-        );
-
-
-        /*
-         * Detect scripts already loaded
-         * by HTML.
-         */
-
-        detectModules();
-
-
-        reportOptionalModules();
-
-
-        setProgress(15);
-
-
-        /*
-         * Required modules.
-         */
-
-        checkRequiredModules();
-
-
-        /*
-         * Core.
-         */
-
-        initializeCore();
-
-
-        setProgress(45);
-
-
-        /*
-         * Decoder.
-         */
-
-        const decoderReady =
-            connectDecoder();
-
-
-        console.log(
-            "[WebBktx] Decoder:",
-            decoderReady
-                ? "READY"
-                : "WAITING"
-        );
-
-
-        /*
-         * Kernel.
-         */
-
-        setLoadingText(
-            "Initializing Kernel..."
-        );
-
-
-        initializeKernel();
-
-
-        setProgress(65);
-
-
-        /*
-         * Graphics.
-         */
-
-        setLoadingText(
-            "Initializing Graphics..."
-        );
-
-
-        initializeGraphics();
-
-
-        setProgress(80);
-
-
-        /*
-         * Input.
-         */
-
-        initializeInput();
-
-
-        setProgress(90);
-
-
-        /*
-         * Application ready.
-         */
-
-        WebBktxApp.initialized =
-            true;
-
-
-        setModuleStatus(
-            "core",
-            "READY"
-        );
-
-
-        setModuleStatus(
-            "input",
-            WebBktxApp.modules.xinput
-                ? "READY"
-                : "BASIC"
-        );
-
-
-        setLoadingText(
-            "WebBktx ready."
-        );
-
-
-        setProgress(100);
-
-
-        /*
-         * Small delay so the loading
-         * screen doesn't disappear
-         * before the browser paints it.
-         */
-
-        await delay(150);
-
-
-        showScreen(
-            "mainScreen"
-        );
-
-
-        console.log(
-            `%cWebBktx App ${WEBBKTX_APP_VERSION} READY`,
-            "font-weight:bold"
-        );
-
-    } catch (error) {
-
-        showFatalError(
-            error
-        );
-
-    }
-
-}
-
-
-/* ============================================================
-   INPUT
-============================================================ */
-
-function initializeInput() {
-
-    /*
-     * If xinput.js provides its own API,
-     * initialize it.
-     */
-
-    if (
-        window.WebBktxXInput
-    ) {
-
-        try {
-
-            const XInput =
-                window.WebBktxXInput;
-
 
             if (
-                typeof XInput ===
-                "function"
+                !this.elements[id]
             ) {
 
-                try {
+                throw new Error(
+                    `Missing HTML element #${id}`
+                );
 
-                    WebBktxApp.input =
-                        new XInput();
+            }
 
-                } catch (error) {
+        }
 
-                    WebBktxApp.input =
-                        XInput;
+
+        this.bindEvents();
+
+    },
+
+
+    /* ========================================================
+       EVENTS
+    ======================================================== */
+
+    bindEvents() {
+
+        const el =
+            this.elements;
+
+
+        if (el.gameFile) {
+
+            el.gameFile.addEventListener(
+                "change",
+                event =>
+                    this.handleGameFile(
+                        event
+                    )
+            );
+
+        }
+
+
+        if (el.startButton) {
+
+            el.startButton.addEventListener(
+                "click",
+                () =>
+                    this.startGame()
+            );
+
+        }
+
+
+        if (el.cpuTestButton) {
+
+            el.cpuTestButton.addEventListener(
+                "click",
+                () =>
+                    this.showCPU()
+            );
+
+        }
+
+
+        if (el.cpuBackButton) {
+
+            el.cpuBackButton.addEventListener(
+                "click",
+                () =>
+                    this.showScreen(
+                        "mainScreen"
+                    )
+            );
+
+        }
+
+
+        if (el.aboutButton) {
+
+            el.aboutButton.addEventListener(
+                "click",
+                () =>
+                    this.showScreen(
+                        "aboutScreen"
+                    )
+            );
+
+        }
+
+
+        if (el.aboutBackButton) {
+
+            el.aboutBackButton.addEventListener(
+                "click",
+                () =>
+                    this.showScreen(
+                        "mainScreen"
+                    )
+            );
+
+        }
+
+
+        if (el.backButton) {
+
+            el.backButton.addEventListener(
+                "click",
+                () =>
+                    this.stopGame()
+            );
+
+        }
+
+    },
+
+
+    /* ========================================================
+       MODULE CHECK
+    ======================================================== */
+
+    checkModules() {
+
+        const modules = {
+
+            memory:
+                typeof window.WebBktxMemory ===
+                "function",
+
+            cpu:
+                typeof window.WebBktxCPU ===
+                "function",
+
+            xbe:
+                typeof window.WebBktxXBE ===
+                "function",
+
+            core:
+                typeof window.WebBktxCore ===
+                "function"
+
+        };
+
+
+        console.table(
+            modules
+        );
+
+
+        /*
+         * Memory is mandatory.
+         */
+
+        if (!modules.memory) {
+
+            throw new Error(
+                "Brak WebBktxMemory. " +
+                "Sprawdź core/memory.js."
+            );
+
+        }
+
+
+        /*
+         * CPU is mandatory.
+         */
+
+        if (!modules.cpu) {
+
+            throw new Error(
+                "Brak WebBktxCPU. " +
+                "Sprawdź core/cpu.js."
+            );
+
+        }
+
+
+        /*
+         * XBE is mandatory for games.
+         */
+
+        if (!modules.xbe) {
+
+            throw new Error(
+                "Brak WebBktxXBE. " +
+                "Sprawdź core/xbe.js."
+            );
+
+        }
+
+
+        /*
+         * Core is mandatory.
+         */
+
+        if (!modules.core) {
+
+            throw new Error(
+                "Brak WebBktxCore. " +
+                "Sprawdź core/core.js."
+            );
+
+        }
+
+
+        return modules;
+
+    },
+
+
+    /* ========================================================
+       CORE INITIALIZATION
+    ======================================================== */
+
+    async initializeCore() {
+
+        /*
+         * Do NOT create Core before checking
+         * the required constructors.
+         */
+
+        if (
+            typeof window.WebBktxCore !==
+            "function"
+        ) {
+
+            throw new Error(
+                "WebBktxCore constructor unavailable."
+            );
+
+        }
+
+
+        /*
+         * Create Core.
+         *
+         * Core itself is responsible for
+         * creating Memory / CPU / XBE.
+         */
+
+        this.core =
+            new window.WebBktxCore({
+
+                /*
+                 * 64 MB Xbox-like base RAM.
+                 *
+                 * Can be changed later.
+                 */
+
+                ramSize:
+                    64 * 1024 * 1024,
+
+                /*
+                 * Debug logging.
+                 */
+
+                debug:
+                    true,
+
+                /*
+                 * Safety limit.
+                 */
+
+                maxInstructions:
+                    100000
+
+            });
+
+
+        /*
+         * Initialize explicitly.
+         */
+
+        if (
+            typeof this.core.initialize ===
+            "function"
+        ) {
+
+            this.core.initialize();
+
+        }
+
+
+        /*
+         * Optional Kernel.
+         */
+
+        if (
+            typeof window.WebBktxKernel ===
+            "function"
+        ) {
+
+            try {
+
+                this.kernel =
+                    new window.WebBktxKernel(
+                        this.core
+                    );
+
+
+                if (
+                    typeof this.kernel.initialize ===
+                    "function"
+                ) {
+
+                    await this.kernel.initialize();
 
                 }
 
-            } else {
 
-                WebBktxApp.input =
-                    XInput;
+                console.log(
+                    "WebBktx Kernel initialized."
+                );
 
-            }
+            } catch (error) {
 
-
-            if (
-                WebBktxApp.input &&
-                typeof WebBktxApp.input.initialize ===
-                "function"
-            ) {
-
-                WebBktxApp.input.initialize();
+                console.warn(
+                    "Kernel initialization failed:",
+                    error
+                );
 
             }
 
+        }
 
-            console.log(
-                "[WebBktx] XInput initialized."
+
+        /*
+         * Optional graphics.
+         */
+
+        if (
+            typeof window.WebBktxGraphics ===
+            "function"
+        ) {
+
+            try {
+
+                this.graphics =
+                    new window.WebBktxGraphics(
+                        this.elements.screen
+                    );
+
+            } catch (error) {
+
+                console.warn(
+                    "Graphics initialization failed:",
+                    error
+                );
+
+            }
+
+        } else if (
+            typeof window.WebBktxXGraphics ===
+            "function"
+        ) {
+
+            try {
+
+                this.graphics =
+                    new window.WebBktxXGraphics(
+                        this.elements.screen
+                    );
+
+            } catch (error) {
+
+                console.warn(
+                    "XGraphics initialization failed:",
+                    error
+                );
+
+            }
+
+        }
+
+
+        /*
+         * Optional input.
+         */
+
+        if (
+            typeof window.WebBktxInput ===
+            "function"
+        ) {
+
+            try {
+
+                this.input =
+                    new window.WebBktxInput();
+
+            } catch (error) {
+
+                console.warn(
+                    "Input initialization failed:",
+                    error
+                );
+
+            }
+
+        } else if (
+            typeof window.WebBktxXInput ===
+            "function"
+        ) {
+
+            try {
+
+                this.input =
+                    new window.WebBktxXInput();
+
+            } catch (error) {
+
+                console.warn(
+                    "XInput initialization failed:",
+                    error
+                );
+
+            }
+
+        }
+
+
+        return this.core;
+
+    },
+
+
+    /* ========================================================
+       GAME FILE
+    ======================================================== */
+
+    async handleGameFile(event) {
+
+        const input =
+            event.target;
+
+
+        if (
+            !input.files ||
+            !input.files.length
+        ) {
+
+            return;
+
+        }
+
+
+        const file =
+            input.files[0];
+
+
+        this.gameFile =
+            file;
+
+
+        this.setFileInfo(
+            file
+        );
+
+
+        /*
+         * XBE can be loaded directly.
+         *
+         * ISO/XISO support requires a disc
+         * filesystem/parser. We don't pretend
+         * an ISO is an XBE.
+         */
+
+        const name =
+            file.name.toLowerCase();
+
+
+        if (
+            name.endsWith(".xbe")
+        ) {
+
+            this.elements.startButton.disabled =
+                false;
+
+
+            this.showMessage(
+                "XBE selected. Ready to load.",
+                "success"
+            );
+
+
+            return;
+
+        }
+
+
+        if (
+            name.endsWith(".iso") ||
+            name.endsWith(".xiso")
+        ) {
+
+            this.elements.startButton.disabled =
+                true;
+
+
+            this.showMessage(
+                "ISO/XISO selected. " +
+                "Disc filesystem support is required " +
+                "before extracting default.xbe.",
+                "warning"
+            );
+
+
+            return;
+
+        }
+
+
+        this.elements.startButton.disabled =
+            true;
+
+
+        this.showMessage(
+            "Unsupported game file.",
+            "error"
+        );
+
+    },
+
+
+    /* ========================================================
+       START GAME
+    ======================================================== */
+
+    async startGame() {
+
+        if (
+            !this.gameFile
+        ) {
+
+            this.showMessage(
+                "No XBE selected.",
+                "error"
             );
 
             return;
 
+        }
+
+
+        if (
+            !this.core
+        ) {
+
+            this.showMessage(
+                "Core is not initialized.",
+                "error"
+            );
+
+            return;
+
+        }
+
+
+        this.showMessage(
+            "Loading XBE...",
+            "info"
+        );
+
+
+        try {
+
+            /*
+             * Core.loadGame() accepts the File.
+             */
+
+            let result;
+
+
+            if (
+                typeof this.core.loadGame ===
+                "function"
+            ) {
+
+                result =
+                    await this.core.loadGame(
+                        this.gameFile
+                    );
+
+            } else {
+
+                /*
+                 * Compatibility fallback for
+                 * alternative Core implementations.
+                 */
+
+                const xbe =
+                    new window.WebBktxXBE(
+                        this.gameFile
+                    );
+
+
+                await xbe.load();
+
+
+                this.gameImage =
+                    xbe;
+
+
+                result = {
+                    success: true,
+                    image: xbe
+                };
+
+            }
+
+
+            this.gameImage =
+                result.image ||
+                result;
+
+
+            /*
+             * Configure UI.
+             */
+
+            this.elements.gameName.textContent =
+                this.gameFile.name;
+
+
+            this.showScreen(
+                "gameScreen"
+            );
+
+
+            /*
+             * Start rendering.
+             */
+
+            this.startRenderLoop();
+
+
+            /*
+             * Start CPU only if the Core
+             * explicitly supports it.
+             */
+
+            this.startExecution();
+
+
+            this.showMessage(
+                "XBE loaded.",
+                "success"
+            );
+
+
         } catch (error) {
 
-            console.warn(
-                "[WebBktx] XInput failed.",
+            console.error(
+                "Game start error:",
                 error
             );
 
-        }
 
-    }
-
-
-    /*
-     * Basic keyboard fallback.
-     */
-
-    WebBktxApp.input = {
-
-        keyboard: {},
-
-        initialize() {}
-
-    };
-
-
-    window.addEventListener(
-        "keydown",
-        event => {
-
-            WebBktxApp.input.keyboard[
-                event.code
-            ] = true;
+            this.showMessage(
+                error.message ||
+                "XBE loading failed.",
+                "error"
+            );
 
         }
-    );
+
+    },
 
 
-    window.addEventListener(
-        "keyup",
-        event => {
+    /* ========================================================
+       CPU EXECUTION
+    ======================================================== */
 
-            WebBktxApp.input.keyboard[
-                event.code
-            ] = false;
+    startExecution() {
+
+        if (
+            !this.core
+        ) {
+
+            return;
 
         }
-    );
 
 
-    console.log(
-        "[WebBktx] Keyboard input fallback enabled."
-    );
+        /*
+         * Do not blindly call run().
+         *
+         * A browser UI cannot safely execute
+         * 100000 instructions synchronously
+         * on the main thread.
+         */
 
-}
+        if (
+            typeof this.core.step !==
+            "function"
+        ) {
 
+            console.warn(
+                "Core.step() unavailable."
+            );
 
-/* ============================================================
-   XBE FILE
-============================================================ */
+            return;
 
-async function loadGameFile(
-    file
-) {
-
-    if (!file) {
-
-        throw new Error(
-            "Nie wybrano pliku XBE."
-        );
-
-    }
+        }
 
 
-    if (
-        !WebBktxApp.core
-    ) {
-
-        throw new Error(
-            "Core nie jest zainicjalizowany."
-        );
-
-    }
+        this.running =
+            true;
 
 
-    /*
-     * At this stage we intentionally
-     * support direct XBE files.
-     *
-     * ISO/XISO requires filesystem
-     * extraction/mounting first.
-     */
+        const tick =
+            () => {
 
-    const name =
-        file.name
-            .toLowerCase();
+                if (!this.running) {
+
+                    return;
+
+                }
 
 
-    if (
-        !name.endsWith(".xbe")
-    ) {
+                try {
 
-        throw new Error(
-            "Na tym etapie wybierz bezpośrednio plik .xbe."
-        );
+                    /*
+                     * Small batches prevent the UI
+                     * from locking completely.
+                     */
 
-    }
+                    for (
+                        let i = 0;
+                        i < 100 &&
+                        this.running;
+                        i++
+                    ) {
+
+                        const result =
+                            this.core.step();
 
 
-    setLoadingText(
-        "Loading XBE..."
-    );
+                        if (
+                            result &&
+                            result.halted
+                        ) {
+
+                            this.running =
+                                false;
+
+                            break;
+
+                        }
+
+                    }
+
+                } catch (error) {
+
+                    /*
+                     * No game code loaded /
+                     * decoder not attached /
+                     * unsupported instruction.
+                     *
+                     * Don't crash the whole UI.
+                     */
+
+                    console.warn(
+                        "CPU execution stopped:",
+                        error
+                    );
 
 
-    /*
-     * Use Core.loadGame() when available.
-     */
+                    this.running =
+                        false;
 
-    if (
-        typeof WebBktxApp.core.loadGame ===
-        "function"
-    ) {
+                    return;
 
-        const result =
-            await WebBktxApp.core.loadGame(
-                file
+                }
+
+
+                if (this.running) {
+
+                    setTimeout(
+                        tick,
+                        0
+                    );
+
+                }
+
+            };
+
+
+        tick();
+
+    },
+
+
+    /* ========================================================
+       RENDER LOOP
+    ======================================================== */
+
+    startRenderLoop() {
+
+        if (
+            this.animationFrame
+        ) {
+
+            cancelAnimationFrame(
+                this.animationFrame
+            );
+
+        }
+
+
+        const render =
+            () => {
+
+                if (
+                    !this.running
+                ) {
+
+                    return;
+
+                }
+
+
+                try {
+
+                    if (
+                        this.graphics &&
+                        typeof this.graphics.Present ===
+                        "function"
+                    ) {
+
+                        this.graphics.Present();
+
+                    }
+
+                } catch (error) {
+
+                    console.warn(
+                        "Graphics Present error:",
+                        error
+                    );
+
+                }
+
+
+                this.animationFrame =
+                    requestAnimationFrame(
+                        render
+                    );
+
+            };
+
+
+        this.animationFrame =
+            requestAnimationFrame(
+                render
+            );
+
+    },
+
+
+    /* ========================================================
+       STOP GAME
+    ======================================================== */
+
+    stopGame() {
+
+        this.running =
+            false;
+
+
+        if (
+            this.animationFrame
+        ) {
+
+            cancelAnimationFrame(
+                this.animationFrame
             );
 
 
-        WebBktxApp.xbe =
-            result.image ||
-            WebBktxApp.core.game ||
-            null;
+            this.animationFrame =
+                null;
+
+        }
 
 
-        return result;
+        if (
+            this.core &&
+            typeof this.core.stop ===
+            "function"
+        ) {
 
-    }
+            try {
+
+                this.core.stop();
+
+            } catch (error) {
+
+                console.warn(
+                    "Core stop error:",
+                    error
+                );
+
+            }
+
+        }
 
 
-    /*
-     * Fallback direct loader.
-     */
-
-    const bytes =
-        await file.arrayBuffer();
-
-
-    const XBE =
-        window.WebBktxXBE;
-
-
-    if (
-        typeof XBE !==
-        "function"
-    ) {
-
-        throw new Error(
-            "WebBktxXBE nie jest dostępny."
+        this.showScreen(
+            "mainScreen"
         );
 
-    }
+    },
 
 
-    const loader =
-        new XBE(
-            bytes
+    /* ========================================================
+       CPU TEST
+    ======================================================== */
+
+    showCPU() {
+
+        this.showScreen(
+            "cpuScreen"
         );
 
 
-    await loader.load();
+        const output =
+            this.elements.cpuOutput;
 
 
-    WebBktxApp.xbe =
-        loader;
+        if (!output) {
+
+            return;
+
+        }
 
 
-    return {
+        try {
 
-        success: true,
+            if (
+                !this.core
+            ) {
 
-        image:
-            loader,
-
-        entryPoint:
-            loader.entryPoint
-
-    };
-
-}
-
-
-/* ============================================================
-   FILE INPUT
-============================================================ */
-
-function setupFileInput() {
-
-    const input =
-        $("gameFile");
-
-
-    const startButton =
-        $("startButton");
-
-
-    if (!input) {
-
-        return;
-
-    }
-
-
-    input.addEventListener(
-        "change",
-        async event => {
-
-            const file =
-                event.target.files &&
-                event.target.files[0];
-
-
-            if (!file) {
+                output.textContent =
+                    "Core not initialized.";
 
                 return;
 
             }
 
 
-            WebBktxApp.gameFile =
-                file;
+            const cpu =
+                this.core.cpu;
 
 
-            const fileName =
-                document.querySelector(
+            if (!cpu) {
+
+                output.textContent =
+                    "CPU instance unavailable.";
+
+                return;
+
+            }
+
+
+            let result;
+
+
+            if (
+                typeof cpu.selfTest ===
+                "function"
+            ) {
+
+                result =
+                    cpu.selfTest();
+
+            } else if (
+                typeof cpu.getStatus ===
+                "function"
+            ) {
+
+                result =
+                    cpu.getStatus();
+
+            } else {
+
+                result =
+                    cpu;
+
+            }
+
+
+            output.textContent =
+                JSON.stringify(
+                    result,
+                    null,
+                    4
+                );
+
+        } catch (error) {
+
+            output.textContent =
+                "CPU TEST ERROR\n\n" +
+                (
+                    error.stack ||
+                    error.message
+                );
+
+        }
+
+    },
+
+
+    /* ========================================================
+       SCREEN
+    ======================================================== */
+
+    showScreen(id) {
+
+        const screens = [
+
+            "loadingScreen",
+            "mainScreen",
+            "cpuScreen",
+            "aboutScreen",
+            "gameScreen"
+
+        ];
+
+
+        for (
+            const screenId
+            of screens
+        ) {
+
+            const element =
+                document.getElementById(
+                    screenId
+                );
+
+
+            if (!element) {
+
+                continue;
+
+            }
+
+
+            if (
+                screenId === id
+            ) {
+
+                element.classList.remove(
+                    "hidden"
+                );
+
+            } else {
+
+                element.classList.add(
+                    "hidden"
+                );
+
+            }
+
+        }
+
+    },
+
+
+    /* ========================================================
+       LOADING UI
+    ======================================================== */
+
+    setLoading(text) {
+
+        if (
+            this.elements.loadingText
+        ) {
+
+            this.elements.loadingText.textContent =
+                text;
+
+        }
+
+    },
+
+
+    setProgress(value) {
+
+        if (
+            !this.elements.progress
+        ) {
+
+            return;
+
+        }
+
+
+        const normalized =
+            Math.max(
+                0,
+                Math.min(
+                    100,
+                    value
+                )
+            );
+
+
+        this.elements.progress.style.width =
+            `${normalized}%`;
+
+    },
+
+
+    updateModule(
+        name,
+        state
+    ) {
+
+        const element =
+            document.querySelector(
+                `[data-module="${name}"]`
+            );
+
+
+        if (!element) {
+
+            return;
+
+        }
+
+
+        const status =
+            element.querySelector(
+                "strong"
+            );
+
+
+        if (status) {
+
+            status.textContent =
+                state;
+
+        }
+
+
+        element.dataset.status =
+            state;
+
+    },
+
+
+    /* ========================================================
+       FILE UI
+    ======================================================== */
+
+    setFileInfo(file) {
+
+        const name =
+            this.elements.fileInfo
+                ?.querySelector(
                     ".file-name"
                 );
 
 
-            if (fileName) {
+        if (name) {
 
-                fileName.textContent =
-                    `${file.name} (${formatBytes(file.size)})`;
-
-            }
-
-
-            try {
-
-                message(
-                    "Sprawdzanie pliku XBE...",
-                    "info"
-                );
-
-
-                const result =
-                    await loadGameFile(
-                        file
-                    );
-
-
-                if (
-                    startButton
-                ) {
-
-                    startButton.disabled =
-                        false;
-
-                }
-
-
-                const gameName =
-                    getGameName(
-                        file,
-                        result
-                    );
-
-
-                const gameNameElement =
-                    $("gameName");
-
-
-                if (
-                    gameNameElement
-                ) {
-
-                    gameNameElement.textContent =
-                        gameName;
-
-                }
-
-
-                message(
-                    "XBE załadowany. Emulator jest gotowy do startu.",
-                    "success"
-                );
-
-
-            } catch (error) {
-
-                if (
-                    startButton
-                ) {
-
-                    startButton.disabled =
-                        true;
-
-                }
-
-
-                message(
-                    `XBE ERROR: ${error.message}`,
-                    "error"
-                );
-
-
-                console.error(
-                    "[WebBktx] XBE load error:",
-                    error
-                );
-
-            }
-
-        }
-    );
-
-}
-
-
-/* ============================================================
-   GAME NAME
-============================================================ */
-
-function getGameName(
-    file,
-    result
-) {
-
-    if (
-        result &&
-        result.image
-    ) {
-
-        if (
-            result.image.name
-        ) {
-
-            return result.image.name;
+            name.textContent =
+                `${file.name} (${this.formatBytes(file.size)})`;
 
         }
 
-    }
+    },
 
 
-    if (
-        WebBktxApp.xbe &&
-        WebBktxApp.xbe.name
+    /* ========================================================
+       MESSAGE
+    ======================================================== */
+
+    showMessage(
+        message,
+        type = "info"
     ) {
 
-        return WebBktxApp.xbe.name;
+        const element =
+            this.elements.message;
 
-    }
 
-
-    return file.name
-        .replace(
-            /\.xbe$/i,
-            ""
-        );
-
-}
-
-
-/* ============================================================
-   START EMULATOR
-============================================================ */
-
-async function startEmulator() {
-
-    if (
-        WebBktxApp.running
-    ) {
-
-        return;
-
-    }
-
-
-    if (
-        !WebBktxApp.gameFile
-    ) {
-
-        message(
-            "Najpierw wybierz plik XBE.",
-            "error"
-        );
-
-        return;
-
-    }
-
-
-    try {
-
-        /*
-         * Make sure XBE is loaded.
-         */
-
-        if (
-            !WebBktxApp.xbe
-        ) {
-
-            await loadGameFile(
-                WebBktxApp.gameFile
-            );
-
-        }
-
-
-        /*
-         * Get CPU entry point.
-         */
-
-        let entryPoint =
-            null;
-
-
-        if (
-            WebBktxApp.core &&
-            typeof WebBktxApp.core.getEntryPoint ===
-            "function"
-        ) {
-
-            entryPoint =
-                WebBktxApp.core.getEntryPoint();
-
-        }
-
-
-        /*
-         * If core exposes CPU directly,
-         * configure EIP.
-         */
-
-        if (
-            entryPoint !== null &&
-            WebBktxApp.core &&
-            WebBktxApp.core.cpu
-        ) {
-
-            const cpu =
-                WebBktxApp.core.cpu;
-
-
-            if (
-                typeof cpu.setEIP ===
-                "function"
-            ) {
-
-                try {
-
-                    /*
-                     * Core/XBE may already have
-                     * translated the address.
-                     */
-
-                    cpu.setEIP(
-                        entryPoint
-                    );
-
-                } catch (error) {
-
-                    console.warn(
-                        "[WebBktx] Could not set EIP:",
-                        error
-                    );
-
-                }
-
-            } else if (
-                typeof cpu.setInstructionPointer ===
-                "function"
-            ) {
-
-                cpu.setInstructionPointer(
-                    entryPoint
-                );
-
-            }
-
-        }
-
-
-        WebBktxApp.running =
-            true;
-
-
-        showScreen(
-            "gameScreen"
-        );
-
-
-        startRenderLoop();
-
-
-        /*
-         * Do NOT automatically execute
-         * arbitrary CPU instructions forever.
-         *
-         * Run only when CPU/decoder/kernel
-         * report that the execution environment
-         * is ready.
-         */
-
-        runEmulationFrame();
-
-
-    } catch (error) {
-
-        WebBktxApp.running =
-            false;
-
-
-        message(
-            `START ERROR: ${error.message}`,
-            "error"
-        );
-
-
-        console.error(
-            "[WebBktx] Start error:",
-            error
-        );
-
-    }
-
-}
-
-
-/* ============================================================
-   EMULATION FRAME
-============================================================ */
-
-function runEmulationFrame() {
-
-    if (
-        !WebBktxApp.running
-    ) {
-
-        return;
-
-    }
-
-
-    const core =
-        WebBktxApp.core;
-
-
-    if (
-        !core
-    ) {
-
-        return;
-
-    }
-
-
-    /*
-     * Prefer kernel tick if available.
-     */
-
-    if (
-        WebBktxApp.kernel &&
-        typeof WebBktxApp.kernel.tick ===
-        "function"
-    ) {
-
-        try {
-
-            WebBktxApp.kernel.tick();
-
-        } catch (error) {
-
-            console.error(
-                "[WebBktx] Kernel tick error:",
-                error
-            );
-
-            stopEmulator();
+        if (!element) {
 
             return;
 
         }
 
-    }
+
+        element.textContent =
+            message;
 
 
-    /*
-     * If a decoder exists, execute a small
-     * bounded CPU slice.
-     *
-     * This avoids freezing the browser.
-     */
+        element.dataset.type =
+            type;
 
-    if (
-        core.cpu &&
-        core.cpu.decoder &&
-        typeof core.cpu.step ===
-        "function"
-    ) {
-
-        const instructionsPerFrame =
-            100;
+    },
 
 
-        try {
+    /* ========================================================
+       CORE ERROR
+    ======================================================== */
 
-            for (
-                let i = 0;
-                i < instructionsPerFrame;
-                i++
-            ) {
+    showCoreError(error) {
 
-                if (
-                    !WebBktxApp.running
-                ) {
-
-                    break;
-
-                }
+        this.showScreen(
+            "loadingScreen"
+        );
 
 
-                if (
-                    core.cpu.halted
-                ) {
-
-                    break;
-
-                }
+        this.setLoading(
+            "CORE ERROR"
+        );
 
 
-                core.cpu.step();
-
-            }
-
-        } catch (error) {
-
-            console.error(
-                "[WebBktx] CPU execution error:",
-                error
-            );
-
-
-            stopEmulator();
-
-            return;
-
-        }
-
-    }
-
-
-    /*
-     * Continue next emulation slice.
-     */
-
-    if (
-        WebBktxApp.running
-    ) {
-
-        setTimeout(
-            runEmulationFrame,
+        this.setProgress(
             0
         );
 
-    }
 
-}
+        const message =
+            error &&
+            error.message
+                ? error.message
+                : String(error);
 
 
-/* ============================================================
-   RENDER LOOP
-============================================================ */
-
-function startRenderLoop() {
-
-    if (
-        WebBktxApp.animationFrame
-    ) {
-
-        cancelAnimationFrame(
-            WebBktxApp.animationFrame
+        console.error(
+            "================================"
         );
 
-    }
+        console.error(
+            "WEBBKTX CORE ERROR"
+        );
 
+        console.error(
+            message
+        );
 
-    WebBktxApp.lastFrameTime =
-        performance.now();
-
-
-    WebBktxApp.frameCount =
-        0;
-
-
-    WebBktxApp.fpsTimer =
-        WebBktxApp.lastFrameTime;
-
-
-    function frame(
-        time
-    ) {
-
-        if (
-            !WebBktxApp.running
-        ) {
-
-            return;
-
-        }
-
-
-        WebBktxApp.frameCount++;
-
-
-        const elapsed =
-            time -
-            WebBktxApp.fpsTimer;
-
-
-        if (
-            elapsed >= 1000
-        ) {
-
-            WebBktxApp.fps =
-                WebBktxApp.frameCount *
-                1000 /
-                elapsed;
-
-
-            WebBktxApp.frameCount =
-                0;
-
-
-            WebBktxApp.fpsTimer =
-                time;
-
-
-            updateFPS();
-
-        }
+        console.error(
+            "================================"
+        );
 
 
         /*
-         * Prefer XGraphics Present().
+         * Put diagnostic information
+         * directly into the loading panel.
          */
 
-        if (
-            WebBktxApp.graphics &&
-            typeof WebBktxApp.graphics.Present ===
-            "function"
-        ) {
+        let diagnostic =
+            document.getElementById(
+                "webbktxCoreError"
+            );
 
-            try {
 
-                WebBktxApp.graphics.Present();
+        if (!diagnostic) {
 
-            } catch (error) {
+            diagnostic =
+                document.createElement(
+                    "pre"
+                );
 
-                console.warn(
-                    "[WebBktx] Graphics Present error:",
-                    error
+
+            diagnostic.id =
+                "webbktxCoreError";
+
+
+            diagnostic.style.whiteSpace =
+                "pre-wrap";
+
+
+            diagnostic.style.marginTop =
+                "20px";
+
+
+            diagnostic.style.padding =
+                "16px";
+
+
+            diagnostic.style.overflow =
+                "auto";
+
+
+            diagnostic.style.maxWidth =
+                "800px";
+
+
+            diagnostic.style.maxHeight =
+                "300px";
+
+
+            const container =
+                document.querySelector(
+                    ".loading-panel"
+                );
+
+
+            if (container) {
+
+                container.appendChild(
+                    diagnostic
                 );
 
             }
@@ -1792,461 +1558,140 @@ function startRenderLoop() {
         }
 
 
-        WebBktxApp.animationFrame =
-            requestAnimationFrame(
-                frame
-            );
+        const status = {
 
-    }
+            memory:
+                typeof window.WebBktxMemory,
 
+            cpu:
+                typeof window.WebBktxCPU,
 
-    WebBktxApp.animationFrame =
-        requestAnimationFrame(
-            frame
-        );
+            xbe:
+                typeof window.WebBktxXBE,
 
-}
+            core:
+                typeof window.WebBktxCore,
 
+            decoder:
+                typeof window.WebBktxDecoder,
 
-/* ============================================================
-   FPS
-============================================================ */
+            kernel:
+                typeof window.WebBktxKernel,
 
-function updateFPS() {
+            xapi:
+                typeof window.WebBktxXAPI,
 
-    const elements =
-        document.querySelectorAll(
-            ".emulator-status span"
-        );
+            thunks:
+                typeof window.WebBktxThunks,
 
+            xfile:
+                typeof window.WebBktxXFile,
 
-    elements.forEach(
-        element => {
+            xinput:
+                typeof window.WebBktxXInput,
 
-            if (
-                element.textContent
-                    .startsWith("FPS:")
-            ) {
+            graphics:
+                typeof window.WebBktxGraphics,
 
-                element.textContent =
-                    `FPS: ${Math.round(WebBktxApp.fps)}`;
+            xgraphics:
+                typeof window.WebBktxXGraphics
 
-            }
+        };
 
-        }
-    );
 
-}
+        diagnostic.textContent =
+            "WEBBKTX CORE ERROR\n\n" +
 
+            message +
 
-/* ============================================================
-   STOP EMULATOR
-============================================================ */
+            "\n\nMODULE STATUS\n" +
 
-function stopEmulator() {
-
-    WebBktxApp.running =
-        false;
-
-
-    if (
-        WebBktxApp.animationFrame
-    ) {
-
-        cancelAnimationFrame(
-            WebBktxApp.animationFrame
-        );
-
-        WebBktxApp.animationFrame =
-            null;
-
-    }
-
-
-    if (
-        WebBktxApp.core &&
-        typeof WebBktxApp.core.stop ===
-        "function"
-    ) {
-
-        try {
-
-            WebBktxApp.core.stop();
-
-        } catch (error) {
-
-            console.warn(
-                "[WebBktx] Core stop failed:",
-                error
-            );
-
-        }
-
-    }
-
-
-    if (
-        WebBktxApp.core &&
-        WebBktxApp.core.cpu &&
-        typeof WebBktxApp.core.cpu.stop ===
-        "function"
-    ) {
-
-        WebBktxApp.core.cpu.stop();
-
-    }
-
-
-    showScreen(
-        "mainScreen"
-    );
-
-}
-
-
-/* ============================================================
-   CPU DIAGNOSTICS
-============================================================ */
-
-function runCPUDiagnostics() {
-
-    const output =
-        $("cpuOutput");
-
-
-    if (!output) {
-
-        return;
-
-    }
-
-
-    output.textContent =
-        "Running CPU diagnostics...\n";
-
-
-    try {
-
-        const cpu =
-            WebBktxApp.core &&
-            WebBktxApp.core.cpu;
-
-
-        if (!cpu) {
-
-            throw new Error(
-                "CPU is not initialized."
-            );
-
-        }
-
-
-        let result;
-
-
-        if (
-            typeof cpu.selfTest ===
-            "function"
-        ) {
-
-            result =
-                cpu.selfTest();
-
-        } else if (
-            typeof cpu.getStatus ===
-            "function"
-        ) {
-
-            result =
-                cpu.getStatus();
-
-        } else if (
-            typeof cpu.getState ===
-            "function"
-        ) {
-
-            result =
-                cpu.getState();
-
-        } else {
-
-            result = {
-
-                EAX:
-                    cpu.EAX,
-
-                EBX:
-                    cpu.EBX,
-
-                ECX:
-                    cpu.ECX,
-
-                EDX:
-                    cpu.EDX,
-
-                EIP:
-                    cpu.EIP,
-
-                EFLAGS:
-                    cpu.EFLAGS
-
-            };
-
-        }
-
-
-        output.textContent =
             JSON.stringify(
-                result,
+                status,
                 null,
                 2
-            );
+            ) +
 
-    } catch (error) {
+            "\n\n" +
 
-        output.textContent =
-            "CPU ERROR\n\n" +
-            error.stack ||
-            error.message;
+            "Sprawdź, czy pliki core/*.js " +
+            "są załadowane przed app.js.";
 
-    }
+    },
 
-}
 
+    /* ========================================================
+       UTILITIES
+    ======================================================== */
 
-/* ============================================================
-   ABOUT
-============================================================ */
+    formatBytes(bytes) {
 
-function setupNavigation() {
+        if (
+            bytes === 0
+        ) {
 
-    const cpuButton =
-        $("cpuTestButton");
+            return "0 B";
 
+        }
 
-    const aboutButton =
-        $("aboutButton");
 
+        const units = [
 
-    const cpuBack =
-        $("cpuBackButton");
+            "B",
+            "KB",
+            "MB",
+            "GB"
 
+        ];
 
-    const aboutBack =
-        $("aboutBackButton");
 
-
-    const backButton =
-        $("backButton");
-
-
-    if (cpuButton) {
-
-        cpuButton.addEventListener(
-            "click",
-            () => {
-
-                showScreen(
-                    "cpuScreen"
-                );
-
-
-                runCPUDiagnostics();
-
-            }
-        );
-
-    }
-
-
-    if (aboutButton) {
-
-        aboutButton.addEventListener(
-            "click",
-            () => {
-
-                showScreen(
-                    "aboutScreen"
-                );
-
-            }
-        );
-
-    }
-
-
-    if (cpuBack) {
-
-        cpuBack.addEventListener(
-            "click",
-            () => {
-
-                showScreen(
-                    "mainScreen"
-                );
-
-            }
-        );
-
-    }
-
-
-    if (aboutBack) {
-
-        aboutBack.addEventListener(
-            "click",
-            () => {
-
-                showScreen(
-                    "mainScreen"
-                );
-
-            }
-        );
-
-    }
-
-
-    if (backButton) {
-
-        backButton.addEventListener(
-            "click",
-            () => {
-
-                stopEmulator();
-
-            }
-        );
-
-    }
-
-
-    const startButton =
-        $("startButton");
-
-
-    if (startButton) {
-
-        startButton.addEventListener(
-            "click",
-            () => {
-
-                startEmulator();
-
-            }
-        );
-
-    }
-
-}
-
-
-/* ============================================================
-   HELPERS
-============================================================ */
-
-function delay(
-    milliseconds
-) {
-
-    return new Promise(
-        resolve =>
-            setTimeout(
-                resolve,
-                milliseconds
-            )
-    );
-
-}
-
-
-function formatBytes(
-    bytes
-) {
-
-    if (
-        !Number.isFinite(bytes) ||
-        bytes <= 0
-    ) {
-
-        return "0 B";
-
-    }
-
-
-    const units = [
-
-        "B",
-        "KB",
-        "MB",
-        "GB"
-
-    ];
-
-
-    const index =
-        Math.min(
+        const index =
             Math.floor(
                 Math.log(bytes) /
                 Math.log(1024)
-            ),
-            units.length - 1
+            );
+
+
+        return (
+            (
+                bytes /
+                Math.pow(
+                    1024,
+                    index
+                )
+            ).toFixed(2) +
+            " " +
+            units[index]
         );
 
+    },
 
-    const value =
-        bytes /
-        Math.pow(
-            1024,
-            index
+
+    delay(ms) {
+
+        return new Promise(
+            resolve =>
+                setTimeout(
+                    resolve,
+                    ms
+                )
         );
 
+    }
 
-    return (
-        value.toFixed(
-            index === 0
-                ? 0
-                : 2
-        ) +
-        " " +
-        units[index]
-    );
-
-}
+};
 
 
 /* ============================================================
-   STARTUP
+   GLOBAL
 ============================================================ */
 
-function boot() {
-
-    console.log(
-        `%cWebBktx App ${WEBBKTX_APP_VERSION}`,
-        "font-weight:bold"
-    );
-
-
-    /*
-     * UI setup first.
-     */
-
-    setupFileInput();
-
-    setupNavigation();
-
-
-    /*
-     * Then emulator initialization.
-     */
-
-    initializeApp();
-
-}
+window.WebBktxApp =
+    WebBktxApp;
 
 
 /* ============================================================
-   DOM READY
+   BOOT
 ============================================================ */
 
 if (
@@ -2256,7 +1701,8 @@ if (
 
     document.addEventListener(
         "DOMContentLoaded",
-        boot,
+        () =>
+            WebBktxApp.start(),
         {
             once: true
         }
@@ -2264,26 +1710,12 @@ if (
 
 } else {
 
-    boot();
+    WebBktxApp.start();
 
 }
 
 
-/* ============================================================
-   PUBLIC API
-============================================================ */
-
-window.WebBktxStart =
-    startEmulator;
-
-
-window.WebBktxStop =
-    stopEmulator;
-
-
-window.WebBktxDiagnostics =
-    runCPUDiagnostics;
-
-
-window.WebBktxLoadXBE =
-    loadGameFile;
+console.log(
+    `%cWebBktx App ${WEBBKTX_APP_VERSION}`,
+    "font-weight:bold"
+);
