@@ -1,27 +1,24 @@
 /*
  * ============================================================
  * WebBktx Unified Runtime
+ * ============================================================
  *
- * File:
- *     core/webbktx.js
+ * Single-file browser runtime.
  *
- * Version:
- *     1.2
+ * Provides:
+ *   Memory
+ *   CPU
+ *   Decoder
+ *   XBE
+ *   Thunks
+ *   XAPI
+ *   XFile
+ *   Kernel
+ *   XInput
+ *   XGraphics
+ *   Core
  *
- * Single-file experimental Xbox-compatible runtime framework.
- *
- * Modules:
- *     Memory
- *     CPU
- *     Decoder
- *     XBE
- *     Thunks
- *     XAPI
- *     XFile
- *     Kernel
- *     XInput
- *     XGraphics
- *     Core
+ * WebBktx 1.2
  * ============================================================
  */
 
@@ -33,9 +30,7 @@
 ============================================================ */
 
 const WEBBKTX_VERSION = "1.2";
-
-const WEBBKTX_RAM_SIZE =
-    64 * 1024 * 1024;
+const WEBBKTX_RAM_SIZE = 64 * 1024 * 1024;
 
 
 /* ============================================================
@@ -48,45 +43,30 @@ class WebBktxMemory {
 
         size = Number(size);
 
-        if (
-            !Number.isInteger(size) ||
-            size <= 0
-        ) {
+        if (!Number.isInteger(size) || size <= 0) {
             throw new Error("Invalid memory size.");
         }
 
         this.size = size;
-
         this.buffer = new ArrayBuffer(size);
-
-        this.view =
-            new DataView(this.buffer);
-
-        this.u8 =
-            new Uint8Array(this.buffer);
+        this.view = new DataView(this.buffer);
+        this.u8 = new Uint8Array(this.buffer);
 
         this.reset();
     }
 
 
     reset() {
-
         this.u8.fill(0);
     }
 
 
     check(address, bytes = 1) {
 
-        address =
-            Number(address) >>> 0;
+        address = Number(address) >>> 0;
+        bytes = Number(bytes);
 
-        bytes =
-            Number(bytes);
-
-        if (
-            !Number.isInteger(bytes) ||
-            bytes < 0
-        ) {
+        if (!Number.isInteger(bytes) || bytes < 0) {
             throw new RangeError(
                 "Invalid memory access size."
             );
@@ -97,7 +77,8 @@ class WebBktxMemory {
             bytes > this.size - address
         ) {
             throw new RangeError(
-                `Memory access violation: 0x${address.toString(16)}`
+                "Memory access violation: 0x" +
+                address.toString(16)
             );
         }
 
@@ -106,15 +87,11 @@ class WebBktxMemory {
 
 
     read8(address) {
-
-        return this.u8[
-            this.check(address)
-        ];
+        return this.u8[this.check(address)];
     }
 
 
     read16(address) {
-
         return this.view.getUint16(
             this.check(address, 2),
             true
@@ -123,7 +100,6 @@ class WebBktxMemory {
 
 
     read32(address) {
-
         return this.view.getUint32(
             this.check(address, 4),
             true
@@ -132,7 +108,6 @@ class WebBktxMemory {
 
 
     readSigned8(address) {
-
         return this.view.getInt8(
             this.check(address)
         );
@@ -140,7 +115,6 @@ class WebBktxMemory {
 
 
     readSigned16(address) {
-
         return this.view.getInt16(
             this.check(address, 2),
             true
@@ -149,7 +123,6 @@ class WebBktxMemory {
 
 
     readSigned32(address) {
-
         return this.view.getInt32(
             this.check(address, 4),
             true
@@ -159,9 +132,7 @@ class WebBktxMemory {
 
     write8(address, value) {
 
-        this.u8[
-            this.check(address)
-        ] =
+        this.u8[this.check(address)] =
             Number(value) & 0xFF;
     }
 
@@ -193,40 +164,19 @@ class WebBktxMemory {
                 ? bytes
                 : new Uint8Array(bytes);
 
-        const target =
-            this.check(
-                address,
-                data.length
-            );
-
         this.u8.set(
             data,
-            target
+            this.check(address, data.length)
         );
     }
 
 
     readBytes(address, length) {
 
-        address =
-            Number(address) >>> 0;
+        address = Number(address) >>> 0;
+        length = Number(length);
 
-        length =
-            Number(length);
-
-        if (
-            !Number.isInteger(length) ||
-            length < 0
-        ) {
-            throw new RangeError(
-                "Invalid read length."
-            );
-        }
-
-        this.check(
-            address,
-            length
-        );
+        this.check(address, length);
 
         return this.u8.slice(
             address,
@@ -235,31 +185,12 @@ class WebBktxMemory {
     }
 
 
-    load(address, data) {
+    fill(address, length, value = 0) {
 
-        this.writeBytes(
-            address,
-            data
-        );
-    }
+        address = Number(address) >>> 0;
+        length = Number(length);
 
-
-    fill(
-        address,
-        length,
-        value = 0
-    ) {
-
-        address =
-            Number(address) >>> 0;
-
-        length =
-            Number(length);
-
-        this.check(
-            address,
-            length
-        );
+        this.check(address, length);
 
         this.u8.fill(
             Number(value) & 0xFF,
@@ -270,13 +201,11 @@ class WebBktxMemory {
 
 
     getBuffer() {
-
         return this.buffer;
     }
 
 
     getView() {
-
         return this.view;
     }
 
@@ -284,15 +213,9 @@ class WebBktxMemory {
     getStatus() {
 
         return {
-
-            size:
-                this.size,
-
-            bytes:
-                this.size,
-
-            megabytes:
-                this.size / 1024 / 1024
+            size: this.size,
+            bytes: this.size,
+            megabytes: this.size / 1024 / 1024
         };
     }
 }
@@ -325,46 +248,27 @@ class WebBktxCPU {
 
     constructor(memory) {
 
-        if (
-            !(memory instanceof WebBktxMemory)
-        ) {
+        if (!(memory instanceof WebBktxMemory)) {
             throw new Error(
                 "WebBktxCPU requires WebBktxMemory."
             );
         }
 
-        this.memory =
-            memory;
+        this.memory = memory;
+        this.decoder = null;
 
-        this.decoder =
-            null;
+        this.maxInstructions = 100000;
 
-        this.maxInstructions =
-            100000;
+        this.breakpoints = new Set();
 
-        this.breakpoints =
-            new Set();
+        this.traceEnabled = false;
+        this.trace = [];
+        this.maxTraceEntries = 1000;
 
-        this.traceEnabled =
-            false;
-
-        this.trace =
-            [];
-
-        this.maxTraceEntries =
-            1000;
-
-        this.onInstruction =
-            null;
-
-        this.onBreakpoint =
-            null;
-
-        this.onHalt =
-            null;
-
-        this.onFault =
-            null;
+        this.onInstruction = null;
+        this.onBreakpoint = null;
+        this.onHalt = null;
+        this.onFault = null;
 
         this.reset();
     }
@@ -383,32 +287,22 @@ class WebBktxCPU {
 
         this.ESP =
             Math.max(
-                4,
+                0,
                 this.memory.size - 4
             ) >>> 0;
 
         this.EIP = 0;
 
-        this.EFLAGS =
-            0x00000002;
+        this.EFLAGS = 0x00000002;
 
-        this.running =
-            false;
+        this.running = false;
+        this.halted = false;
+        this.faulted = false;
 
-        this.halted =
-            false;
+        this.lastError = null;
 
-        this.faulted =
-            false;
-
-        this.lastError =
-            null;
-
-        this.cycles =
-            0;
-
-        this.instructionsExecuted =
-            0;
+        this.cycles = 0;
+        this.instructionsExecuted = 0;
 
         this.trace.length = 0;
     }
@@ -416,8 +310,7 @@ class WebBktxCPU {
 
     getRegister(name) {
 
-        const n =
-            String(name).toUpperCase();
+        const n = String(name).toUpperCase();
 
         switch (n) {
 
@@ -437,7 +330,7 @@ class WebBktxCPU {
             default:
 
                 throw new Error(
-                    `Unknown register: ${n}`
+                    "Unknown register: " + n
                 );
         }
     }
@@ -445,8 +338,7 @@ class WebBktxCPU {
 
     setRegister(name, value) {
 
-        const n =
-            String(name).toUpperCase();
+        const n = String(name).toUpperCase();
 
         if (n === "EFLAGS") {
 
@@ -454,7 +346,6 @@ class WebBktxCPU {
                 Number(value) >>> 0;
 
             this.EFLAGS |= 0x02;
-
             this.EFLAGS >>>= 0;
 
             return;
@@ -480,7 +371,7 @@ class WebBktxCPU {
             default:
 
                 throw new Error(
-                    `Unknown register: ${n}`
+                    "Unknown register: " + n
                 );
         }
     }
@@ -501,9 +392,7 @@ class WebBktxCPU {
             ESP: this.ESP >>> 0,
 
             EIP: this.EIP >>> 0,
-
-            EFLAGS:
-                this.EFLAGS >>> 0
+            EFLAGS: this.EFLAGS >>> 0
         };
     }
 
@@ -511,10 +400,7 @@ class WebBktxCPU {
     getFlag(flag) {
 
         return (
-            (
-                this.EFLAGS &
-                flag
-            ) !== 0
+            (this.EFLAGS & flag) !== 0
         );
     }
 
@@ -522,16 +408,12 @@ class WebBktxCPU {
     setFlag(flag, enabled) {
 
         if (enabled) {
-
             this.EFLAGS |= flag;
-
         } else {
-
             this.EFLAGS &= ~flag;
         }
 
         this.EFLAGS |= 0x02;
-
         this.EFLAGS >>>= 0;
     }
 
@@ -544,9 +426,7 @@ class WebBktxCPU {
 
         while (value) {
 
-            parity ^=
-                value & 1;
-
+            parity ^= value & 1;
             value >>>= 1;
         }
 
@@ -575,10 +455,7 @@ class WebBktxCPU {
 
         this.setFlag(
             WebBktxCPUFlags.SF,
-            (
-                result &
-                0x80000000
-            ) !== 0
+            (result & 0x80000000) !== 0
         );
 
         this.setFlag(
@@ -606,10 +483,7 @@ class WebBktxCPU {
 
         this.setFlag(
             WebBktxCPUFlags.SF,
-            (
-                result &
-                0x80000000
-            ) !== 0
+            (result & 0x80000000) !== 0
         );
 
         this.setFlag(
@@ -619,25 +493,16 @@ class WebBktxCPU {
 
         this.setFlag(
             WebBktxCPUFlags.AF,
-            (
-                (
-                    a ^
-                    b ^
-                    result
-                ) &
-                0x10
-            ) !== 0
+            ((a ^ b ^ result) & 0x10) !== 0
         );
 
         this.setFlag(
             WebBktxCPUFlags.OF,
             (
-                (
-                    (~(a ^ b)) &
-                    (a ^ result) &
-                    0x80000000
-                ) !== 0
-            )
+                (~(a ^ b)) &
+                (a ^ result) &
+                0x80000000
+            ) !== 0
         );
     }
 
@@ -660,10 +525,7 @@ class WebBktxCPU {
 
         this.setFlag(
             WebBktxCPUFlags.SF,
-            (
-                result &
-                0x80000000
-            ) !== 0
+            (result & 0x80000000) !== 0
         );
 
         this.setFlag(
@@ -673,25 +535,16 @@ class WebBktxCPU {
 
         this.setFlag(
             WebBktxCPUFlags.AF,
-            (
-                (
-                    a ^
-                    b ^
-                    result
-                ) &
-                0x10
-            ) !== 0
+            ((a ^ b ^ result) & 0x10) !== 0
         );
 
         this.setFlag(
             WebBktxCPUFlags.OF,
             (
-                (
-                    (a ^ b) &
-                    (a ^ result) &
-                    0x80000000
-                ) !== 0
-            )
+                (a ^ b) &
+                (a ^ result) &
+                0x80000000
+            ) !== 0
         );
     }
 
@@ -740,10 +593,7 @@ class WebBktxCPU {
             );
 
         const result =
-            (
-                (value >>> 0) +
-                1
-            ) >>> 0;
+            ((value >>> 0) + 1) >>> 0;
 
         this.updateAddFlags(
             value,
@@ -768,10 +618,7 @@ class WebBktxCPU {
             );
 
         const result =
-            (
-                (value >>> 0) -
-                1
-            ) >>> 0;
+            ((value >>> 0) - 1) >>> 0;
 
         this.updateSubFlags(
             value,
@@ -791,10 +638,7 @@ class WebBktxCPU {
     xor32(a, b) {
 
         const result =
-            (
-                (a >>> 0) ^
-                (b >>> 0)
-            ) >>> 0;
+            ((a >>> 0) ^ (b >>> 0)) >>> 0;
 
         this.updateLogicFlags(result);
 
@@ -805,10 +649,7 @@ class WebBktxCPU {
     and32(a, b) {
 
         const result =
-            (
-                (a >>> 0) &
-                (b >>> 0)
-            ) >>> 0;
+            ((a >>> 0) & (b >>> 0)) >>> 0;
 
         this.updateLogicFlags(result);
 
@@ -819,10 +660,7 @@ class WebBktxCPU {
     or32(a, b) {
 
         const result =
-            (
-                (a >>> 0) |
-                (b >>> 0)
-            ) >>> 0;
+            ((a >>> 0) | (b >>> 0)) >>> 0;
 
         this.updateLogicFlags(result);
 
@@ -833,17 +671,13 @@ class WebBktxCPU {
     push32(value) {
 
         if (this.ESP < 4) {
-
             throw new Error(
                 "Stack underflow."
             );
         }
 
         this.ESP =
-            (
-                this.ESP -
-                4
-            ) >>> 0;
+            (this.ESP - 4) >>> 0;
 
         this.memory.write32(
             this.ESP,
@@ -869,10 +703,7 @@ class WebBktxCPU {
             );
 
         this.ESP =
-            (
-                this.ESP +
-                4
-            ) >>> 0;
+            (this.ESP + 4) >>> 0;
 
         return value >>> 0;
     }
@@ -881,14 +712,12 @@ class WebBktxCPU {
     attachDecoder(decoder) {
 
         if (!decoder) {
-
             throw new Error(
                 "Invalid decoder."
             );
         }
 
-        this.decoder =
-            decoder;
+        this.decoder = decoder;
 
         return true;
     }
@@ -913,14 +742,6 @@ class WebBktxCPU {
     clearBreakpoints() {
 
         this.breakpoints.clear();
-    }
-
-
-    hasBreakpoint(address) {
-
-        return this.breakpoints.has(
-            Number(address) >>> 0
-        );
     }
 
 
@@ -965,22 +786,22 @@ class WebBktxCPU {
         if (this.halted) {
 
             return {
-
                 executed: false,
                 halted: true,
                 reason: "CPU HALTED"
             };
         }
 
+
         if (this.faulted) {
 
             return {
-
                 executed: false,
                 faulted: true,
                 reason: this.lastError
             };
         }
+
 
         if (!this.decoder) {
 
@@ -989,11 +810,13 @@ class WebBktxCPU {
             );
         }
 
+
         const address =
             this.EIP >>> 0;
 
+
         if (
-            this.hasBreakpoint(address)
+            this.breakpoints.has(address)
         ) {
 
             this.running = false;
@@ -1006,12 +829,12 @@ class WebBktxCPU {
             }
 
             return {
-
                 executed: false,
                 breakpoint: true,
                 address
             };
         }
+
 
         try {
 
@@ -1021,26 +844,20 @@ class WebBktxCPU {
                     address
                 );
 
+
             if (!instruction) {
-
                 throw new Error(
-                    `No instruction at 0x${address.toString(16)}`
+                    "No instruction."
                 );
             }
 
-            if (
-                typeof instruction.execute !==
-                "function"
-            ) {
-                throw new Error(
-                    "Instruction has no execute()."
-                );
-            }
 
             instruction.execute(this);
 
+
             this.cycles++;
             this.instructionsExecuted++;
+
 
             const result = {
 
@@ -1049,16 +866,14 @@ class WebBktxCPU {
                 address,
 
                 opcode:
-                    instruction.opcode ??
-                    null,
+                    instruction.opcode ?? null,
 
                 mnemonic:
                     instruction.mnemonic ??
                     "UNKNOWN",
 
                 size:
-                    instruction.size ??
-                    null,
+                    instruction.size ?? null,
 
                 registers:
                     this.getRegisters(),
@@ -1070,7 +885,9 @@ class WebBktxCPU {
                     this.halted
             };
 
+
             this.addTrace(result);
+
 
             if (
                 typeof this.onInstruction ===
@@ -1079,6 +896,7 @@ class WebBktxCPU {
                 this.onInstruction(result);
             }
 
+
             if (
                 this.halted &&
                 typeof this.onHalt ===
@@ -1086,6 +904,7 @@ class WebBktxCPU {
             ) {
                 this.onHalt(result);
             }
+
 
             return result;
 
@@ -1100,8 +919,7 @@ class WebBktxCPU {
 
     run(limit = this.maxInstructions) {
 
-        limit =
-            Number(limit);
+        limit = Number(limit);
 
         if (
             !Number.isInteger(limit) ||
@@ -1112,10 +930,12 @@ class WebBktxCPU {
             );
         }
 
+
         this.running = true;
 
         let executed = 0;
         let last = null;
+
 
         try {
 
@@ -1126,8 +946,7 @@ class WebBktxCPU {
                 executed < limit
             ) {
 
-                last =
-                    this.step();
+                last = this.step();
 
                 if (
                     last &&
@@ -1148,6 +967,7 @@ class WebBktxCPU {
 
             this.running = false;
         }
+
 
         return {
 
@@ -1174,13 +994,11 @@ class WebBktxCPU {
 
 
     stop() {
-
         this.running = false;
     }
 
 
     halt() {
-
         this.halted = true;
         this.running = false;
     }
@@ -1195,6 +1013,7 @@ class WebBktxCPU {
             error instanceof Error
                 ? error.message
                 : String(error);
+
 
         if (
             typeof this.onFault ===
@@ -1269,68 +1088,29 @@ class WebBktxCPU {
     }
 
 
-    getState() {
-
-        return this.getStatus();
-    }
-
-
-    snapshot() {
-
-        return {
-
-            ...this.getRegisters(),
-
-            cycles:
-                this.cycles,
-
-            instructionsExecuted:
-                this.instructionsExecuted,
-
-            halted:
-                this.halted,
-
-            faulted:
-                this.faulted,
-
-            error:
-                this.lastError
-        };
-    }
-
-
     selfTest() {
 
         this.reset();
 
         const tests = [];
 
-        tests.push({
 
+        tests.push({
             name: "ADD",
-
             pass:
-                this.add32(
-                    10,
-                    20
-                ) === 30
+                this.add32(10, 20) === 30
         });
 
-        tests.push({
 
+        tests.push({
             name: "SUB",
-
             pass:
-                this.sub32(
-                    50,
-                    20
-                ) === 30
+                this.sub32(50, 20) === 30
         });
 
+
         tests.push({
-
             name: "XOR",
-
             pass:
                 this.xor32(
                     0xFF00,
@@ -1338,53 +1118,52 @@ class WebBktxCPU {
                 ) === 0xF000
         });
 
-        const oldESP =
-            this.ESP;
+
+        const oldESP = this.ESP;
+
 
         this.push32(
             0x12345678
         );
 
+
         tests.push({
-
             name: "STACK",
-
             pass:
                 this.pop32() ===
                 0x12345678 &&
-                this.ESP ===
-                oldESP
+                this.ESP === oldESP
         });
 
-        this.write32(
+
+        this.memory.write32(
             0x1000,
             0xDEADBEEF
         );
 
+
         tests.push({
-
             name: "MEMORY",
-
             pass:
-                this.read32(0x1000) ===
-                0xDEADBEEF
+                this.memory.read32(
+                    0x1000
+                ) === 0xDEADBEEF
         });
 
+
         tests.push({
-
             name: "INC",
-
             pass:
                 this.inc32(9) === 10
         });
 
+
         tests.push({
-
             name: "DEC",
-
             pass:
                 this.dec32(10) === 9
         });
+
 
         return {
 
@@ -1410,11 +1189,8 @@ class WebBktxDecoder {
 
     constructor(memory) {
 
-        this.memory =
-            memory;
-
-        this.version =
-            WEBBKTX_VERSION;
+        this.memory = memory;
+        this.version = WEBBKTX_VERSION;
     }
 
 
@@ -1423,304 +1199,303 @@ class WebBktxDecoder {
         const opcode =
             this.memory.read8(address);
 
-        switch (opcode) {
 
-            case 0x90:
+        /* NOP */
 
-                return {
+        if (opcode === 0x90) {
 
-                    opcode,
+            return {
 
-                    mnemonic:
-                        "NOP",
+                opcode,
 
-                    size: 1,
+                mnemonic: "NOP",
 
-                    execute() {
+                size: 1,
 
-                        cpu.EIP =
-                            (
-                                cpu.EIP + 1
-                            ) >>> 0;
-                    }
-                };
+                execute() {
 
-
-            case 0xF4:
-
-                return {
-
-                    opcode,
-
-                    mnemonic:
-                        "HLT",
-
-                    size: 1,
-
-                    execute() {
-
-                        cpu.EIP =
-                            (
-                                cpu.EIP + 1
-                            ) >>> 0;
-
-                        cpu.halt();
-                    }
-                };
+                    cpu.EIP =
+                        (cpu.EIP + 1) >>> 0;
+                }
+            };
+        }
 
 
-            case 0xB8:
-            case 0xB9:
-            case 0xBA:
-            case 0xBB:
-            case 0xBC:
-            case 0xBD:
-            case 0xBE:
-            case 0xBF: {
+        /* HLT */
 
-                const reg =
-                    opcode - 0xB8;
+        if (opcode === 0xF4) {
 
-                const value =
-                    this.memory.read32(
-                        address + 1
+            return {
+
+                opcode,
+
+                mnemonic: "HLT",
+
+                size: 1,
+
+                execute() {
+
+                    cpu.EIP =
+                        (cpu.EIP + 1) >>> 0;
+
+                    cpu.halt();
+                }
+            };
+        }
+
+
+        /* MOV r32, imm32 */
+
+        if (
+            opcode >= 0xB8 &&
+            opcode <= 0xBF
+        ) {
+
+            const reg =
+                opcode - 0xB8;
+
+
+            const names = [
+                "EAX",
+                "ECX",
+                "EDX",
+                "EBX",
+                "ESP",
+                "EBP",
+                "ESI",
+                "EDI"
+            ];
+
+
+            const value =
+                this.memory.read32(
+                    address + 1
+                );
+
+
+            return {
+
+                opcode,
+
+                mnemonic:
+                    "MOV " +
+                    names[reg] +
+                    ", imm32",
+
+                size: 5,
+
+                execute() {
+
+                    cpu.setRegister(
+                        names[reg],
+                        value
                     );
 
-                const names = [
+                    cpu.EIP =
+                        (cpu.EIP + 5) >>> 0;
+                }
+            };
+        }
 
-                    "EAX",
-                    "ECX",
-                    "EDX",
-                    "EBX",
-                    "ESP",
-                    "EBP",
-                    "ESI",
-                    "EDI"
-                ];
 
-                return {
+        /* ADD EAX, imm32 */
 
-                    opcode,
+        if (opcode === 0x05) {
 
-                    mnemonic:
-                        `MOV ${names[reg]}, imm32`,
+            const value =
+                this.memory.read32(
+                    address + 1
+                );
 
-                    size: 5,
 
-                    execute() {
+            return {
 
-                        cpu.setRegister(
-                            names[reg],
+                opcode,
+
+                mnemonic:
+                    "ADD EAX, imm32",
+
+                size: 5,
+
+                execute() {
+
+                    cpu.EAX =
+                        cpu.add32(
+                            cpu.EAX,
                             value
                         );
 
-                        cpu.EIP =
-                            (
-                                cpu.EIP + 5
-                            ) >>> 0;
-                    }
-                };
-            }
+                    cpu.EIP =
+                        (cpu.EIP + 5) >>> 0;
+                }
+            };
+        }
 
 
-            case 0x05: {
+        /* SUB EAX, imm32 */
 
-                const value =
-                    this.memory.read32(
-                        address + 1
-                    );
+        if (opcode === 0x2D) {
 
-                return {
-
-                    opcode,
-
-                    mnemonic:
-                        "ADD EAX, imm32",
-
-                    size: 5,
-
-                    execute() {
-
-                        cpu.EAX =
-                            cpu.add32(
-                                cpu.EAX,
-                                value
-                            );
-
-                        cpu.EIP =
-                            (
-                                cpu.EIP + 5
-                            ) >>> 0;
-                    }
-                };
-            }
+            const value =
+                this.memory.read32(
+                    address + 1
+                );
 
 
-            case 0x2D: {
+            return {
 
-                const value =
-                    this.memory.read32(
-                        address + 1
-                    );
+                opcode,
 
-                return {
+                mnemonic:
+                    "SUB EAX, imm32",
 
-                    opcode,
+                size: 5,
 
-                    mnemonic:
-                        "SUB EAX, imm32",
+                execute() {
 
-                    size: 5,
+                    cpu.EAX =
+                        cpu.sub32(
+                            cpu.EAX,
+                            value
+                        );
 
-                    execute() {
-
-                        cpu.EAX =
-                            cpu.sub32(
-                                cpu.EAX,
-                                value
-                            );
-
-                        cpu.EIP =
-                            (
-                                cpu.EIP + 5
-                            ) >>> 0;
-                    }
-                };
-            }
+                    cpu.EIP =
+                        (cpu.EIP + 5) >>> 0;
+                }
+            };
+        }
 
 
-            case 0x40:
+        /* INC EAX */
 
-                return {
+        if (opcode === 0x40) {
 
-                    opcode,
+            return {
 
-                    mnemonic:
-                        "INC EAX",
+                opcode,
 
-                    size: 1,
+                mnemonic: "INC EAX",
 
-                    execute() {
+                size: 1,
 
-                        cpu.EAX =
-                            cpu.inc32(
-                                cpu.EAX
-                            );
+                execute() {
 
-                        cpu.EIP =
-                            (
-                                cpu.EIP + 1
-                            ) >>> 0;
-                    }
-                };
-
-
-            case 0x48:
-
-                return {
-
-                    opcode,
-
-                    mnemonic:
-                        "DEC EAX",
-
-                    size: 1,
-
-                    execute() {
-
-                        cpu.EAX =
-                            cpu.dec32(
-                                cpu.EAX
-                            );
-
-                        cpu.EIP =
-                            (
-                                cpu.EIP + 1
-                            ) >>> 0;
-                    }
-                };
-
-
-            case 0x50:
-
-                return {
-
-                    opcode,
-
-                    mnemonic:
-                        "PUSH EAX",
-
-                    size: 1,
-
-                    execute() {
-
-                        cpu.push32(
+                    cpu.EAX =
+                        cpu.inc32(
                             cpu.EAX
                         );
 
-                        cpu.EIP =
-                            (
-                                cpu.EIP + 1
-                            ) >>> 0;
-                    }
-                };
-
-
-            case 0x58:
-
-                return {
-
-                    opcode,
-
-                    mnemonic:
-                        "POP EAX",
-
-                    size: 1,
-
-                    execute() {
-
-                        cpu.EAX =
-                            cpu.pop32();
-
-                        cpu.EIP =
-                            (
-                                cpu.EIP + 1
-                            ) >>> 0;
-                    }
-                };
-
-
-            case 0xC3:
-
-                return {
-
-                    opcode,
-
-                    mnemonic:
-                        "RET",
-
-                    size: 1,
-
-                    execute() {
-
-                        cpu.EIP =
-                            cpu.pop32();
-                    }
-                };
-
-
-            default:
-
-                throw new Error(
-                    `Unsupported x86 opcode 0x${
-                        opcode
-                            .toString(16)
-                            .padStart(2, "0")
-                    } at 0x${
-                        address.toString(16)
-                    }`
-                );
+                    cpu.EIP =
+                        (cpu.EIP + 1) >>> 0;
+                }
+            };
         }
+
+
+        /* DEC EAX */
+
+        if (opcode === 0x48) {
+
+            return {
+
+                opcode,
+
+                mnemonic: "DEC EAX",
+
+                size: 1,
+
+                execute() {
+
+                    cpu.EAX =
+                        cpu.dec32(
+                            cpu.EAX
+                        );
+
+                    cpu.EIP =
+                        (cpu.EIP + 1) >>> 0;
+                }
+            };
+        }
+
+
+        /* PUSH EAX */
+
+        if (opcode === 0x50) {
+
+            return {
+
+                opcode,
+
+                mnemonic: "PUSH EAX",
+
+                size: 1,
+
+                execute() {
+
+                    cpu.push32(
+                        cpu.EAX
+                    );
+
+                    cpu.EIP =
+                        (cpu.EIP + 1) >>> 0;
+                }
+            };
+        }
+
+
+        /* POP EAX */
+
+        if (opcode === 0x58) {
+
+            return {
+
+                opcode,
+
+                mnemonic: "POP EAX",
+
+                size: 1,
+
+                execute() {
+
+                    cpu.EAX =
+                        cpu.pop32();
+
+                    cpu.EIP =
+                        (cpu.EIP + 1) >>> 0;
+                }
+            };
+        }
+
+
+        /* RET */
+
+        if (opcode === 0xC3) {
+
+            return {
+
+                opcode,
+
+                mnemonic: "RET",
+
+                size: 1,
+
+                execute() {
+
+                    cpu.EIP =
+                        cpu.pop32();
+                }
+            };
+        }
+
+
+        throw new Error(
+            "Unsupported x86 opcode 0x" +
+            opcode
+                .toString(16)
+                .padStart(2, "0") +
+            " at 0x" +
+            address.toString(16)
+        );
     }
 }
 
@@ -1733,37 +1508,29 @@ class WebBktxXBE {
 
     constructor(source = null) {
 
-        this.source =
-            source;
+        this.source = source;
+        this.loaded = false;
 
-        this.loaded =
-            false;
+        this.buffer = null;
 
-        this.buffer =
-            null;
+        this.header = null;
 
-        this.header =
-            null;
-
-        this.entryPoint =
-            0;
-
-        this.imageBase =
-            0;
+        this.entryPoint = 0;
+        this.imageBase = 0;
     }
 
 
     async load(source = this.source) {
 
         if (!source) {
-
             throw new Error(
                 "No XBE source."
             );
         }
 
-        this.source =
-            source;
+
+        this.source = source;
+
 
         if (
             source instanceof ArrayBuffer
@@ -1798,19 +1565,19 @@ class WebBktxXBE {
             );
         }
 
+
         const bytes =
             new Uint8Array(
                 this.buffer
             );
 
-        if (
-            bytes.length < 4
-        ) {
 
+        if (bytes.length < 4) {
             throw new Error(
                 "File is too small to be an XBE."
             );
         }
+
 
         const magic =
             String.fromCharCode(
@@ -1820,19 +1587,20 @@ class WebBktxXBE {
                 bytes[3]
             );
 
+
         /*
-         * XBE files normally begin with
+         * Real XBE files normally start with
          * the XBEH signature.
          */
 
-        if (
-            magic !== "XBEH"
-        ) {
+        if (magic !== "XBEH") {
 
             throw new Error(
-                `Invalid XBE signature: ${magic}`
+                "Invalid XBE signature: " +
+                magic
             );
         }
+
 
         this.header = {
 
@@ -1842,8 +1610,8 @@ class WebBktxXBE {
                 bytes.length
         };
 
-        this.loaded =
-            true;
+
+        this.loaded = true;
 
         return this;
     }
@@ -1894,11 +1662,8 @@ class WebBktxThunks {
 
     constructor() {
 
-        this.table =
-            new Map();
-
-        this.version =
-            WEBBKTX_VERSION;
+        this.table = new Map();
+        this.version = WEBBKTX_VERSION;
     }
 
 
@@ -1913,6 +1678,7 @@ class WebBktxThunks {
                 "Thunk handler must be a function."
             );
         }
+
 
         this.table.set(
             Number(address) >>> 0,
@@ -1936,16 +1702,17 @@ class WebBktxThunks {
                 Number(address) >>> 0
             );
 
+
         if (!handler) {
 
             throw new Error(
-                `Unknown thunk: 0x${
-                    (
-                        Number(address) >>> 0
-                    ).toString(16)
-                }`
+                "Unknown thunk: 0x" +
+                (
+                    Number(address) >>> 0
+                ).toString(16)
             );
         }
+
 
         return handler(...args);
     }
@@ -1979,14 +1746,9 @@ class WebBktxXAPI {
 
     constructor(core = null) {
 
-        this.core =
-            core;
-
-        this.functions =
-            new Map();
-
-        this.version =
-            WEBBKTX_VERSION;
+        this.core = core;
+        this.functions = new Map();
+        this.version = WEBBKTX_VERSION;
 
         this.registerDefaults();
     }
@@ -2000,9 +1762,10 @@ class WebBktxXAPI {
         ) {
 
             throw new Error(
-                `XAPI handler for ${name} must be a function.`
+                "XAPI handler must be a function."
             );
         }
+
 
         this.functions.set(
             String(name),
@@ -2026,12 +1789,15 @@ class WebBktxXAPI {
                 String(name)
             );
 
+
         if (!fn) {
 
             throw new Error(
-                `Unknown XAPI function: ${name}`
+                "Unknown XAPI function: " +
+                name
             );
         }
+
 
         return fn(...args);
     }
@@ -2106,25 +1872,20 @@ class WebBktxXFile {
 
     constructor() {
 
-        this.files =
-            new Map();
-
-        this.nextHandle =
-            1;
-
-        this.version =
-            WEBBKTX_VERSION;
+        this.files = new Map();
+        this.nextHandle = 1;
+        this.version = WEBBKTX_VERSION;
     }
 
 
     async open(file) {
 
         if (!file) {
-
             throw new Error(
                 "No file."
             );
         }
+
 
         if (
             typeof file.arrayBuffer !==
@@ -2136,11 +1897,14 @@ class WebBktxXFile {
             );
         }
 
+
         const buffer =
             await file.arrayBuffer();
 
+
         const handle =
             this.nextHandle++;
+
 
         this.files.set(
             handle,
@@ -2157,6 +1921,7 @@ class WebBktxXFile {
                 buffer
             }
         );
+
 
         return handle;
     }
@@ -2205,17 +1970,13 @@ class WebBktxKernel {
 
     constructor(core = null) {
 
-        this.core =
-            core;
+        this.core = core;
 
-        this.initialized =
-            false;
+        this.initialized = false;
 
-        this.version =
-            WEBBKTX_VERSION;
+        this.version = WEBBKTX_VERSION;
 
-        this.services =
-            new Map();
+        this.services = new Map();
     }
 
 
@@ -2225,10 +1986,23 @@ class WebBktxKernel {
             return true;
         }
 
-        this.initialized =
-            true;
+        this.initialized = true;
 
         return true;
+    }
+
+
+    start() {
+
+        this.initialized = true;
+
+        return true;
+    }
+
+
+    stop() {
+
+        this.initialized = false;
     }
 
 
@@ -2252,22 +2026,6 @@ class WebBktxKernel {
     }
 
 
-    start() {
-
-        this.initialized =
-            true;
-
-        return true;
-    }
-
-
-    stop() {
-
-        this.initialized =
-            false;
-    }
-
-
     getStatus() {
 
         return {
@@ -2279,9 +2037,7 @@ class WebBktxKernel {
                 this.initialized,
 
             services:
-                [
-                    ...this.services.keys()
-                ]
+                [...this.services.keys()]
         };
     }
 }
@@ -2295,8 +2051,7 @@ class WebBktxXInput {
 
     constructor() {
 
-        this.version =
-            WEBBKTX_VERSION;
+        this.version = WEBBKTX_VERSION;
 
         this.buttons =
             Object.create(null);
@@ -2313,20 +2068,16 @@ class WebBktxXInput {
             rightTrigger: 0
         };
 
-        this.gamepadIndex =
-            null;
+
+        this.gamepadIndex = null;
 
         this.keyboard =
             Object.create(null);
 
-        this.started =
-            false;
+        this.started = false;
 
-        this.rafId =
-            null;
+        this.rafId = null;
 
-        this.boundGamepad =
-            this.pollGamepads.bind(this);
 
         this.boundKeyDown =
             event => {
@@ -2336,6 +2087,7 @@ class WebBktxXInput {
                 ] = true;
             };
 
+
         this.boundKeyUp =
             event => {
 
@@ -2344,12 +2096,17 @@ class WebBktxXInput {
                 ] = false;
             };
 
+
         this.boundBlur =
             () => {
 
                 this.keyboard =
                     Object.create(null);
             };
+
+
+        this.boundPoll =
+            this.pollGamepads.bind(this);
     }
 
 
@@ -2359,6 +2116,7 @@ class WebBktxXInput {
             return true;
         }
 
+
         if (
             typeof window ===
             "undefined"
@@ -2366,23 +2124,26 @@ class WebBktxXInput {
             return false;
         }
 
+
         window.addEventListener(
             "keydown",
             this.boundKeyDown
         );
+
 
         window.addEventListener(
             "keyup",
             this.boundKeyUp
         );
 
+
         window.addEventListener(
             "blur",
             this.boundBlur
         );
 
-        this.started =
-            true;
+
+        this.started = true;
 
         this.pollGamepads();
 
@@ -2396,6 +2157,7 @@ class WebBktxXInput {
             return;
         }
 
+
         if (
             typeof navigator !==
             "undefined" &&
@@ -2406,7 +2168,9 @@ class WebBktxXInput {
             const pads =
                 navigator.getGamepads();
 
+
             let found = false;
+
 
             for (
                 let i = 0;
@@ -2414,20 +2178,20 @@ class WebBktxXInput {
                 i++
             ) {
 
-                const pad =
-                    pads[i];
+                const pad = pads[i];
 
                 if (!pad) {
                     continue;
                 }
 
+
                 found = true;
 
-                this.gamepadIndex =
-                    i;
+                this.gamepadIndex = i;
 
                 this.buttons =
                     Object.create(null);
+
 
                 for (
                     let j = 0;
@@ -2442,9 +2206,8 @@ class WebBktxXInput {
                         );
                 }
 
-                if (
-                    pad.axes.length >= 4
-                ) {
+
+                if (pad.axes.length >= 4) {
 
                     this.axes.leftX =
                         pad.axes[0] || 0;
@@ -2459,11 +2222,13 @@ class WebBktxXInput {
                         pad.axes[3] || 0;
                 }
 
+
                 if (pad.buttons[6]) {
 
                     this.axes.leftTrigger =
                         pad.buttons[6].value || 0;
                 }
+
 
                 if (pad.buttons[7]) {
 
@@ -2471,15 +2236,16 @@ class WebBktxXInput {
                         pad.buttons[7].value || 0;
                 }
 
+
                 break;
             }
 
-            if (!found) {
 
-                this.gamepadIndex =
-                    null;
+            if (!found) {
+                this.gamepadIndex = null;
             }
         }
+
 
         if (
             typeof requestAnimationFrame ===
@@ -2488,7 +2254,7 @@ class WebBktxXInput {
 
             this.rafId =
                 requestAnimationFrame(
-                    this.boundGamepad
+                    this.boundPoll
                 );
         }
     }
@@ -2502,19 +2268,13 @@ class WebBktxXInput {
                 this.gamepadIndex,
 
             buttons:
-                {
-                    ...this.buttons
-                },
+                {...this.buttons},
 
             axes:
-                {
-                    ...this.axes
-                },
+                {...this.axes},
 
             keyboard:
-                {
-                    ...this.keyboard
-                }
+                {...this.keyboard}
         };
     }
 
@@ -2542,6 +2302,7 @@ class WebBktxXInput {
             );
         }
 
+
         if (
             this.rafId !== null &&
             typeof cancelAnimationFrame ===
@@ -2553,11 +2314,9 @@ class WebBktxXInput {
             );
         }
 
-        this.rafId =
-            null;
 
-        this.started =
-            false;
+        this.rafId = null;
+        this.started = false;
     }
 
 
@@ -2586,32 +2345,21 @@ class WebBktxXGraphics {
 
     constructor(canvas = null) {
 
-        this.canvas =
-            null;
+        this.canvas = null;
+        this.context = null;
 
-        this.context =
-            null;
+        this.width = 1280;
+        this.height = 720;
 
-        this.width =
-            1280;
+        this.running = false;
+        this.frameCount = 0;
 
-        this.height =
-            720;
+        this.lastPresent = 0;
 
-        this.running =
-            false;
+        this.version = WEBBKTX_VERSION;
 
-        this.frameCount =
-            0;
-
-        this.lastPresent =
-            0;
-
-        this.version =
-            WEBBKTX_VERSION;
 
         if (canvas) {
-
             this.initialize(canvas);
         }
     }
@@ -2626,8 +2374,9 @@ class WebBktxXGraphics {
             );
         }
 
-        this.canvas =
-            canvas;
+
+        this.canvas = canvas;
+
 
         this.context =
             canvas.getContext(
@@ -2637,30 +2386,24 @@ class WebBktxXGraphics {
                 }
             );
 
+
         if (!this.context) {
 
             throw new Error(
-                "Unable to create 2D graphics context."
+                "Unable to create graphics context."
             );
         }
+
 
         this.setResolution(
             this.width,
             this.height
         );
 
+
         this.clear();
 
         return true;
-    }
-
-
-    SetResolution(width, height) {
-
-        this.setResolution(
-            width,
-            height
-        );
     }
 
 
@@ -2669,18 +2412,16 @@ class WebBktxXGraphics {
         this.width =
             Math.max(
                 1,
-                Math.floor(
-                    Number(width) || 1
-                )
+                Math.floor(Number(width))
             );
+
 
         this.height =
             Math.max(
                 1,
-                Math.floor(
-                    Number(height) || 1
-                )
+                Math.floor(Number(height))
             );
+
 
         if (this.canvas) {
 
@@ -2693,49 +2434,45 @@ class WebBktxXGraphics {
     }
 
 
-    Clear(
-        r = 0,
-        g = 0,
-        b = 0,
-        a = 255
-    ) {
+    SetResolution(width, height) {
 
-        this.clear(
-            r,
-            g,
-            b,
-            a
+        return this.setResolution(
+            width,
+            height
         );
     }
 
 
-    clear(
-        r = 0,
-        g = 0,
-        b = 0,
-        a = 255
-    ) {
+    clear(r = 0, g = 0, b = 0, a = 255) {
 
         if (!this.context) {
             return;
         }
 
+
         this.context.fillStyle =
-            `rgba(${
-                Number(r) || 0
-            },${
-                Number(g) || 0
-            },${
-                Number(b) || 0
-            },${
-                (Number(a) || 0) / 255
-            })`;
+            `rgba(${Number(r) || 0},` +
+            `${Number(g) || 0},` +
+            `${Number(b) || 0},` +
+            `${(Number(a) || 0) / 255})`;
+
 
         this.context.fillRect(
             0,
             0,
             this.width,
             this.height
+        );
+    }
+
+
+    Clear(r = 0, g = 0, b = 0, a = 255) {
+
+        return this.clear(
+            r,
+            g,
+            b,
+            a
         );
     }
 
@@ -2758,33 +2495,33 @@ class WebBktxXGraphics {
             return;
         }
 
-        this.running =
-            true;
 
-        const frame =
-            () => {
+        this.running = true;
 
-                if (!this.running) {
-                    return;
-                }
 
-                this.Present();
+        const frame = () => {
 
-                if (
-                    typeof requestAnimationFrame ===
-                    "function"
-                ) {
+            if (!this.running) {
+                return;
+            }
 
-                    requestAnimationFrame(frame);
 
-                } else {
+            this.Present();
 
-                    setTimeout(
-                        frame,
-                        16
-                    );
-                }
-            };
+
+            if (
+                typeof requestAnimationFrame ===
+                "function"
+            ) {
+
+                requestAnimationFrame(frame);
+
+            } else {
+
+                setTimeout(frame, 16);
+            }
+        };
+
 
         frame();
     }
@@ -2792,8 +2529,7 @@ class WebBktxXGraphics {
 
     stop() {
 
-        this.running =
-            false;
+        this.running = false;
     }
 
 
@@ -2823,10 +2559,6 @@ class WebBktxXGraphics {
 }
 
 
-const WebBktxGraphics =
-    WebBktxXGraphics;
-
-
 /* ============================================================
    CORE
 ============================================================ */
@@ -2850,55 +2582,61 @@ class WebBktxCore {
                 WEBBKTX_RAM_SIZE
             );
 
+
+        /* MEMORY */
+
         this.memory =
             new WebBktxMemory(
                 this.ramSize
             );
+
+
+        /* DECODER */
 
         this.decoder =
             new WebBktxDecoder(
                 this.memory
             );
 
+
+        /* CPU */
+
         this.cpu =
             new WebBktxCPU(
                 this.memory
             );
 
+
         this.cpu.attachDecoder(
             this.decoder
         );
+
+
+        /* SYSTEM */
 
         this.thunks =
             new WebBktxThunks();
 
         this.xapi =
-            new WebBktxXAPI(
-                this
-            );
+            new WebBktxXAPI(this);
 
         this.xfile =
             new WebBktxXFile();
 
         this.kernel =
-            new WebBktxKernel(
-                this
-            );
+            new WebBktxKernel(this);
 
-        this.input =
-            null;
 
-        this.graphics =
-            null;
+        /* OPTIONAL COMPONENTS */
 
-        this.xbe =
-            null;
+        this.input = null;
+        this.graphics = null;
+        this.xbe = null;
 
-        this.initialized =
-            false;
 
-        this.running =
-            false;
+        this.initialized = false;
+        this.running = false;
+
 
         this.cpu.onFault =
             error => {
@@ -2920,17 +2658,20 @@ class WebBktxCore {
             return true;
         }
 
+
         this.kernel.initialize();
 
-        this.initialized =
-            true;
+
+        this.initialized = true;
+
 
         if (this.debug) {
 
             console.log(
-                `[WebBktx Core ${this.version}] initialized`
+                "[WebBktx] Core initialized"
             );
         }
+
 
         return true;
     }
@@ -2939,19 +2680,20 @@ class WebBktxCore {
     async loadGame(source) {
 
         if (!this.initialized) {
-
             this.initialize();
         }
+
 
         this.xbe =
             new WebBktxXBE(source);
 
+
         await this.xbe.load();
+
 
         return {
 
-            success:
-                true,
+            success: true,
 
             image:
                 this.xbe,
@@ -2974,14 +2716,15 @@ class WebBktxCore {
             );
         }
 
+
         return this.cpu.step();
     }
 
 
     run(limit) {
 
-        this.running =
-            true;
+        this.running = true;
+
 
         try {
 
@@ -2989,21 +2732,19 @@ class WebBktxCore {
 
         } finally {
 
-            this.running =
-                false;
+            this.running = false;
         }
     }
 
 
     stop() {
 
-        this.running =
-            false;
+        this.running = false;
 
         this.cpu.stop();
 
-        if (this.graphics) {
 
+        if (this.graphics) {
             this.graphics.stop();
         }
     }
@@ -3012,14 +2753,15 @@ class WebBktxCore {
     attachGraphics(canvas) {
 
         if (this.graphics) {
-
             this.graphics.stop();
         }
+
 
         this.graphics =
             new WebBktxXGraphics(
                 canvas
             );
+
 
         return this.graphics;
     }
@@ -3028,14 +2770,16 @@ class WebBktxCore {
     attachInput() {
 
         if (this.input) {
-
             this.input.destroy();
         }
+
 
         this.input =
             new WebBktxXInput();
 
+
         this.input.initialize();
+
 
         return this.input;
     }
@@ -3049,8 +2793,7 @@ class WebBktxCore {
 
         this.cpu.reset();
 
-        this.xbe =
-            null;
+        this.xbe = null;
     }
 
 
@@ -3096,12 +2839,12 @@ class WebBktxCore {
             kernel:
                 this.kernel.getStatus(),
 
-            input:
+            xinput:
                 this.input
                     ? this.input.getStatus()
                     : null,
 
-            graphics:
+            xgraphics:
                 this.graphics
                     ? this.graphics.getStatus()
                     : null
@@ -3114,15 +2857,13 @@ class WebBktxCore {
         const cpu =
             this.cpu.selfTest();
 
-        this.kernel.initialize();
 
         return {
 
             version:
                 this.version,
 
-            memory:
-                true,
+            memory: true,
 
             cpu,
 
@@ -3184,7 +2925,7 @@ window.WebBktxXGraphics =
     WebBktxXGraphics;
 
 window.WebBktxGraphics =
-    WebBktxGraphics;
+    WebBktxXGraphics;
 
 window.WebBktxCore =
     WebBktxCore;
@@ -3247,25 +2988,7 @@ window.WebBktx = {
 
 
 /* ============================================================
-   RUNTIME FACTORY
-============================================================ */
-
-window.WebBktx.create =
-    function(options = {}) {
-
-        const core =
-            new WebBktxCore(
-                options
-            );
-
-        core.initialize();
-
-        return core;
-    };
-
-
-/* ============================================================
-   DEFAULT CORE INSTANCE
+   CREATE DEFAULT RUNTIME INSTANCE
 ============================================================ */
 
 window.WebBktxRuntime =
@@ -3273,38 +2996,55 @@ window.WebBktxRuntime =
         debug: true
     });
 
-window.WebBktxRuntime.initialize();
+
+/* ============================================================
+   INITIALIZE
+============================================================ */
+
+try {
+
+    window.WebBktxRuntime.initialize();
+
+    console.log(
+        "[WebBktx] Unified runtime loaded:",
+        window.WebBktx
+    );
+
+    console.log(
+        "[WebBktx] Runtime instance:",
+        window.WebBktxRuntime
+    );
+
+    console.log(
+        "[WebBktx] Status:",
+        window.WebBktxRuntime.getStatus()
+    );
+
+} catch (error) {
+
+    console.error(
+        "[WebBktx] Runtime initialization failed:",
+        error
+    );
+}
 
 
 /* ============================================================
-   STATUS HELPERS
+   FINAL SAFETY CHECK
 ============================================================ */
 
-window.WebBktx.getStatus =
-    function() {
+if (
+    typeof window.WebBktx ===
+    "undefined"
+) {
 
-        return window.WebBktxRuntime
-            .getStatus();
-    };
+    console.error(
+        "[WebBktx] FATAL: window.WebBktx was not created."
+    );
 
+} else {
 
-window.WebBktx.selfTest =
-    function() {
-
-        return window.WebBktxRuntime
-            .selfTest();
-    };
-
-
-/* ============================================================
-   STARTUP LOG
-============================================================ */
-
-console.log(
-    "%c[WebBktx]",
-    "font-weight:bold",
-    `Unified runtime ${WEBBKTX_VERSION} loaded.`
-);
-
-console.log(
-    "[WebBkt
+    console.log(
+        "[WebBktx] OK — window.WebBktx available."
+    );
+}
