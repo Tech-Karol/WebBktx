@@ -1,0 +1,39 @@
+{
+  "schema": "webbktx.console.v1",
+  "platform": {
+    "name": "WebBktx",
+    "type": "web-emulation-platform"
+  },
+  "consoles": [
+    {
+      "id": "gameboy",
+      "name": "Nintendo Game Boy",
+      "manufacturer": "Nintendo",
+      "generation": 4,
+      "releaseYear": 1989,
+      "category": "handheld",
+      "status": "planned",
+      "emulator": {
+        "path": "emulators/gameboy/",
+        "entry": "index.html",
+        "technology": ["JavaScript", "WebAssembly", "Canvas"],
+        "runsInBrowser": true
+      },
+      "hardware": {
+        "cpu": "Sharp LR35902",
+        "architecture": "8-bit",
+        "ram": "8 KB"
+      },
+      "features": [
+        "rom-loading",
+        "keyboard-input",
+        "gamepad-input",
+        "save-data"
+      ],
+      "ui": {
+        "icon": "🎮",
+        "description": "Emulator Nintendo Game Boy działający lokalnie w przeglądarce."
+      }
+    }
+  ]
+}
