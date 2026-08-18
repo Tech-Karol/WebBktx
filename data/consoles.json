@@ -12,24 +12,34 @@
       "generation": 4,
       "releaseYear": 1989,
       "category": "handheld",
-      "status": "planned",
+      "status": "development",
+
       "emulator": {
         "path": "emulators/gameboy/",
         "entry": "index.html",
-        "technology": ["JavaScript", "WebAssembly", "Canvas"],
+        "technology": [
+          "JavaScript",
+          "WebAssembly",
+          "Canvas"
+        ],
         "runsInBrowser": true
       },
+
       "hardware": {
         "cpu": "Sharp LR35902",
         "architecture": "8-bit",
-        "ram": "8 KB"
+        "ram": "8 KB",
+        "vram": "8 KB",
+        "resolution": "160x144"
       },
+
       "features": [
         "rom-loading",
         "keyboard-input",
         "gamepad-input",
         "save-data"
       ],
+
       "ui": {
         "icon": "🎮",
         "description": "Emulator Nintendo Game Boy działający lokalnie w przeglądarce."
