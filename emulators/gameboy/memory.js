@@ -3,18 +3,19 @@
  * WebBktx — Game Boy Memory Bus
  * ============================================================
  *
- * DMG Memory Map
+ * Memory map:
  *
- * 0000-7FFF  Cartridge ROM
- * 8000-9FFF  VRAM
- * A000-BFFF  Cartridge RAM
- * C000-DFFF  WRAM
- * E000-FDFF  Echo RAM
- * FE00-FE9F  OAM
- * FEA0-FEFF  Unusable
- * FF00-FF7F  I/O Registers
- * FF80-FFFE  HRAM
- * FFFF       IE
+ * 0000-7FFF   Cartridge ROM
+ * 8000-9FFF   VRAM
+ * A000-BFFF   Cartridge RAM
+ * C000-CFFF   Work RAM
+ * D000-DFFF   Work RAM
+ * E000-FDFF   Echo RAM
+ * FE00-FE9F   OAM
+ * FEA0-FEFF   Unusable
+ * FF00-FF7F   I/O
+ * FF80-FFFE   HRAM
+ * FFFF        Interrupt Enable
  *
  * ============================================================
  */
@@ -24,71 +25,417 @@ export default class GameBoyMemory {
     constructor() {
 
         /*
-         * ====================================================
-         * RAM
-         * ====================================================
+         * ----------------------------------------------------
+         * Main memory
+         * ----------------------------------------------------
          */
-
-        this.vram =
-            new Uint8Array(0x2000);
 
         this.wram =
             new Uint8Array(0x2000);
-
-        this.oam =
-            new Uint8Array(0xA0);
-
-        this.io =
-            new Uint8Array(0x80);
 
         this.hram =
             new Uint8Array(0x7F);
 
 
         /*
-         * Interrupt Enable
+         * ----------------------------------------------------
+         * VRAM
+         * ----------------------------------------------------
+         *
+         * Shared directly with PPU.
+         *
          */
 
-        this.ie = 0x00;
+        this.vram =
+            new Uint8Array(0x2000);
 
 
         /*
+         * ----------------------------------------------------
+         * OAM
+         * ----------------------------------------------------
+         *
+         * Shared directly with PPU.
+         *
+         */
+
+        this.oam =
+            new Uint8Array(0xA0);
+
+
+        /*
+         * ----------------------------------------------------
          * Cartridge
+         * ----------------------------------------------------
          */
 
-        this.cartridge = null;
+        this.cartridge =
+            null;
 
 
         /*
-         * External modules
+         * ----------------------------------------------------
+         * Hardware
+         * ----------------------------------------------------
          */
 
-        this.ppu = null;
-        this.timer = null;
-        this.input = null;
-        this.audio = null;
+        this.ppu =
+            null;
+
+        this.timer =
+            null;
+
+        this.input =
+            null;
+
+        this.audio =
+            null;
 
 
         /*
-         * Boot ROM state
+         * ----------------------------------------------------
+         * Interrupt registers
+         * ----------------------------------------------------
          */
 
-        this.bootRom = null;
-        this.bootRomEnabled = false;
+        this.interruptEnable =
+            0x00;
+
+        this.interruptFlags =
+            0xE1;
 
 
         /*
-         * Open bus value.
+         * ----------------------------------------------------
+         * I/O registers
+         * ----------------------------------------------------
          */
 
-        this.openBus = 0xFF;
+        this.io =
+            new Uint8Array(0x80);
 
 
         /*
-         * Initial DMG I/O state.
+         * ----------------------------------------------------
+         * Boot ROM
+         * ----------------------------------------------------
          */
 
-        this.resetIO();
+        this.bootRom =
+            null;
+
+        this.bootRomEnabled =
+            false;
+
+
+        /*
+         * ----------------------------------------------------
+         * Joypad register
+         * ----------------------------------------------------
+         */
+
+        this.joyp =
+            0xCF;
+
+
+        /*
+         * ----------------------------------------------------
+         * Serial
+         * ----------------------------------------------------
+         */
+
+        this.serialData =
+            0x00;
+
+        this.serialControl =
+            0x00;
+
+
+        /*
+         * ----------------------------------------------------
+         * Divider
+         * ----------------------------------------------------
+         *
+         * DIV itself is controlled by Timer.
+         *
+         */
+
+        this.io[0x04] =
+            0x00;
+
+
+        /*
+         * ----------------------------------------------------
+         * Sound registers defaults
+         * ----------------------------------------------------
+         */
+
+        this.io[0x10] =
+            0x80;
+
+        this.io[0x11] =
+            0xBF;
+
+        this.io[0x12] =
+            0xF3;
+
+        this.io[0x14] =
+            0xBF;
+
+        this.io[0x16] =
+            0x3F;
+
+        this.io[0x17] =
+            0x00;
+
+        this.io[0x19] =
+            0xBF;
+
+        this.io[0x1A] =
+            0x7F;
+
+        this.io[0x1B] =
+            0xFF;
+
+        this.io[0x1C] =
+            0x9F;
+
+        this.io[0x1E] =
+            0xBF;
+
+        this.io[0x20] =
+            0xFF;
+
+        this.io[0x21] =
+            0x00;
+
+        this.io[0x22] =
+            0x00;
+
+        this.io[0x23] =
+            0xBF;
+
+        this.io[0x24] =
+            0x77;
+
+        this.io[0x25] =
+            0xF3;
+
+        this.io[0x26] =
+            0xF1;
+
+
+        /*
+         * ----------------------------------------------------
+         * LCD defaults
+         * ----------------------------------------------------
+         */
+
+        this.io[0x40] =
+            0x91;
+
+        this.io[0x41] =
+            0x85;
+
+        this.io[0x42] =
+            0x00;
+
+        this.io[0x43] =
+            0x00;
+
+        this.io[0x44] =
+            0x00;
+
+        this.io[0x45] =
+            0x00;
+
+        this.io[0x47] =
+            0xFC;
+
+        this.io[0x48] =
+            0xFF;
+
+        this.io[0x49] =
+            0xFF;
+
+        this.io[0x4A] =
+            0x00;
+
+        this.io[0x4B] =
+            0x00;
+
+
+        /*
+         * ----------------------------------------------------
+         * CPU state helpers
+         * ----------------------------------------------------
+         */
+
+        this.lastRead =
+            0;
+
+        this.lastWrite =
+            0;
+
+    }
+
+
+    /*
+     * ========================================================
+     * CONNECT CARTRIDGE
+     * ========================================================
+     */
+
+    connectCartridge(
+        cartridge
+    ) {
+
+        this.cartridge =
+            cartridge;
+
+    }
+
+
+    /*
+     * ========================================================
+     * CONNECT PPU
+     * ========================================================
+     */
+
+    connectPPU(
+        ppu
+    ) {
+
+        this.ppu =
+            ppu;
+
+
+        /*
+         * IMPORTANT:
+         *
+         * Memory and PPU share the same VRAM/OAM.
+         *
+         */
+
+        if (
+            ppu
+        ) {
+
+            ppu.vram =
+                this.vram;
+
+            ppu.oam =
+                this.oam;
+
+
+            /*
+             * PPU interrupt callback.
+             */
+
+            if (
+                typeof ppu.setInterruptCallback ===
+                "function"
+            ) {
+
+                ppu.setInterruptCallback(
+                    bit => {
+
+                        this.requestInterrupt(
+                            bit
+                        );
+
+                    }
+                );
+
+            }
+
+        }
+
+    }
+
+
+    /*
+     * ========================================================
+     * CONNECT TIMER
+     * ========================================================
+     */
+
+    connectTimer(
+        timer
+    ) {
+
+        this.timer =
+            timer;
+
+
+        if (
+            timer &&
+            typeof timer.setInterruptCallback ===
+            "function"
+        ) {
+
+            timer.setInterruptCallback(
+                () => {
+
+                    this.requestInterrupt(
+                        2
+                    );
+
+                }
+            );
+
+        }
+
+    }
+
+
+    /*
+     * ========================================================
+     * CONNECT INPUT
+     * ========================================================
+     */
+
+    connectInput(
+        input
+    ) {
+
+        this.input =
+            input;
+
+
+        if (
+            input &&
+            typeof input.setInterruptCallback ===
+            "function"
+        ) {
+
+            input.setInterruptCallback(
+                () => {
+
+                    this.requestInterrupt(
+                        4
+                    );
+
+                }
+            );
+
+        }
+
+    }
+
+
+    /*
+     * ========================================================
+     * CONNECT AUDIO
+     * ========================================================
+     */
+
+    connectAudio(
+        audio
+    ) {
+
+        this.audio =
+            audio;
 
     }
 
@@ -101,238 +448,90 @@ export default class GameBoyMemory {
 
     reset() {
 
-        this.vram.fill(0);
-        this.wram.fill(0);
-        this.oam.fill(0);
-        this.io.fill(0);
-        this.hram.fill(0);
+        this.wram.fill(
+            0
+        );
 
-        this.ie = 0x00;
+        this.hram.fill(
+            0
+        );
 
-        this.openBus = 0xFF;
+        this.vram.fill(
+            0
+        );
 
-        this.resetIO();
+        this.oam.fill(
+            0
+        );
+
+        this.io.fill(
+            0
+        );
+
+
+        this.interruptEnable =
+            0;
+
+        this.interruptFlags =
+            0xE1;
+
+
+        this.joyp =
+            0xCF;
+
+
+        this.serialData =
+            0;
+
+        this.serialControl =
+            0;
+
+
+        /*
+         * Re-establish DMG I/O defaults.
+         */
+
+        this.io[0x40] =
+            0x91;
+
+        this.io[0x41] =
+            0x85;
+
+        this.io[0x47] =
+            0xFC;
+
+        this.io[0x48] =
+            0xFF;
+
+        this.io[0x49] =
+            0xFF;
+
+
+        this.lastRead =
+            0;
+
+        this.lastWrite =
+            0;
 
     }
 
 
     /*
      * ========================================================
-     * INITIAL I/O VALUES
+     * READ BYTE
      * ========================================================
      */
 
-    resetIO() {
-
-        /*
-         * Joypad
-         */
-
-        this.io[0x00] = 0xCF;
-
-
-        /*
-         * Serial
-         */
-
-        this.io[0x01] = 0x00;
-        this.io[0x02] = 0x7E;
-
-
-        /*
-         * Timer
-         */
-
-        this.io[0x04] = 0x00;
-        this.io[0x05] = 0x00;
-        this.io[0x06] = 0x00;
-        this.io[0x07] = 0xF8;
-
-
-        /*
-         * Interrupt flag
-         */
-
-        this.io[0x0F] = 0xE1;
-
-
-        /*
-         * Sound registers
-         */
-
-        this.io[0x10] = 0x80;
-        this.io[0x11] = 0xBF;
-        this.io[0x12] = 0xF3;
-        this.io[0x13] = 0xFF;
-        this.io[0x14] = 0xBF;
-
-        this.io[0x16] = 0x3F;
-        this.io[0x17] = 0x00;
-        this.io[0x18] = 0xFF;
-        this.io[0x19] = 0xBF;
-
-        this.io[0x1A] = 0x7F;
-        this.io[0x1B] = 0xFF;
-        this.io[0x1C] = 0x9F;
-        this.io[0x1D] = 0xFF;
-        this.io[0x1E] = 0xBF;
-
-        this.io[0x20] = 0xFF;
-        this.io[0x21] = 0x00;
-        this.io[0x22] = 0x00;
-        this.io[0x23] = 0xBF;
-
-        this.io[0x24] = 0x77;
-        this.io[0x25] = 0xF3;
-        this.io[0x26] = 0xF1;
-
-
-        /*
-         * PPU
-         */
-
-        this.io[0x40] = 0x91; // LCDC
-        this.io[0x41] = 0x85; // STAT
-        this.io[0x42] = 0x00; // SCY
-        this.io[0x43] = 0x00; // SCX
-        this.io[0x44] = 0x00; // LY
-        this.io[0x45] = 0x00; // LYC
-
-        this.io[0x47] = 0xFC; // BGP
-        this.io[0x48] = 0xFF; // OBP0
-        this.io[0x49] = 0xFF; // OBP1
-
-        this.io[0x4A] = 0x00; // WY
-        this.io[0x4B] = 0x00; // WX
-
-
-        /*
-         * Interrupt Enable is separate.
-         */
-
-        this.ie = 0x00;
-
-    }
-
-
-    /*
-     * ========================================================
-     * CONNECT MODULES
-     * ========================================================
-     */
-
-    connectCartridge(cartridge) {
-
-        this.cartridge =
-            cartridge;
-
-    }
-
-
-    connectPPU(ppu) {
-
-        this.ppu =
-            ppu;
-
-    }
-
-
-    connectTimer(timer) {
-
-        this.timer =
-            timer;
-
-    }
-
-
-    connectInput(input) {
-
-        this.input =
-            input;
-
-    }
-
-
-    connectAudio(audio) {
-
-        this.audio =
-            audio;
-
-    }
-
-
-    /*
-     * ========================================================
-     * BOOT ROM
-     * ========================================================
-     */
-
-    loadBootROM(data) {
-
-        if (
-            !data ||
-            data.length === 0
-        ) {
-
-            return false;
-
-        }
-
-        this.bootRom =
-            new Uint8Array(data);
-
-        this.bootRomEnabled =
-            true;
-
-        return true;
-
-    }
-
-
-    disableBootROM() {
-
-        this.bootRomEnabled =
-            false;
-
-    }
-
-
-    /*
-     * ========================================================
-     * READ
-     * ========================================================
-     */
-
-    read(address) {
+    readByte(
+        address
+    ) {
 
         address &=
             0xFFFF;
 
 
-        /*
-         * ----------------------------------------------------
-         * Boot ROM
-         * ----------------------------------------------------
-         */
-
-        if (
-            this.bootRomEnabled &&
-            this.bootRom
-        ) {
-
-            if (
-                address < 0x0100 &&
-                address <
-                this.bootRom.length
-            ) {
-
-                return this.bootRom[
-                    address
-                ];
-
-            }
-
-        }
+        let value =
+            0xFF;
 
 
         /*
@@ -342,12 +541,14 @@ export default class GameBoyMemory {
          */
 
         if (
-            address <= 0x7FFF
+            address <=
+            0x7FFF
         ) {
 
-            return this.readCartridgeROM(
-                address
-            );
+            value =
+                this.readCartridgeROM(
+                    address
+                );
 
         }
 
@@ -358,14 +559,34 @@ export default class GameBoyMemory {
          * ----------------------------------------------------
          */
 
-        if (
+        else if (
             address >= 0x8000 &&
             address <= 0x9FFF
         ) {
 
-            return this.readVRAM(
-                address
-            );
+            /*
+             * During mode 3 VRAM is inaccessible
+             * to CPU on real hardware.
+             *
+             * For now return FF.
+             */
+
+            if (
+                this.isVRAMBlocked()
+            ) {
+
+                value =
+                    0xFF;
+
+            } else {
+
+                value =
+                    this.vram[
+                        address -
+                        0x8000
+                    ];
+
+            }
 
         }
 
@@ -376,14 +597,15 @@ export default class GameBoyMemory {
          * ----------------------------------------------------
          */
 
-        if (
+        else if (
             address >= 0xA000 &&
             address <= 0xBFFF
         ) {
 
-            return this.readCartridgeRAM(
-                address
-            );
+            value =
+                this.readCartridgeRAM(
+                    address
+                );
 
         }
 
@@ -394,14 +616,16 @@ export default class GameBoyMemory {
          * ----------------------------------------------------
          */
 
-        if (
+        else if (
             address >= 0xC000 &&
             address <= 0xDFFF
         ) {
 
-            return this.wram[
-                address - 0xC000
-            ];
+            value =
+                this.wram[
+                    address -
+                    0xC000
+                ];
 
         }
 
@@ -412,14 +636,16 @@ export default class GameBoyMemory {
          * ----------------------------------------------------
          */
 
-        if (
+        else if (
             address >= 0xE000 &&
             address <= 0xFDFF
         ) {
 
-            return this.wram[
-                address - 0xE000
-            ];
+            value =
+                this.wram[
+                    address -
+                    0xE000
+                ];
 
         }
 
@@ -430,14 +656,27 @@ export default class GameBoyMemory {
          * ----------------------------------------------------
          */
 
-        if (
+        else if (
             address >= 0xFE00 &&
             address <= 0xFE9F
         ) {
 
-            return this.oam[
-                address - 0xFE00
-            ];
+            if (
+                this.isOAMBlocked()
+            ) {
+
+                value =
+                    0xFF;
+
+            } else {
+
+                value =
+                    this.oam[
+                        address -
+                        0xFE00
+                    ];
+
+            }
 
         }
 
@@ -448,12 +687,13 @@ export default class GameBoyMemory {
          * ----------------------------------------------------
          */
 
-        if (
+        else if (
             address >= 0xFEA0 &&
             address <= 0xFEFF
         ) {
 
-            return 0xFF;
+            value =
+                0xFF;
 
         }
 
@@ -464,14 +704,15 @@ export default class GameBoyMemory {
          * ----------------------------------------------------
          */
 
-        if (
+        else if (
             address >= 0xFF00 &&
             address <= 0xFF7F
         ) {
 
-            return this.readIO(
-                address
-            );
+            value =
+                this.readIO(
+                    address
+                );
 
         }
 
@@ -482,14 +723,16 @@ export default class GameBoyMemory {
          * ----------------------------------------------------
          */
 
-        if (
+        else if (
             address >= 0xFF80 &&
             address <= 0xFFFE
         ) {
 
-            return this.hram[
-                address - 0xFF80
-            ];
+            value =
+                this.hram[
+                    address -
+                    0xFF80
+                ];
 
         }
 
@@ -500,27 +743,70 @@ export default class GameBoyMemory {
          * ----------------------------------------------------
          */
 
-        if (
-            address === 0xFFFF
+        else if (
+            address ===
+            0xFFFF
         ) {
 
-            return this.ie;
+            value =
+                this.interruptEnable;
 
         }
 
 
-        return this.openBus;
+        this.lastRead =
+            value & 0xFF;
+
+
+        return value & 0xFF;
 
     }
 
 
     /*
      * ========================================================
-     * WRITE
+     * READ WORD
      * ========================================================
      */
 
-    write(address, value) {
+    readWord(
+        address
+    ) {
+
+        const low =
+            this.readByte(
+                address
+            );
+
+
+        const high =
+            this.readByte(
+                (
+                    address + 1
+                ) & 0xFFFF
+            );
+
+
+        return (
+            low |
+            (
+                high << 8
+            )
+        );
+
+    }
+
+
+    /*
+     * ========================================================
+     * WRITE BYTE
+     * ========================================================
+     */
+
+    writeByte(
+        address,
+        value
+    ) {
 
         address &=
             0xFFFF;
@@ -529,7 +815,7 @@ export default class GameBoyMemory {
             0xFF;
 
 
-        this.openBus =
+        this.lastWrite =
             value;
 
 
@@ -540,7 +826,8 @@ export default class GameBoyMemory {
          */
 
         if (
-            address <= 0x7FFF
+            address <=
+            0x7FFF
         ) {
 
             this.writeCartridge(
@@ -564,10 +851,17 @@ export default class GameBoyMemory {
             address <= 0x9FFF
         ) {
 
-            this.writeVRAM(
-                address,
-                value
-            );
+            if (
+                !this.isVRAMBlocked()
+            ) {
+
+                this.vram[
+                    address -
+                    0x8000
+                ] =
+                    value;
+
+            }
 
             return;
 
@@ -607,7 +901,8 @@ export default class GameBoyMemory {
         ) {
 
             this.wram[
-                address - 0xC000
+                address -
+                0xC000
             ] =
                 value;
 
@@ -628,7 +923,8 @@ export default class GameBoyMemory {
         ) {
 
             this.wram[
-                address - 0xE000
+                address -
+                0xE000
             ] =
                 value;
 
@@ -648,10 +944,17 @@ export default class GameBoyMemory {
             address <= 0xFE9F
         ) {
 
-            this.oam[
-                address - 0xFE00
-            ] =
-                value;
+            if (
+                !this.isOAMBlocked()
+            ) {
+
+                this.oam[
+                    address -
+                    0xFE00
+                ] =
+                    value;
+
+            }
 
             return;
 
@@ -707,7 +1010,8 @@ export default class GameBoyMemory {
         ) {
 
             this.hram[
-                address - 0xFF80
+                address -
+                0xFF80
             ] =
                 value;
 
@@ -723,13 +1027,43 @@ export default class GameBoyMemory {
          */
 
         if (
-            address === 0xFFFF
+            address ===
+            0xFFFF
         ) {
 
-            this.ie =
+            this.interruptEnable =
                 value;
 
         }
+
+    }
+
+
+    /*
+     * ========================================================
+     * WRITE WORD
+     * ========================================================
+     */
+
+    writeWord(
+        address,
+        value
+    ) {
+
+        this.writeByte(
+            address,
+            value & 0xFF
+        );
+
+
+        this.writeByte(
+            (
+                address + 1
+            ) & 0xFFFF,
+            (
+                value >> 8
+            ) & 0xFF
+        );
 
     }
 
@@ -740,13 +1074,27 @@ export default class GameBoyMemory {
      * ========================================================
      */
 
-    readCartridgeROM(address) {
+    readCartridgeROM(
+        address
+    ) {
 
         if (
             !this.cartridge
         ) {
 
             return 0xFF;
+
+        }
+
+
+        if (
+            typeof this.cartridge.read ===
+            "function"
+        ) {
+
+            return this.cartridge.read(
+                address
+            ) & 0xFF;
 
         }
 
@@ -763,21 +1111,64 @@ export default class GameBoyMemory {
         }
 
 
-        /*
-         * Fallback for simple cartridge
-         * implementations.
-         */
-
         if (
             this.cartridge.rom
         ) {
 
             return (
                 this.cartridge.rom[
-                    address %
-                    this.cartridge.rom.length
-                ] ?? 0xFF
+                    address
+                ] ??
+                0xFF
             );
+
+        }
+
+
+        return 0xFF;
+
+    }
+
+
+    /*
+     * ========================================================
+     * CARTRIDGE RAM
+     * ========================================================
+     */
+
+    readCartridgeRAM(
+        address
+    ) {
+
+        if (
+            !this.cartridge
+        ) {
+
+            return 0xFF;
+
+        }
+
+
+        if (
+            typeof this.cartridge.readRAM ===
+            "function"
+        ) {
+
+            return this.cartridge.readRAM(
+                address
+            ) & 0xFF;
+
+        }
+
+
+        if (
+            typeof this.cartridge.read ===
+            "function"
+        ) {
+
+            return this.cartridge.read(
+                address
+            ) & 0xFF;
 
         }
 
@@ -817,6 +1208,21 @@ export default class GameBoyMemory {
                 value
             );
 
+            return;
+
+        }
+
+
+        if (
+            typeof this.cartridge.writeROM ===
+            "function"
+        ) {
+
+            this.cartridge.writeROM(
+                address,
+                value
+            );
+
         }
 
     }
@@ -824,37 +1230,9 @@ export default class GameBoyMemory {
 
     /*
      * ========================================================
-     * CARTRIDGE RAM
+     * CARTRIDGE RAM WRITE
      * ========================================================
      */
-
-    readCartridgeRAM(address) {
-
-        if (
-            !this.cartridge
-        ) {
-
-            return 0xFF;
-
-        }
-
-
-        if (
-            typeof this.cartridge.readRAM ===
-            "function"
-        ) {
-
-            return this.cartridge.readRAM(
-                address
-            ) & 0xFF;
-
-        }
-
-
-        return 0xFF;
-
-    }
-
 
     writeCartridgeRAM(
         address,
@@ -880,6 +1258,21 @@ export default class GameBoyMemory {
                 value
             );
 
+            return;
+
+        }
+
+
+        if (
+            typeof this.cartridge.write ===
+            "function"
+        ) {
+
+            this.cartridge.write(
+                address,
+                value
+            );
+
         }
 
     }
@@ -887,47 +1280,17 @@ export default class GameBoyMemory {
 
     /*
      * ========================================================
-     * VRAM
+     * IO READ
      * ========================================================
      */
 
-    readVRAM(address) {
-
-        /*
-         * PPU can later enforce VRAM
-         * access restrictions.
-         */
-
-        return this.vram[
-            address - 0x8000
-        ];
-
-    }
-
-
-    writeVRAM(
-        address,
-        value
+    readIO(
+        address
     ) {
 
-        this.vram[
-            address - 0x8000
-        ] =
-            value;
-
-    }
-
-
-    /*
-     * ========================================================
-     * I/O READ
-     * ========================================================
-     */
-
-    readIO(address) {
-
-        const offset =
-            address - 0xFF00;
+        const reg =
+            address -
+            0xFF00;
 
 
         /*
@@ -937,18 +1300,37 @@ export default class GameBoyMemory {
          */
 
         if (
-            address === 0xFF00
+            address ===
+            0xFF00
         ) {
 
-            if (
-                this.input &&
-                typeof this.input.read ===
-                "function"
-            ) {
+            return this.readJoypad();
 
-                return this.input.read();
+        }
 
-            }
+
+        /*
+         * ----------------------------------------------------
+         * Serial
+         * ----------------------------------------------------
+         */
+
+        if (
+            address ===
+            0xFF01
+        ) {
+
+            return this.serialData;
+
+        }
+
+
+        if (
+            address ===
+            0xFF02
+        ) {
+
+            return this.serialControl;
 
         }
 
@@ -966,11 +1348,11 @@ export default class GameBoyMemory {
 
             if (
                 this.timer &&
-                typeof this.timer.read ===
+                typeof this.timer.readRegister ===
                 "function"
             ) {
 
-                return this.timer.read(
+                return this.timer.readRegister(
                     address
                 );
 
@@ -1006,19 +1388,47 @@ export default class GameBoyMemory {
 
 
         /*
-         * Default I/O.
+         * ----------------------------------------------------
+         * Audio
+         * ----------------------------------------------------
+         */
+
+        if (
+            address >= 0xFF10 &&
+            address <= 0xFF3F
+        ) {
+
+            if (
+                this.audio &&
+                typeof this.audio.readRegister ===
+                "function"
+            ) {
+
+                return this.audio.readRegister(
+                    address
+                );
+
+            }
+
+        }
+
+
+        /*
+         * ----------------------------------------------------
+         * Default I/O
+         * ----------------------------------------------------
          */
 
         return this.io[
-            offset
-        ];
+            reg
+        ] ?? 0xFF;
 
     }
 
 
     /*
      * ========================================================
-     * I/O WRITE
+     * IO WRITE
      * ========================================================
      */
 
@@ -1027,42 +1437,62 @@ export default class GameBoyMemory {
         value
     ) {
 
-        const offset =
-            address - 0xFF00;
+        const reg =
+            address -
+            0xFF00;
 
 
         /*
          * ----------------------------------------------------
-         * Joypad
+         * JOYP
          * ----------------------------------------------------
          */
 
         if (
-            address === 0xFF00
+            address ===
+            0xFF00
         ) {
 
-            this.io[0x00] =
-                (
-                    this.io[0x00] &
-                    0x0F
-                ) |
+            this.joyp =
                 (
                     value &
-                    0xF0
-                );
+                    0x30
+                ) |
+                0xC0;
+
+            this.updateJoypad();
+
+            return;
+
+        }
 
 
-            if (
-                this.input &&
-                typeof this.input.write ===
-                "function"
-            ) {
+        /*
+         * ----------------------------------------------------
+         * Serial
+         * ----------------------------------------------------
+         */
 
-                this.input.write(
-                    value
-                );
+        if (
+            address ===
+            0xFF01
+        ) {
 
-            }
+            this.serialData =
+                value;
+
+            return;
+
+        }
+
+
+        if (
+            address ===
+            0xFF02
+        ) {
+
+            this.serialControl =
+                value;
 
             return;
 
@@ -1082,73 +1512,18 @@ export default class GameBoyMemory {
 
             if (
                 this.timer &&
-                typeof this.timer.write ===
+                typeof this.timer.writeRegister ===
                 "function"
             ) {
 
-                this.timer.write(
-                    address,
-                    value
-                );
-
-                return;
-
-            }
-
-            this.io[offset] =
-                value;
-
-            return;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * DIV
-         * ----------------------------------------------------
-         */
-
-        if (
-            address === 0xFF04
-        ) {
-
-            this.io[0x04] =
-                0;
-
-            return;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * LCD / PPU
-         * ----------------------------------------------------
-         */
-
-        if (
-            address >= 0xFF40 &&
-            address <= 0xFF4B
-        ) {
-
-            this.io[offset] =
-                value;
-
-
-            if (
-                this.ppu &&
-                typeof this.ppu.writeRegister ===
-                "function"
-            ) {
-
-                this.ppu.writeRegister(
+                this.timer.writeRegister(
                     address,
                     value
                 );
 
             }
 
+
             return;
 
         }
@@ -1156,21 +1531,18 @@ export default class GameBoyMemory {
 
         /*
          * ----------------------------------------------------
-         * DMA
+         * Interrupt flags
          * ----------------------------------------------------
          */
 
         if (
-            address === 0xFF46
+            address ===
+            0xFF0F
         ) {
 
-            this.io[0x46] =
-                value;
-
-
-            this.doDMA(
-                value
-            );
+            this.interruptFlags =
+                value |
+                0xE0;
 
             return;
 
@@ -1179,18 +1551,14 @@ export default class GameBoyMemory {
 
         /*
          * ----------------------------------------------------
-         * Sound
+         * Audio
          * ----------------------------------------------------
          */
 
         if (
             address >= 0xFF10 &&
-            address <= 0xFF26
+            address <= 0xFF3F
         ) {
-
-            this.io[offset] =
-                value;
-
 
             if (
                 this.audio &&
@@ -1205,25 +1573,8 @@ export default class GameBoyMemory {
 
             }
 
-            return;
 
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * Wave RAM
-         * ----------------------------------------------------
-         *
-         * FF30-FF3F
-         */
-
-        if (
-            address >= 0xFF30 &&
-            address <= 0xFF3F
-        ) {
-
-            this.io[offset] =
+            this.io[reg] =
                 value;
 
             return;
@@ -1233,57 +1584,67 @@ export default class GameBoyMemory {
 
         /*
          * ----------------------------------------------------
-         * Interrupt Flag
+         * PPU
          * ----------------------------------------------------
          */
 
         if (
-            address === 0xFF0F
+            address >= 0xFF40 &&
+            address <= 0xFF4B
         ) {
-
-            this.io[0x0F] =
-                (
-                    value |
-                    0xE0
-                ) & 0xFF;
-
-            return;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * Boot ROM disable
-         * ----------------------------------------------------
-         */
-
-        if (
-            address === 0xFF50
-        ) {
-
-            this.io[0x50] =
-                value;
-
 
             if (
-                value !== 0
+                this.ppu &&
+                typeof this.ppu.writeRegister ===
+                "function"
             ) {
 
-                this.disableBootROM();
+                this.ppu.writeRegister(
+                    address,
+                    value
+                );
 
             }
 
+
+            this.io[reg] =
+                value;
+
             return;
 
         }
 
 
         /*
-         * Default I/O register.
+         * ----------------------------------------------------
+         * DMA
+         * ----------------------------------------------------
          */
 
-        this.io[offset] =
+        if (
+            address ===
+            0xFF46
+        ) {
+
+            this.io[0x46] =
+                value;
+
+            this.doDMA(
+                value
+            );
+
+            return;
+
+        }
+
+
+        /*
+         * ----------------------------------------------------
+         * Generic register
+         * ----------------------------------------------------
+         */
+
+        this.io[reg] =
             value;
 
     }
@@ -1291,23 +1652,22 @@ export default class GameBoyMemory {
 
     /*
      * ========================================================
-     * DMA TRANSFER
+     * DMA
      * ========================================================
      *
      * FF46 = XX
      *
-     * Copies XX00-XX9F to FE00-FE9F.
+     * Copy XX00-XX9F → FE00-FE9F
      *
      * ========================================================
      */
 
-    doDMA(value) {
+    doDMA(
+        value
+    ) {
 
         const source =
-            (
-                value &
-                0xFF
-            ) << 8;
+            value << 8;
 
 
         for (
@@ -1317,8 +1677,11 @@ export default class GameBoyMemory {
         ) {
 
             this.oam[i] =
-                this.readDMAByte(
-                    source + i
+                this.readByte(
+                    (
+                        source +
+                        i
+                    ) & 0xFFFF
                 );
 
         }
@@ -1327,189 +1690,292 @@ export default class GameBoyMemory {
 
 
     /*
-     * DMA read avoids some recursive
-     * behavior of normal writes.
+     * ========================================================
+     * JOYPAD
+     * ========================================================
      */
 
-    readDMAByte(address) {
+    readJoypad() {
 
-        address &=
-            0xFFFF;
+        let result =
+            this.joyp |
+            0xC0;
 
 
-        if (
-            address < 0x8000
-        ) {
-
-            return this.read(
-                address
+        const selectButtons =
+            !(
+                this.joyp &
+                0x20
             );
 
-        }
 
-
-        if (
-            address < 0xA000
-        ) {
-
-            return this.vram[
-                address - 0x8000
-            ];
-
-        }
-
-
-        if (
-            address < 0xC000
-        ) {
-
-            return this.read(
-                address
+        const selectDirections =
+            !(
+                this.joyp &
+                0x10
             );
 
-        }
-
 
         if (
-            address < 0xE000
+            this.input &&
+            typeof this.input.getState ===
+            "function"
         ) {
 
-            return this.wram[
-                address - 0xC000
-            ];
+            const state =
+                this.input.getState();
+
+
+            /*
+             * Direction buttons.
+             *
+             * active low
+             */
+
+            if (
+                selectDirections
+            ) {
+
+                if (
+                    state.right
+                ) {
+
+                    result &=
+                        ~0x01;
+
+                }
+
+                if (
+                    state.left
+                ) {
+
+                    result &=
+                        ~0x02;
+
+                }
+
+                if (
+                    state.up
+                ) {
+
+                    result &=
+                        ~0x04;
+
+                }
+
+                if (
+                    state.down
+                ) {
+
+                    result &=
+                        ~0x08;
+
+                }
+
+            }
+
+
+            /*
+             * Buttons.
+             */
+
+            if (
+                selectButtons
+            ) {
+
+                if (
+                    state.a
+                ) {
+
+                    result &=
+                        ~0x01;
+
+                }
+
+                if (
+                    state.b
+                ) {
+
+                    result &=
+                        ~0x02;
+
+                }
+
+                if (
+                    state.select
+                ) {
+
+                    result &=
+                        ~0x04;
+
+                }
+
+                if (
+                    state.start
+                ) {
+
+                    result &=
+                        ~0x08;
+
+                }
+
+            }
 
         }
 
 
-        if (
-            address < 0xFE00
-        ) {
-
-            return this.wram[
-                address - 0xE000
-            ];
-
-        }
-
-
-        if (
-            address < 0xFEA0
-        ) {
-
-            return this.oam[
-                address - 0xFE00
-            ];
-
-        }
-
-
-        if (
-            address >= 0xFF80
-        ) {
-
-            return this.hram[
-                address - 0xFF80
-            ];
-
-        }
-
-
-        return this.read(
-            address
-        );
+        return result;
 
     }
 
 
     /*
      * ========================================================
-     * 16-BIT HELPERS
+     * UPDATE JOYPAD
      * ========================================================
      */
 
-    read16(address) {
+    updateJoypad() {
 
-        const low =
-            this.read(address);
+        /*
+         * Reading the button state is enough
+         * for our current implementation.
+         */
 
-        const high =
-            this.read(
-                (address + 1) &
-                0xFFFF
-            );
-
-
-        return (
-            low |
-            (high << 8)
-        );
+        this.joyp =
+            this.readJoypad();
 
     }
 
 
-    write16(
-        address,
-        value
+    /*
+     * ========================================================
+     * INTERRUPT REQUEST
+     * ========================================================
+     *
+     * IF register:
+     *
+     * VBlank = bit 0
+     * STAT   = bit 1
+     * Timer  = bit 2
+     * Serial = bit 3
+     * Joypad = bit 4
+     *
+     * ========================================================
+     */
+
+    requestInterrupt(
+        bit
     ) {
 
-        this.write(
-            address,
-            value & 0xFF
-        );
+        this.interruptFlags |=
+            (
+                1 << bit
+            );
 
-        this.write(
-            (address + 1) &
-            0xFFFF,
-            (value >> 8) & 0xFF
-        );
+
+        this.interruptFlags |=
+            0xE0;
 
     }
 
 
     /*
      * ========================================================
-     * INTERRUPTS
+     * GET INTERRUPTS
      * ========================================================
      */
 
-    requestInterrupt(bit) {
-
-        const flags =
-            this.read8IF();
-
-
-        this.write8IF(
-            flags |
-            (1 << bit)
-        );
-
-    }
-
-
-    read8IF() {
+    getPendingInterrupts() {
 
         return (
-            this.io[0x0F] |
-            0xE0
-        ) & 0xFF;
-
-    }
-
-
-    write8IF(value) {
-
-        this.io[0x0F] =
-            (
-                value |
-                0xE0
-            ) & 0xFF;
+            this.interruptEnable &
+            this.interruptFlags &
+            0x1F
+        );
 
     }
 
 
     /*
      * ========================================================
-     * DEBUG
+     * CLEAR INTERRUPT
+     * ========================================================
+     */
+
+    clearInterrupt(
+        bit
+    ) {
+
+        this.interruptFlags &=
+            ~(
+                1 << bit
+            );
+
+    }
+
+
+    /*
+     * ========================================================
+     * VRAM BLOCK
+     * ========================================================
+     */
+
+    isVRAMBlocked() {
+
+        if (
+            !this.ppu
+        ) {
+
+            return false;
+
+        }
+
+
+        /*
+         * Mode 3 = pixel transfer.
+         */
+
+        return (
+            this.ppu.mode ===
+            3
+        );
+
+    }
+
+
+    /*
+     * ========================================================
+     * OAM BLOCK
+     * ========================================================
+     */
+
+    isOAMBlocked() {
+
+        if (
+            !this.ppu
+        ) {
+
+            return false;
+
+        }
+
+
+        /*
+         * Mode 2 + 3 block OAM.
+         */
+
+        return (
+            this.ppu.mode === 2 ||
+            this.ppu.mode === 3
+        );
+
+    }
+
+
+    /*
+     * ========================================================
+     * MEMORY STATE
      * ========================================================
      */
 
@@ -1517,37 +1983,72 @@ export default class GameBoyMemory {
 
         return {
 
-            ie:
-                this.ie,
+            interruptEnable:
+                this.interruptEnable,
 
-            if:
-                this.io[0x0F],
+            interruptFlags:
+                this.interruptFlags,
 
-            bootRomEnabled:
-                this.bootRomEnabled,
+            joyp:
+                this.joyp,
 
-            cartridge:
-                Boolean(
-                    this.cartridge
-                ),
+            serialData:
+                this.serialData,
 
-            modules: {
+            serialControl:
+                this.serialControl,
 
-                ppu:
-                    Boolean(this.ppu),
+            lastRead:
+                this.lastRead,
 
-                timer:
-                    Boolean(this.timer),
-
-                input:
-                    Boolean(this.input),
-
-                audio:
-                    Boolean(this.audio)
-
-            }
+            lastWrite:
+                this.lastWrite
 
         };
+
+    }
+
+
+    /*
+     * ========================================================
+     * DEBUG DUMP
+     * ========================================================
+     */
+
+    dump(
+        start,
+        end
+    ) {
+
+        const result =
+            [];
+
+
+        start &=
+            0xFFFF;
+
+        end &=
+            0xFFFF;
+
+
+        for (
+            let address = start;
+            address <= end;
+            address++
+        ) {
+
+            result.push(
+                this.readByte(
+                    address
+                )
+            );
+
+        }
+
+
+        return new Uint8Array(
+            result
+        );
 
     }
 
