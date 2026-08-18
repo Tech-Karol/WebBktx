@@ -2,32 +2,27 @@
  * ============================================================
  * WebBktx APP
  *
- * Version: 1.1
+ * Version: 1.0
  *
- * Local launcher / UI controller
+ * Frontend / launcher for unified WebBktx runtime.
  *
- * Automatic module loader
+ * Runtime:
+ *     core/webbktx.js
  *
- * Loads:
+ * Expected:
+ *     window.WebBktx
  *
- *   memory.js
- *   cpu.js
- *   decoder.js
- *   xbe.js
- *   thunks.js
- *   xapi.js
- *   xfile.js
- *   kernel.js
- *   xinput.js
- *   xgraphics.js
- *   core.js
- *
- * core.js is intentionally loaded LAST.
- *
- * No PWA
- * No cache
- * No service worker
- * No online dependency
+ * Runtime components:
+ *     Memory
+ *     CPU
+ *     Decoder
+ *     XBE
+ *     Kernel
+ *     Thunks
+ *     XAPI
+ *     XFile
+ *     XInput
+ *     XGraphics
  *
  * ============================================================
  */
@@ -39,103 +34,7 @@
    CONFIG
 ============================================================ */
 
-const WEBBKTX_APP_VERSION = "1.1";
-
-const WEBBKTX_CORE_PATH = "core/";
-
-
-/*
- * IMPORTANT:
- *
- * Dependency order.
- *
- * Core must be loaded after the components it uses.
- */
-
-const WEBBKTX_MODULES = [
-
-    {
-        name: "memory",
-        file: "memory.js",
-        global: "WebBktxMemory",
-        required: true
-    },
-
-    {
-        name: "cpu",
-        file: "cpu.js",
-        global: "WebBktxCPU",
-        required: true
-    },
-
-    {
-        name: "decoder",
-        file: "decoder.js",
-        global: "WebBktxDecoder",
-        required: false
-    },
-
-    {
-        name: "xbe",
-        file: "xbe.js",
-        global: "WebBktxXBE",
-        required: true
-    },
-
-    {
-        name: "thunks",
-        file: "thunks.js",
-        global: "WebBktxThunks",
-        required: false
-    },
-
-    {
-        name: "xapi",
-        file: "xapi.js",
-        global: "WebBktxXAPI",
-        required: false
-    },
-
-    {
-        name: "xfile",
-        file: "xfile.js",
-        global: "WebBktxXFile",
-        required: false
-    },
-
-    {
-        name: "kernel",
-        file: "kernel.js",
-        global: "WebBktxKernel",
-        required: false
-    },
-
-    {
-        name: "xinput",
-        file: "xinput.js",
-        global: "WebBktxXInput",
-        required: false
-    },
-
-    {
-        name: "xgraphics",
-        file: "xgraphics.js",
-        global: "WebBktxXGraphics",
-        required: false
-    },
-
-    /*
-     * CORE LAST.
-     */
-
-    {
-        name: "core",
-        file: "core.js",
-        global: "WebBktxCore",
-        required: true
-    }
-
-];
+const WEBBKTX_APP_VERSION = "1.0";
 
 
 /* ============================================================
@@ -144,44 +43,45 @@ const WEBBKTX_MODULES = [
 
 const WebBktxApp = {
 
-    version:
-        WEBBKTX_APP_VERSION,
+    version: WEBBKTX_APP_VERSION,
 
-    initialized:
-        false,
+    initialized: false,
 
-    modulesLoaded:
-        false,
+    running: false,
 
-    gameFile:
-        null,
+    gameFile: null,
 
-    gameImage:
-        null,
+    gameImage: null,
 
-    core:
-        null,
+    runtime: null,
 
-    kernel:
-        null,
+    core: null,
 
-    graphics:
-        null,
+    kernel: null,
 
-    input:
-        null,
+    cpu: null,
 
-    animationFrame:
-        null,
+    memory: null,
 
-    running:
-        false,
+    decoder: null,
 
-    elements:
-        {},
+    xbe: null,
 
-    moduleStatus:
-        {},
+    xapi: null,
+
+    thunks: null,
+
+    xfile: null,
+
+    input: null,
+
+    graphics: null,
+
+    animationFrame: null,
+
+    executionTimer: null,
+
+    elements: {},
 
 
     /* ========================================================
@@ -194,51 +94,61 @@ const WebBktxApp = {
 
             this.cacheElements();
 
+            this.setProgress(5);
 
             this.setLoading(
-                "Preparing WebBktx..."
+                "Checking WebBktx runtime..."
             );
-
-            this.setProgress(
-                5
-            );
-
 
             this.updateModule(
                 "cache",
                 "SKIP"
             );
 
+            this.updateModule(
+                "core",
+                "CHECK"
+            );
+
 
             /*
-             * Automatically load modules.
+             * Wait one tick so the browser can
+             * finish loading the runtime script.
              */
 
-            await this.loadAllModules();
+            await this.delay(0);
 
 
-            this.setProgress(
-                45
-            );
+            this.checkRuntime();
 
 
-            this.checkModules();
-
+            this.setProgress(25);
 
             this.setLoading(
-                "Initializing WebBktx Core..."
+                "Connecting runtime modules..."
             );
 
 
-            await this.initializeCore();
+            this.connectRuntime();
 
 
-            this.setProgress(
-                75
+            this.updateModule(
+                "core",
+                "OK"
             );
 
 
-            this.initializeGraphics();
+            this.setProgress(50);
+
+            this.setLoading(
+                "Initializing WebBktx..."
+            );
+
+
+            await this.initializeRuntime();
+
+
+            this.setProgress(70);
 
 
             this.updateModule(
@@ -249,9 +159,6 @@ const WebBktxApp = {
             );
 
 
-            this.initializeInput();
-
-
             this.updateModule(
                 "input",
                 this.input
@@ -260,19 +167,22 @@ const WebBktxApp = {
             );
 
 
-            this.setProgress(
-                100
+            this.setLoading(
+                "Testing runtime..."
             );
 
+
+            this.runRuntimeDiagnostics();
+
+
+            this.setProgress(100);
 
             this.setLoading(
                 "System ready."
             );
 
 
-            await this.delay(
-                200
-            );
+            await this.delay(200);
 
 
             this.showScreen(
@@ -285,18 +195,13 @@ const WebBktxApp = {
 
 
             this.showMessage(
-                "WebBktx initialized successfully.",
+                "WebBktx runtime initialized.",
                 "success"
             );
 
 
             console.log(
                 `[WebBktx App ${this.version}] Ready.`
-            );
-
-
-            console.table(
-                this.moduleStatus
             );
 
 
@@ -318,7 +223,7 @@ const WebBktxApp = {
 
 
     /* ========================================================
-       ELEMENTS
+       HTML ELEMENTS
     ======================================================== */
 
     cacheElements() {
@@ -360,9 +265,7 @@ const WebBktxApp = {
         ) {
 
             this.elements[id] =
-                document.getElementById(
-                    id
-                );
+                document.getElementById(id);
 
         }
 
@@ -415,9 +318,7 @@ const WebBktxApp = {
             el.gameFile.addEventListener(
                 "change",
                 event =>
-                    this.handleGameFile(
-                        event
-                    )
+                    this.handleGameFile(event)
             );
 
         }
@@ -450,9 +351,7 @@ const WebBktxApp = {
             el.cpuBackButton.addEventListener(
                 "click",
                 () =>
-                    this.showScreen(
-                        "mainScreen"
-                    )
+                    this.showScreen("mainScreen")
             );
 
         }
@@ -463,9 +362,7 @@ const WebBktxApp = {
             el.aboutButton.addEventListener(
                 "click",
                 () =>
-                    this.showScreen(
-                        "aboutScreen"
-                    )
+                    this.showScreen("aboutScreen")
             );
 
         }
@@ -476,9 +373,7 @@ const WebBktxApp = {
             el.aboutBackButton.addEventListener(
                 "click",
                 () =>
-                    this.showScreen(
-                        "mainScreen"
-                    )
+                    this.showScreen("mainScreen")
             );
 
         }
@@ -498,592 +393,307 @@ const WebBktxApp = {
 
 
     /* ========================================================
-       MODULE LOADER
+       RUNTIME CHECK
     ======================================================== */
 
-    async loadAllModules() {
-
-        this.setLoading(
-            "Loading emulator modules..."
-        );
-
-
-        for (
-            let i = 0;
-            i < WEBBKTX_MODULES.length;
-            i++
-        ) {
-
-            const module =
-                WEBBKTX_MODULES[i];
-
-
-            const progress =
-                10 +
-                Math.floor(
-                    (
-                        i /
-                        WEBBKTX_MODULES.length
-                    ) *
-                    35
-                );
-
-
-            this.setProgress(
-                progress
-            );
-
-
-            this.updateModule(
-                module.name,
-                "LOAD"
-            );
-
-
-            try {
-
-                await this.loadModule(
-                    module
-                );
-
-
-                this.moduleStatus[
-                    module.name
-                ] =
-                    typeof window[
-                        module.global
-                    ];
-
-
-                this.updateModule(
-                    module.name,
-                    "OK"
-                );
-
-
-            } catch (error) {
-
-                this.moduleStatus[
-                    module.name
-                ] =
-                    "ERROR";
-
-
-                this.updateModule(
-                    module.name,
-                    "ERROR"
-                );
-
-
-                if (
-                    module.required
-                ) {
-
-                    throw new Error(
-                        `Nie można załadować wymaganego modułu ` +
-                        `${module.name}: ${error.message}`
-                    );
-
-                }
-
-
-                console.warn(
-                    `[WebBktx] Optional module ${module.name} failed:`,
-                    error
-                );
-
-            }
-
-        }
-
-
-        this.modulesLoaded =
-            true;
-
-    },
-
-
-    /* ========================================================
-       LOAD ONE MODULE
-    ======================================================== */
-
-    loadModule(module) {
-
-        return new Promise(
-            (
-                resolve,
-                reject
-            ) => {
-
-                /*
-                 * Already loaded.
-                 */
-
-                if (
-                    typeof window[
-                        module.global
-                    ] !==
-                    "undefined"
-                ) {
-
-                    resolve();
-
-                    return;
-
-                }
-
-
-                const existing =
-                    document.querySelector(
-                        `script[data-webbktx-module="${module.name}"]`
-                    );
-
-
-                if (existing) {
-
-                    existing.addEventListener(
-                        "load",
-                        () => {
-
-                            if (
-                                typeof window[
-                                    module.global
-                                ] !==
-                                "undefined"
-                            ) {
-
-                                resolve();
-
-                            } else {
-
-                                reject(
-                                    new Error(
-                                        `${module.file} loaded, ` +
-                                        `but ${module.global} is missing.`
-                                    )
-                                );
-
-                            }
-
-                        },
-                        {
-                            once: true
-                        }
-                    );
-
-
-                    existing.addEventListener(
-                        "error",
-                        () =>
-                            reject(
-                                new Error(
-                                    `Failed to load ${module.file}`
-                                )
-                            ),
-                        {
-                            once: true
-                        }
-                    );
-
-
-                    return;
-
-                }
-
-
-                const script =
-                    document.createElement(
-                        "script"
-                    );
-
-
-                script.src =
-                    WEBBKTX_CORE_PATH +
-                    module.file;
-
-
-                script.async =
-                    false;
-
-
-                script.dataset.webbktxModule =
-                    module.name;
-
-
-                script.onload =
-                    () => {
-
-                        if (
-                            typeof window[
-                                module.global
-                            ] ===
-                            "undefined"
-                        ) {
-
-                            reject(
-                                new Error(
-                                    `${module.file} loaded, ` +
-                                    `but ${module.global} is undefined.`
-                                )
-                            );
-
-                            return;
-
-                        }
-
-
-                        resolve();
-
-                    };
-
-
-                script.onerror =
-                    () => {
-
-                        reject(
-                            new Error(
-                                `Cannot load ${WEBBKTX_CORE_PATH}${module.file}`
-                            )
-                        );
-
-                    };
-
-
-                document.head.appendChild(
-                    script
-                );
-
-            }
-        );
-
-    },
-
-
-    /* ========================================================
-       MODULE CHECK
-    ======================================================== */
-
-    checkModules() {
-
-        const modules = {
-
-            memory:
-                typeof window.WebBktxMemory ===
-                "function",
-
-            cpu:
-                typeof window.WebBktxCPU ===
-                "function",
-
-            decoder:
-                typeof window.WebBktxDecoder ===
-                "function",
-
-            xbe:
-                typeof window.WebBktxXBE ===
-                "function",
-
-            thunks:
-                typeof window.WebBktxThunks ===
-                "function",
-
-            xapi:
-                typeof window.WebBktxXAPI ===
-                "function",
-
-            xfile:
-                typeof window.WebBktxXFile ===
-                "function",
-
-            kernel:
-                typeof window.WebBktxKernel ===
-                "function",
-
-            xinput:
-                typeof window.WebBktxXInput ===
-                "function",
-
-            xgraphics:
-                typeof window.WebBktxXGraphics ===
-                "function",
-
-            core:
-                typeof window.WebBktxCore ===
-                "function"
-
-        };
-
-
-        console.log(
-            "WebBktx module status:"
-        );
-
-
-        console.table(
-            modules
-        );
-
-
-        this.moduleStatus =
-            modules;
-
-
-        /*
-         * Mandatory modules.
-         */
-
-        const required = [
-
-            "memory",
-            "cpu",
-            "xbe",
-            "core"
-
-        ];
-
-
-        for (
-            const name
-            of required
-        ) {
-
-            if (
-                !modules[name]
-            ) {
-
-                throw new Error(
-                    `Brak wymaganego modułu: ${name}.`
-                );
-
-            }
-
-        }
-
-
-        return modules;
-
-    },
-
-
-    /* ========================================================
-       CORE INITIALIZATION
-    ======================================================== */
-
-    async initializeCore() {
+    checkRuntime() {
 
         if (
-            typeof window.WebBktxCore !==
-            "function"
+            !window.WebBktx
         ) {
 
             throw new Error(
-                "WebBktxCore constructor unavailable."
+                "Nie znaleziono window.WebBktx. " +
+                "Sprawdź, czy core/webbktx.js " +
+                "jest załadowany przed app.js."
             );
 
         }
 
 
+        if (
+            typeof window.WebBktx !==
+            "object"
+        ) {
+
+            throw new Error(
+                "window.WebBktx ma nieprawidłowy typ."
+            );
+
+        }
+
+
+        return true;
+
+    },
+
+
+    /* ========================================================
+       CONNECT RUNTIME
+    ======================================================== */
+
+    connectRuntime() {
+
+        this.runtime =
+            window.WebBktx;
+
+
         /*
-         * Create the main emulator core.
+         * Accept the preferred unified API.
+         */
+
+        this.memory =
+            this.runtime.Memory ||
+            this.runtime.memory ||
+            null;
+
+
+        this.cpu =
+            this.runtime.CPU ||
+            this.runtime.cpu ||
+            null;
+
+
+        this.decoder =
+            this.runtime.Decoder ||
+            this.runtime.decoder ||
+            null;
+
+
+        this.xbe =
+            this.runtime.XBE ||
+            this.runtime.xbe ||
+            null;
+
+
+        this.kernel =
+            this.runtime.Kernel ||
+            this.runtime.kernel ||
+            null;
+
+
+        this.thunks =
+            this.runtime.Thunks ||
+            this.runtime.thunks ||
+            null;
+
+
+        this.xapi =
+            this.runtime.XAPI ||
+            this.runtime.xapi ||
+            null;
+
+
+        this.xfile =
+            this.runtime.XFile ||
+            this.runtime.xfile ||
+            null;
+
+
+        this.input =
+            this.runtime.XInput ||
+            this.runtime.Input ||
+            this.runtime.input ||
+            null;
+
+
+        this.graphics =
+            this.runtime.XGraphics ||
+            this.runtime.Graphics ||
+            this.runtime.graphics ||
+            null;
+
+
+        /*
+         * Core can be either a constructor,
+         * an already-created object, or the runtime itself.
          */
 
         this.core =
-            new window.WebBktxCore({
+            this.runtime.Core ||
+            this.runtime.core ||
+            this.runtime;
 
-                ramSize:
-                    64 *
-                    1024 *
-                    1024,
 
-                debug:
-                    true,
+        console.group(
+            "[WebBktx] Runtime"
+        );
 
-                maxInstructions:
-                    100000
 
-            });
+        console.log(
+            "Memory:",
+            this.memory
+        );
 
+
+        console.log(
+            "CPU:",
+            this.cpu
+        );
+
+
+        console.log(
+            "Decoder:",
+            this.decoder
+        );
+
+
+        console.log(
+            "XBE:",
+            this.xbe
+        );
+
+
+        console.log(
+            "Kernel:",
+            this.kernel
+        );
+
+
+        console.log(
+            "Thunks:",
+            this.thunks
+        );
+
+
+        console.log(
+            "XAPI:",
+            this.xapi
+        );
+
+
+        console.log(
+            "XFile:",
+            this.xfile
+        );
+
+
+        console.log(
+            "XInput:",
+            this.input
+        );
+
+
+        console.log(
+            "XGraphics:",
+            this.graphics
+        );
+
+
+        console.groupEnd();
+
+    },
+
+
+    /* ========================================================
+       RUNTIME INITIALIZATION
+    ======================================================== */
+
+    async initializeRuntime() {
 
         /*
-         * Initialize Core.
+         * Preferred:
+         *
+         * WebBktx.initialize()
          */
 
         if (
-            typeof this.core.initialize ===
+            this.runtime &&
+            typeof this.runtime.initialize ===
             "function"
         ) {
 
-            const result =
-                this.core.initialize();
-
-
-            if (
-                result instanceof Promise
-            ) {
-
-                await result;
-
-            }
+            await this.runtime.initialize();
 
         }
 
 
         /*
-         * Kernel.
-         */
-
-        if (
-            typeof window.WebBktxKernel ===
-            "function"
-        ) {
-
-            try {
-
-                /*
-                 * Prefer Core-aware constructor.
-                 */
-
-                this.kernel =
-                    new window.WebBktxKernel(
-                        this.core
-                    );
-
-
-                if (
-                    typeof this.kernel.initialize ===
-                    "function"
-                ) {
-
-                    const result =
-                        this.kernel.initialize();
-
-
-                    if (
-                        result instanceof Promise
-                    ) {
-
-                        await result;
-
-                    }
-
-                }
-
-
-                console.log(
-                    "[WebBktx] Kernel online."
-                );
-
-
-            } catch (error) {
-
-                console.warn(
-                    "[WebBktx] Kernel initialization failed:",
-                    error
-                );
-
-            }
-
-        }
-
-
-        /*
-         * Attach Kernel to Core if supported.
+         * If Core has its own initialize(),
+         * use it as well.
          */
 
         if (
             this.core &&
-            this.kernel
+            this.core !== this.runtime &&
+            typeof this.core.initialize ===
+            "function"
         ) {
 
-            if (
-                typeof this.core.attachKernel ===
-                "function"
-            ) {
-
-                this.core.attachKernel(
-                    this.kernel
-                );
-
-            } else {
-
-                this.core.kernel =
-                    this.kernel;
-
-            }
+            await this.core.initialize();
 
         }
 
 
         /*
-         * Attach decoder if supported.
+         * Refresh references after initialization.
          */
 
         if (
-            typeof window.WebBktxDecoder ===
-            "function"
+            this.runtime
         ) {
 
-            try {
-
-                let decoder;
-
-
-                /*
-                 * Most implementations will
-                 * accept CPU/Core.
-                 */
-
-                try {
-
-                    decoder =
-                        new window.WebBktxDecoder(
-                            this.core.cpu ||
-                            this.core
-                        );
-
-                } catch {
-
-                    decoder =
-                        new window.WebBktxDecoder();
-
-                }
+            this.memory =
+                this.runtime.Memory ||
+                this.runtime.memory ||
+                this.memory;
 
 
-                if (
-                    typeof this.core.attachDecoder ===
-                    "function"
-                ) {
-
-                    this.core.attachDecoder(
-                        decoder
-                    );
-
-                } else {
-
-                    this.core.decoder =
-                        decoder;
-
-                }
+            this.cpu =
+                this.runtime.CPU ||
+                this.runtime.cpu ||
+                this.cpu;
 
 
-                console.log(
-                    "[WebBktx] Decoder attached."
-                );
+            this.decoder =
+                this.runtime.Decoder ||
+                this.runtime.decoder ||
+                this.decoder;
 
 
-            } catch (error) {
+            this.xbe =
+                this.runtime.XBE ||
+                this.runtime.xbe ||
+                this.xbe;
 
-                console.warn(
-                    "[WebBktx] Decoder initialization failed:",
-                    error
-                );
 
-            }
+            this.kernel =
+                this.runtime.Kernel ||
+                this.runtime.kernel ||
+                this.kernel;
+
+
+            this.input =
+                this.runtime.XInput ||
+                this.runtime.Input ||
+                this.runtime.input ||
+                this.input;
+
+
+            this.graphics =
+                this.runtime.XGraphics ||
+                this.runtime.Graphics ||
+                this.runtime.graphics ||
+                this.graphics;
 
         }
 
 
-        return this.core;
+        /*
+         * Optional graphics initialization.
+         */
+
+        await this.initializeGraphics();
+
+
+        /*
+         * Optional input initialization.
+         */
+
+        await this.initializeInput();
+
+
+        return true;
 
     },
 
@@ -1092,126 +702,80 @@ const WebBktxApp = {
        GRAPHICS
     ======================================================== */
 
-    initializeGraphics() {
-
-        const canvas =
-            this.elements.screen;
-
-
-        if (!canvas) {
-
-            return;
-
-        }
-
-
-        /*
-         * Prefer XGraphics 1.0.
-         */
+    async initializeGraphics() {
 
         if (
-            typeof window.WebBktxXGraphics ===
-            "function"
-        ) {
-
-            try {
-
-                this.graphics =
-                    new window.WebBktxXGraphics(
-                        canvas
-                    );
-
-
-                this.attachGraphics();
-
-
-                console.log(
-                    "[WebBktx] XGraphics online."
-                );
-
-
-                return;
-
-            } catch (error) {
-
-                console.warn(
-                    "[WebBktx] XGraphics failed:",
-                    error
-                );
-
-            }
-
-        }
-
-
-        /*
-         * Compatibility graphics API.
-         */
-
-        if (
-            typeof window.WebBktxGraphics ===
-            "function"
-        ) {
-
-            try {
-
-                this.graphics =
-                    new window.WebBktxGraphics(
-                        canvas
-                    );
-
-
-                this.attachGraphics();
-
-
-                console.log(
-                    "[WebBktx] Graphics online."
-                );
-
-
-            } catch (error) {
-
-                console.warn(
-                    "[WebBktx] Graphics failed:",
-                    error
-                );
-
-            }
-
-        }
-
-    },
-
-
-    /* ========================================================
-       ATTACH GRAPHICS
-    ======================================================== */
-
-    attachGraphics() {
-
-        if (
-            !this.core ||
             !this.graphics
         ) {
 
-            return;
+            return null;
 
         }
 
 
-        if (
-            typeof this.core.attachGraphics ===
-            "function"
-        ) {
+        try {
 
-            this.core.attachGraphics(
-                this.graphics
+            /*
+             * If runtime exposes an already-created
+             * graphics instance, use it.
+             */
+
+            if (
+                typeof this.graphics !==
+                "function"
+            ) {
+
+                if (
+                    typeof this.graphics.initialize ===
+                    "function"
+                ) {
+
+                    await this.graphics.initialize(
+                        this.elements.screen
+                    );
+
+                }
+
+                return this.graphics;
+
+            }
+
+
+            /*
+             * Constructor form.
+             */
+
+            this.graphics =
+                new this.graphics(
+                    this.elements.screen
+                );
+
+
+            if (
+                typeof this.graphics.initialize ===
+                "function"
+            ) {
+
+                await this.graphics.initialize();
+
+            }
+
+
+            return this.graphics;
+
+        } catch (error) {
+
+            console.warn(
+                "[WebBktx] Graphics initialization failed:",
+                error
             );
 
-        } else {
 
-            this.core.graphics =
-                this.graphics;
+            this.graphics =
+                null;
+
+
+            return null;
 
         }
 
@@ -1222,71 +786,77 @@ const WebBktxApp = {
        INPUT
     ======================================================== */
 
-    initializeInput() {
-
-        /*
-         * Prefer XInput.
-         */
+    async initializeInput() {
 
         if (
-            typeof window.WebBktxXInput ===
-            "function"
+            !this.input
         ) {
 
-            try {
-
-                this.input =
-                    new window.WebBktxXInput();
-
-
-                this.attachInput();
-
-
-                console.log(
-                    "[WebBktx] XInput online."
-                );
-
-
-                return;
-
-            } catch (error) {
-
-                console.warn(
-                    "[WebBktx] XInput failed:",
-                    error
-                );
-
-            }
+            return null;
 
         }
 
 
-        /*
-         * Compatibility input API.
-         */
+        try {
 
-        if (
-            typeof window.WebBktxInput ===
-            "function"
-        ) {
+            /*
+             * Constructor form.
+             */
 
-            try {
+            if (
+                typeof this.input ===
+                "function"
+            ) {
 
                 this.input =
-                    new window.WebBktxInput();
+                    new this.input();
+
+            }
 
 
-                this.attachInput();
+            if (
+                this.input &&
+                typeof this.input.initialize ===
+                "function"
+            ) {
+
+                await this.input.initialize();
+
+            }
 
 
-            } catch (error) {
+            /*
+             * Optional attach to canvas.
+             */
 
-                console.warn(
-                    "[WebBktx] Input failed:",
-                    error
+            if (
+                this.input &&
+                typeof this.input.attach ===
+                "function"
+            ) {
+
+                this.input.attach(
+                    this.elements.screen
                 );
 
             }
+
+
+            return this.input;
+
+        } catch (error) {
+
+            console.warn(
+                "[WebBktx] Input initialization failed:",
+                error
+            );
+
+
+            this.input =
+                null;
+
+
+            return null;
 
         }
 
@@ -1294,36 +864,73 @@ const WebBktxApp = {
 
 
     /* ========================================================
-       ATTACH INPUT
+       DIAGNOSTICS
     ======================================================== */
 
-    attachInput() {
+    runRuntimeDiagnostics() {
+
+        const status = {
+
+            runtime:
+                Boolean(this.runtime),
+
+            memory:
+                Boolean(this.memory),
+
+            cpu:
+                Boolean(this.cpu),
+
+            decoder:
+                Boolean(this.decoder),
+
+            xbe:
+                Boolean(this.xbe),
+
+            kernel:
+                Boolean(this.kernel),
+
+            thunks:
+                Boolean(this.thunks),
+
+            xapi:
+                Boolean(this.xapi),
+
+            xfile:
+                Boolean(this.xfile),
+
+            xinput:
+                Boolean(this.input),
+
+            xgraphics:
+                Boolean(this.graphics)
+
+        };
+
+
+        console.table(
+            status
+        );
+
+
+        /*
+         * Runtime itself is mandatory.
+         *
+         * Other systems can remain WAIT while
+         * the runtime is developed.
+         */
 
         if (
-            !this.core ||
-            !this.input
+            !status.runtime
         ) {
 
-            return;
-
-        }
-
-
-        if (
-            typeof this.core.attachInput ===
-            "function"
-        ) {
-
-            this.core.attachInput(
-                this.input
+            throw new Error(
+                "WebBktx runtime unavailable."
             );
 
-        } else {
-
-            this.core.input =
-                this.input;
-
         }
+
+
+        return status;
 
     },
 
@@ -1374,7 +981,7 @@ const WebBktxApp = {
 
 
             this.showMessage(
-                "XBE selected. Ready to load.",
+                "XBE selected. Ready.",
                 "success"
             );
 
@@ -1389,40 +996,14 @@ const WebBktxApp = {
             name.endsWith(".xiso")
         ) {
 
-            /*
-             * XFile support may be available.
-             *
-             * We don't falsely claim that every
-             * ISO is directly executable.
-             */
-
-            if (
-                typeof window.WebBktxXFile ===
-                "function"
-            ) {
-
-                this.elements.startButton.disabled =
-                    false;
+            this.elements.startButton.disabled =
+                false;
 
 
-                this.showMessage(
-                    "Disc image selected. XFile will attempt to mount it.",
-                    "info"
-                );
-
-
-            } else {
-
-                this.elements.startButton.disabled =
-                    true;
-
-
-                this.showMessage(
-                    "ISO/XISO selected, but XFile is unavailable.",
-                    "warning"
-                );
-
-            }
+            this.showMessage(
+                "ISO/XISO selected. Runtime will attempt to mount it if XFile support is available.",
+                "info"
+            );
 
 
             return;
@@ -1443,7 +1024,7 @@ const WebBktxApp = {
 
 
     /* ========================================================
-       START GAME
+       LOAD GAME
     ======================================================== */
 
     async startGame() {
@@ -1463,11 +1044,11 @@ const WebBktxApp = {
 
 
         if (
-            !this.core
+            !this.runtime
         ) {
 
             this.showMessage(
-                "Core is not initialized.",
+                "WebBktx runtime is not initialized.",
                 "error"
             );
 
@@ -1484,14 +1065,32 @@ const WebBktxApp = {
 
         try {
 
-            let result;
+            let result = null;
 
 
             /*
-             * Preferred Core API.
+             * Preferred unified API.
              */
 
             if (
+                typeof this.runtime.loadGame ===
+                "function"
+            ) {
+
+                result =
+                    await this.runtime.loadGame(
+                        this.gameFile
+                    );
+
+            }
+
+
+            /*
+             * Core API fallback.
+             */
+
+            else if (
+                this.core &&
                 typeof this.core.loadGame ===
                 "function"
             ) {
@@ -1501,46 +1100,27 @@ const WebBktxApp = {
                         this.gameFile
                     );
 
-            } else {
-
-                /*
-                 * Direct XBE fallback.
-                 */
-
-                const xbe =
-                    new window.WebBktxXBE(
-                        this.gameFile
-                    );
+            }
 
 
-                await xbe.load();
+            /*
+             * XBE fallback.
+             */
 
+            else {
 
-                this.gameImage =
-                    xbe;
-
-
-                result = {
-
-                    success:
-                        true,
-
-                    image:
-                        xbe
-
-                };
+                result =
+                    await this.loadXBEFallback();
 
             }
 
 
             if (
-                result &&
-                result.success === false
+                result === false
             ) {
 
                 throw new Error(
-                    result.error ||
-                    "Core rejected the game."
+                    "Runtime rejected the game."
                 );
 
             }
@@ -1553,8 +1133,14 @@ const WebBktxApp = {
                     : result;
 
 
-            this.elements.gameName.textContent =
-                this.gameFile.name;
+            if (
+                this.elements.gameName
+            ) {
+
+                this.elements.gameName.textContent =
+                    this.gameFile.name;
+
+            }
 
 
             this.showScreen(
@@ -1566,10 +1152,10 @@ const WebBktxApp = {
                 true;
 
 
-            this.startRenderLoop();
-
-
             this.startExecution();
+
+
+            this.startRenderLoop();
 
 
             this.showMessage(
@@ -1602,14 +1188,283 @@ const WebBktxApp = {
 
 
     /* ========================================================
-       CPU EXECUTION
+       XBE FALLBACK
+    ======================================================== */
+
+    async loadXBEFallback() {
+
+        if (
+            !this.xbe
+        ) {
+
+            throw new Error(
+                "XBE subsystem is unavailable."
+            );
+
+        }
+
+
+        let XBEClass =
+            this.xbe;
+
+
+        /*
+         * Runtime may expose an instance.
+         */
+
+        if (
+            typeof XBEClass !==
+            "function"
+        ) {
+
+            if (
+                typeof XBEClass.load ===
+                "function"
+            ) {
+
+                return await XBEClass.load(
+                    this.gameFile
+                );
+
+            }
+
+
+            throw new Error(
+                "XBE loader is unavailable."
+            );
+
+        }
+
+
+        const image =
+            new XBEClass(
+                this.gameFile
+            );
+
+
+        if (
+            typeof image.load ===
+            "function"
+        ) {
+
+            await image.load();
+
+        }
+
+
+        return {
+
+            success: true,
+
+            image
+
+        };
+
+    },
+
+
+    /* ========================================================
+       EXECUTION
     ======================================================== */
 
     startExecution() {
 
         if (
-            !this.core
+            !this.running
         ) {
+
+            return;
+
+        }
+
+
+        /*
+         * Unified runtime gets priority.
+         */
+
+        if (
+            this.runtime &&
+            typeof this.runtime.step ===
+            "function"
+        ) {
+
+            this.executionTimer =
+                setTimeout(
+                    () => this.executionTick(),
+                    0
+                );
+
+            return;
+
+        }
+
+
+        /*
+         * Core fallback.
+         */
+
+        if (
+            this.core &&
+            typeof this.core.step ===
+            "function"
+        ) {
+
+            this.executionTimer =
+                setTimeout(
+                    () => this.executionTick(),
+                    0
+                );
+
+            return;
+
+        }
+
+
+        /*
+         * CPU fallback.
+         */
+
+        if (
+            this.cpu &&
+            typeof this.cpu.step ===
+            "function"
+        ) {
+
+            this.executionTimer =
+                setTimeout(
+                    () => this.executionTick(),
+                    0
+                );
+
+            return;
+
+        }
+
+
+        console.warn(
+            "[WebBktx] No executable step() method."
+        );
+
+    },
+
+
+    /* ========================================================
+       EXECUTION TICK
+    ======================================================== */
+
+    executionTick() {
+
+        if (
+            !this.running
+        ) {
+
+            return;
+
+        }
+
+
+        try {
+
+            let stepFunction = null;
+
+
+            if (
+                this.runtime &&
+                typeof this.runtime.step ===
+                "function"
+            ) {
+
+                stepFunction =
+                    () =>
+                        this.runtime.step();
+
+            }
+
+
+            else if (
+                this.core &&
+                typeof this.core.step ===
+                "function"
+            ) {
+
+                stepFunction =
+                    () =>
+                        this.core.step();
+
+            }
+
+
+            else if (
+                this.cpu &&
+                typeof this.cpu.step ===
+                "function"
+            ) {
+
+                stepFunction =
+                    () =>
+                        this.cpu.step();
+
+            }
+
+
+            if (!stepFunction) {
+
+                return;
+
+            }
+
+
+            /*
+             * Small batches keep the browser responsive.
+             */
+
+            for (
+                let i = 0;
+                i < 100 &&
+                this.running;
+                i++
+            ) {
+
+                const result =
+                    stepFunction();
+
+
+                if (
+                    result &&
+                    (
+                        result.halted ||
+                        result.faulted ||
+                        result.breakpoint
+                    )
+                ) {
+
+                    this.running =
+                        false;
+
+                    break;
+
+                }
+
+            }
+
+        } catch (error) {
+
+            console.error(
+                "[WebBktx] Execution error:",
+                error
+            );
+
+
+            this.running =
+                false;
+
+
+            this.showMessage(
+                error.message ||
+                "CPU execution stopped.",
+                "error"
+            );
+
 
             return;
 
@@ -1617,117 +1472,17 @@ const WebBktxApp = {
 
 
         if (
-            typeof this.core.step !==
-            "function"
+            this.running
         ) {
 
-            console.warn(
-                "[WebBktx] Core.step() unavailable."
-            );
-
-            return;
+            this.executionTimer =
+                setTimeout(
+                    () =>
+                        this.executionTick(),
+                    0
+                );
 
         }
-
-
-        this.running =
-            true;
-
-
-        const tick =
-            () => {
-
-                if (
-                    !this.running
-                ) {
-
-                    return;
-
-                }
-
-
-                try {
-
-                    /*
-                     * Keep batches small enough
-                     * for browser responsiveness.
-                     */
-
-                    const batch =
-                        100;
-
-
-                    for (
-                        let i = 0;
-                        i < batch &&
-                        this.running;
-                        i++
-                    ) {
-
-                        const result =
-                            this.core.step();
-
-
-                        if (
-                            result &&
-                            result.halted
-                        ) {
-
-                            this.running =
-                                false;
-
-                            break;
-
-                        }
-
-                    }
-
-                } catch (error) {
-
-                    console.error(
-                        "[WebBktx] CPU execution error:",
-                        error
-                    );
-
-
-                    this.running =
-                        false;
-
-
-                    this.showMessage(
-                        "CPU stopped: " +
-                        (
-                            error.message ||
-                            "unknown error"
-                        ),
-                        "error"
-                    );
-
-
-                    return;
-
-                }
-
-
-                if (
-                    this.running
-                ) {
-
-                    /*
-                     * Yield to browser.
-                     */
-
-                    setTimeout(
-                        tick,
-                        0
-                    );
-
-                }
-
-            };
-
-
-        tick();
 
     },
 
@@ -1764,21 +1519,22 @@ const WebBktxApp = {
                 try {
 
                     if (
-                        this.graphics
+                        this.graphics &&
+                        typeof this.graphics.Present ===
+                        "function"
                     ) {
 
-                        /*
-                         * Prefer Present().
-                         */
+                        this.graphics.Present();
 
-                        if (
-                            typeof this.graphics.Present ===
-                            "function"
-                        ) {
+                    }
 
-                            this.graphics.Present();
+                    else if (
+                        this.runtime &&
+                        typeof this.runtime.Present ===
+                        "function"
+                    ) {
 
-                        }
+                        this.runtime.Present();
 
                     }
 
@@ -1809,7 +1565,7 @@ const WebBktxApp = {
 
 
     /* ========================================================
-       STOP GAME
+       STOP
     ======================================================== */
 
     stopGame() {
@@ -1834,53 +1590,58 @@ const WebBktxApp = {
 
 
         if (
-            this.core &&
-            typeof this.core.stop ===
-            "function"
+            this.executionTimer
         ) {
 
-            try {
+            clearTimeout(
+                this.executionTimer
+            );
 
-                this.core.stop();
 
-            } catch (error) {
+            this.executionTimer =
+                null;
 
-                console.warn(
-                    "[WebBktx] Core stop error:",
-                    error
-                );
+        }
+
+
+        try {
+
+            if (
+                this.runtime &&
+                typeof this.runtime.stop ===
+                "function"
+            ) {
+
+                this.runtime.stop();
 
             }
 
-        }
+            else if (
+                this.core &&
+                typeof this.core.stop ===
+                "function"
+            ) {
 
+                this.core.stop();
 
-        if (
-            this.input &&
-            typeof this.input.stop ===
-            "function"
-        ) {
+            }
 
-            try {
+            else if (
+                this.cpu &&
+                typeof this.cpu.stop ===
+                "function"
+            ) {
 
-                this.input.stop();
+                this.cpu.stop();
 
-            } catch {}
+            }
 
-        }
+        } catch (error) {
 
-
-        if (
-            this.graphics &&
-            typeof this.graphics.stop ===
-            "function"
-        ) {
-
-            try {
-
-                this.graphics.stop();
-
-            } catch {}
+            console.warn(
+                "[WebBktx] Stop error:",
+                error
+            );
 
         }
 
@@ -1916,20 +1677,27 @@ const WebBktxApp = {
 
         try {
 
+            let cpu =
+                this.cpu;
+
+
+            /*
+             * Runtime may expose CPU as a constructor
+             * or as an instance.
+             */
+
             if (
-                !this.core
+                typeof cpu ===
+                "function"
             ) {
 
-                output.textContent =
-                    "Core not initialized.";
-
-                return;
+                cpu =
+                    this.core &&
+                    this.core.cpu
+                        ? this.core.cpu
+                        : null;
 
             }
-
-
-            const cpu =
-                this.core.cpu;
 
 
             if (!cpu) {
@@ -1953,7 +1721,10 @@ const WebBktxApp = {
                 result =
                     cpu.selfTest();
 
-            } else if (
+            }
+
+
+            else if (
                 typeof cpu.getStatus ===
                 "function"
             ) {
@@ -1961,17 +1732,17 @@ const WebBktxApp = {
                 result =
                     cpu.getStatus();
 
-            } else {
+            }
+
+
+            else {
 
                 result = {
 
-                    constructor:
-                        cpu.constructor
-                            ?.name ||
-                        "Unknown CPU",
+                    available: true,
 
-                    state:
-                        cpu
+                    message:
+                        "CPU object loaded."
 
                 };
 
@@ -1984,7 +1755,6 @@ const WebBktxApp = {
                     null,
                     4
                 );
-
 
         } catch (error) {
 
@@ -2018,8 +1788,7 @@ const WebBktxApp = {
 
 
         for (
-            const screenId
-            of screens
+            const screenId of screens
         ) {
 
             const element =
@@ -2101,10 +1870,6 @@ const WebBktxApp = {
     },
 
 
-    /* ========================================================
-       MODULE UI
-    ======================================================== */
-
     updateModule(
         name,
         state
@@ -2144,7 +1909,7 @@ const WebBktxApp = {
 
 
     /* ========================================================
-       FILE INFO
+       FILE UI
     ======================================================== */
 
     setFileInfo(file) {
@@ -2156,12 +1921,15 @@ const WebBktxApp = {
                 );
 
 
-        if (name) {
+        if (!name) {
 
-            name.textContent =
-                `${file.name} (${this.formatBytes(file.size)})`;
+            return;
 
         }
+
+
+        name.textContent =
+            `${file.name} (${this.formatBytes(file.size)})`;
 
     },
 
@@ -2197,7 +1965,7 @@ const WebBktxApp = {
 
 
     /* ========================================================
-       ERROR
+       CORE ERROR
     ======================================================== */
 
     showCoreError(error) {
@@ -2207,13 +1975,13 @@ const WebBktxApp = {
         );
 
 
-        this.setLoading(
-            "CORE ERROR"
+        this.setProgress(
+            0
         );
 
 
-        this.setProgress(
-            0
+        this.setLoading(
+            "CORE ERROR"
         );
 
 
@@ -2283,7 +2051,7 @@ const WebBktxApp = {
 
 
             diagnostic.style.maxHeight =
-                "350px";
+                "300px";
 
 
             const container =
@@ -2303,54 +2071,106 @@ const WebBktxApp = {
         }
 
 
+        const runtime =
+            window.WebBktx;
+
+
         const status = {
 
+            runtime:
+                typeof runtime,
+
             memory:
-                typeof window.WebBktxMemory,
+                runtime
+                    ? typeof (
+                        runtime.Memory ||
+                        runtime.memory
+                    )
+                    : "undefined",
 
             cpu:
-                typeof window.WebBktxCPU,
+                runtime
+                    ? typeof (
+                        runtime.CPU ||
+                        runtime.cpu
+                    )
+                    : "undefined",
 
             decoder:
-                typeof window.WebBktxDecoder,
+                runtime
+                    ? typeof (
+                        runtime.Decoder ||
+                        runtime.decoder
+                    )
+                    : "undefined",
 
             xbe:
-                typeof window.WebBktxXBE,
-
-            thunks:
-                typeof window.WebBktxThunks,
-
-            xapi:
-                typeof window.WebBktxXAPI,
-
-            xfile:
-                typeof window.WebBktxXFile,
+                runtime
+                    ? typeof (
+                        runtime.XBE ||
+                        runtime.xbe
+                    )
+                    : "undefined",
 
             kernel:
-                typeof window.WebBktxKernel,
+                runtime
+                    ? typeof (
+                        runtime.Kernel ||
+                        runtime.kernel
+                    )
+                    : "undefined",
+
+            thunks:
+                runtime
+                    ? typeof (
+                        runtime.Thunks ||
+                        runtime.thunks
+                    )
+                    : "undefined",
+
+            xapi:
+                runtime
+                    ? typeof (
+                        runtime.XAPI ||
+                        runtime.xapi
+                    )
+                    : "undefined",
+
+            xfile:
+                runtime
+                    ? typeof (
+                        runtime.XFile ||
+                        runtime.xfile
+                    )
+                    : "undefined",
 
             xinput:
-                typeof window.WebBktxXInput,
+                runtime
+                    ? typeof (
+                        runtime.XInput ||
+                        runtime.Input ||
+                        runtime.input
+                    )
+                    : "undefined",
 
             xgraphics:
-                typeof window.WebBktxXGraphics,
-
-            graphics:
-                typeof window.WebBktxGraphics,
-
-            core:
-                typeof window.WebBktxCore
+                runtime
+                    ? typeof (
+                        runtime.XGraphics ||
+                        runtime.Graphics ||
+                        runtime.graphics
+                    )
+                    : "undefined"
 
         };
 
 
         diagnostic.textContent =
-
             "WEBBKTX CORE ERROR\n\n" +
 
             message +
 
-            "\n\nMODULE STATUS\n" +
+            "\n\nRUNTIME STATUS\n" +
 
             JSON.stringify(
                 status,
@@ -2358,26 +2178,28 @@ const WebBktxApp = {
                 2
             ) +
 
-            "\n\nMODULE PATH\n" +
-
-            WEBBKTX_CORE_PATH +
-
             "\n\n" +
 
-            "Ładowanie modułów zakończyło się " +
-            "przed inicjalizacją Core.";
+            "Wymagany jest:\n" +
+
+            "core/webbktx.js\n\n" +
+
+            "oraz:\n\n" +
+
+            "window.WebBktx";
 
     },
 
 
     /* ========================================================
-       FORMAT BYTES
+       UTILITIES
     ======================================================== */
 
     formatBytes(bytes) {
 
         if (
-            !bytes
+            !Number.isFinite(bytes) ||
+            bytes <= 0
         ) {
 
             return "0 B";
@@ -2390,47 +2212,36 @@ const WebBktxApp = {
             "B",
             "KB",
             "MB",
-            "GB"
+            "GB",
+            "TB"
 
         ];
 
 
         const index =
             Math.min(
-                units.length - 1,
                 Math.floor(
                     Math.log(bytes) /
                     Math.log(1024)
-                )
+                ),
+                units.length - 1
             );
 
 
         return (
-
             (
                 bytes /
                 Math.pow(
                     1024,
                     index
                 )
-            ).toFixed(2)
-
-            +
-
-            " "
-
-            +
-
+            ).toFixed(2) +
+            " " +
             units[index]
-
         );
 
     },
 
-
-    /* ========================================================
-       DELAY
-    ======================================================== */
 
     delay(ms) {
 
@@ -2448,7 +2259,7 @@ const WebBktxApp = {
 
 
 /* ============================================================
-   GLOBAL API
+   GLOBAL
 ============================================================ */
 
 window.WebBktxApp =
@@ -2481,6 +2292,6 @@ if (
 
 
 console.log(
-    `%cWebBktx App ${WEBBKTX_APP_VERSION}`,
+    `%cWebBktx App ${WEBBKTX_APP_VERSION} loaded.`,
     "font-weight:bold"
 );
