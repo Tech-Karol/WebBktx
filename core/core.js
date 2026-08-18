@@ -1,24 +1,48 @@
 /*
  * ============================================================
  * WebBktx Core
- * Xbox Browser Emulator Project
  *
- * VERSION 0.8
+ * Version: 1.0
  *
- * Main controller for:
+ * Main emulator runtime controller
+ *
+ * Responsibilities:
+ *
  *   - Memory
  *   - CPU
- *   - XBE loader
- *   - Entry point analysis
- *   - Instruction stepping
- *   - Diagnostics
+ *   - Decoder
+ *   - XBE
+ *   - Xbox Kernel
  *
- * This file DOES NOT replace:
- *   memory.js
- *   cpu.js
- *   xbe.js
+ * Architecture:
  *
- * It connects them together.
+ *   app.js
+ *      |
+ *      v
+ *   WebBktxCore
+ *      |
+ *      +---- Memory
+ *      |
+ *      +---- CPU
+ *      |
+ *      +---- Decoder
+ *      |
+ *      +---- XBE
+ *      |
+ *      v
+ *   WebBktxKernel
+ *      |
+ *      +---- Thunks
+ *      +---- XAPI
+ *      +---- XFile
+ *      +---- XInput
+ *      +---- XGraphics
+ *
+ * No PWA
+ * No Service Worker
+ * No Cache
+ * No Online Dependency
+ *
  * ============================================================
  */
 
@@ -29,34 +53,11 @@
    VERSION
 ============================================================ */
 
-const WEBBKTX_VERSION = "0.8";
+const WEBBKTX_CORE_VERSION = "1.0";
 
 
 /* ============================================================
-   SAFE MODULE RESOLUTION
-============================================================ */
-
-function resolveModule(names) {
-
-    for (const name of names) {
-
-        if (
-            typeof window[name] !== "undefined"
-        ) {
-
-            return window[name];
-
-        }
-
-    }
-
-    return null;
-
-}
-
-
-/* ============================================================
-   CORE CLASS
+   CORE
 ============================================================ */
 
 class WebBktxCore {
@@ -64,54 +65,111 @@ class WebBktxCore {
     constructor(options = {}) {
 
         this.version =
-            WEBBKTX_VERSION;
+            WEBBKTX_CORE_VERSION;
 
 
-        this.options = {
-
-            ramSize:
-                options.ramSize ||
-                64 * 1024 * 1024,
-
-            debug:
-                options.debug !== false,
-
-            maxInstructions:
-                options.maxInstructions ||
-                10000
-
-        };
-
+        /* ----------------------------------------------------
+           COMPONENTS
+        ---------------------------------------------------- */
 
         this.memory = null;
 
         this.cpu = null;
 
+        this.decoder = null;
+
         this.xbe = null;
+
+        this.kernel = null;
+
+
+        /* ----------------------------------------------------
+           GAME
+        ---------------------------------------------------- */
 
         this.game = null;
 
+        this.gameFile = null;
+
+
+        /* ----------------------------------------------------
+           STATE
+        ---------------------------------------------------- */
 
         this.initialized = false;
 
         this.running = false;
 
+        this.paused = false;
 
-        this.logs = [];
+
+        /* ----------------------------------------------------
+           SETTINGS
+        ---------------------------------------------------- */
+
+        this.settings = {
+
+            ramSize:
+                Number.isInteger(
+                    options.ramSize
+                )
+                    ? options.ramSize
+                    : 64 * 1024 * 1024,
+
+            debug:
+                options.debug !== false,
+
+            maxInstructions:
+                Number.isInteger(
+                    options.maxInstructions
+                )
+                    ? options.maxInstructions
+                    : 100000,
+
+            autoKernel:
+                options.autoKernel !== false
+
+        };
+
+
+        /* ----------------------------------------------------
+           LOG
+        ---------------------------------------------------- */
+
+        this.logBuffer = [];
+
+
+        /* ----------------------------------------------------
+           CALLBACKS
+        ---------------------------------------------------- */
+
+        this.onReady = null;
+
+        this.onGameLoaded = null;
+
+        this.onError = null;
+
+        this.onStop = null;
 
     }
 
 
     /* ========================================================
-       LOG
+       LOGGING
     ======================================================== */
 
-    log(message, data = null) {
+    log(
+        message,
+        data = null
+    ) {
 
         const entry = {
 
             time:
-                Date.now(),
+                new Date().toISOString(),
+
+            type:
+                "log",
 
             message,
 
@@ -120,33 +178,40 @@ class WebBktxCore {
         };
 
 
-        this.logs.push(entry);
+        this.logBuffer.push(
+            entry
+        );
 
 
         if (
-            this.logs.length > 500
+            this.logBuffer.length >
+            500
         ) {
 
-            this.logs.shift();
+            this.logBuffer.shift();
 
         }
 
 
-        if (this.options.debug) {
+        if (
+            this.settings.debug &&
+            typeof console !==
+            "undefined"
+        ) {
 
-            if (data !== null) {
+            if (
+                data !== null
+            ) {
 
                 console.log(
-                    "[WebBktx]",
-                    message,
+                    `[WebBktx Core] ${message}`,
                     data
                 );
 
             } else {
 
                 console.log(
-                    "[WebBktx]",
-                    message
+                    `[WebBktx Core] ${message}`
                 );
 
             }
@@ -156,29 +221,109 @@ class WebBktxCore {
     }
 
 
-    error(message, error = null) {
+    error(
+        message,
+        error = null
+    ) {
+
+        const entry = {
+
+            time:
+                new Date().toISOString(),
+
+            type:
+                "error",
+
+            message,
+
+            detail:
+                error
+                    ? (
+                        error.message ||
+                        String(error)
+                    )
+                    : null
+
+        };
+
+
+        this.logBuffer.push(
+            entry
+        );
+
+
+        if (
+            this.logBuffer.length >
+            500
+        ) {
+
+            this.logBuffer.shift();
+
+        }
+
 
         console.error(
-            "[WebBktx]",
-            message,
+            `[WebBktx Core] ${message}`,
             error || ""
         );
 
 
-        this.logs.push({
+        if (
+            typeof this.onError ===
+            "function"
+        ) {
 
-            time:
-                Date.now(),
+            try {
 
-            error:
-                message,
+                this.onError(
+                    entry
+                );
 
-            detail:
-                error
-                    ? error.message
-                    : null
+            } catch (_) {}
 
-        });
+        }
+
+    }
+
+
+    /* ========================================================
+       MODULE CHECK
+    ======================================================== */
+
+    checkModules() {
+
+        const modules = {
+
+            memory:
+                typeof WebBktxMemory !==
+                "undefined",
+
+            cpu:
+                typeof WebBktxCPU !==
+                "undefined",
+
+            xbe:
+                typeof WebBktxXBE !==
+                "undefined",
+
+            decoder:
+                typeof WebBktxDecoder !==
+                "undefined",
+
+            kernel:
+                typeof WebBktxKernel !==
+                "undefined"
+
+        };
+
+
+        this.log(
+            "Module check.",
+            modules
+        );
+
+
+        return modules;
 
     }
 
@@ -189,7 +334,9 @@ class WebBktxCore {
 
     initialize() {
 
-        if (this.initialized) {
+        if (
+            this.initialized
+        ) {
 
             return true;
 
@@ -197,151 +344,92 @@ class WebBktxCore {
 
 
         this.log(
-            "Initializing WebBktx Core 0.8..."
+            "Initializing WebBktx Core 1.0..."
         );
 
 
+        const modules =
+            this.checkModules();
+
+
         /*
-         * ----------------------------------------------------
-         * Find Memory
-         * ----------------------------------------------------
+         * Memory
          */
 
-        const MemoryClass =
-            resolveModule([
-
-                "WebBktxMemory",
-
-                "Memory",
-
-                "XboxMemory"
-
-            ]);
-
-
-        if (!MemoryClass) {
+        if (
+            !modules.memory
+        ) {
 
             throw new Error(
-                "WebBktxMemory not found. " +
-                "Load core/memory.js before core.js."
+                "WebBktxMemory is not loaded."
             );
 
         }
 
 
         /*
-         * ----------------------------------------------------
-         * Find CPU
-         * ----------------------------------------------------
+         * CPU
          */
 
-        const CPUClass =
-            resolveModule([
-
-                "WebBktxCPU",
-
-                "X86CPU",
-
-                "CPU",
-
-                "XboxCPU"
-
-            ]);
-
-
-        if (!CPUClass) {
+        if (
+            !modules.cpu
+        ) {
 
             throw new Error(
-                "WebBktxCPU not found. " +
-                "Load core/cpu.js before core.js."
+                "WebBktxCPU is not loaded."
             );
 
         }
 
 
         /*
-         * ----------------------------------------------------
-         * Find XBE
-         * ----------------------------------------------------
+         * XBE
          */
 
-        const XBEClass =
-            resolveModule([
-
-                "WebBktxXBE",
-
-                "XBEImage",
-
-                "XBE",
-
-                "XboxXBE"
-
-            ]);
-
-
-        if (!XBEClass) {
+        if (
+            !modules.xbe
+        ) {
 
             throw new Error(
-                "WebBktxXBE not found. " +
-                "Load core/xbe.js before core.js."
+                "WebBktxXBE is not loaded."
             );
 
         }
 
 
-        /*
-         * ----------------------------------------------------
-         * Create Memory
-         * ----------------------------------------------------
-         */
+        /* ----------------------------------------------------
+           MEMORY
+        ---------------------------------------------------- */
 
-        try {
-
-            this.memory =
-                new MemoryClass(
-                    this.options.ramSize
-                );
-
-        } catch (error) {
-
-            throw new Error(
-                "Memory initialization failed: " +
-                error.message
+        this.memory =
+            new WebBktxMemory(
+                this.settings.ramSize
             );
-
-        }
 
 
         this.log(
             "Memory initialized.",
             {
                 size:
-                    this.memory.size
+                    this.settings.ramSize,
+
+                sizeMB:
+                    this.settings.ramSize /
+                    1024 /
+                    1024
+
             }
         );
 
 
-        /*
-         * ----------------------------------------------------
-         * Create CPU
-         * ----------------------------------------------------
-         */
+        /* ----------------------------------------------------
+           CPU
+        ---------------------------------------------------- */
 
-        try {
-
-            this.cpu =
-                new CPUClass(
-                    this.memory
-                );
-
-        } catch (error) {
-
-            throw new Error(
-                "CPU initialization failed: " +
-                error.message
+        this.cpu =
+            new WebBktxCPU(
+                this.memory
             );
-
-        }
 
 
         this.log(
@@ -349,45 +437,1118 @@ class WebBktxCore {
         );
 
 
-        /*
-         * ----------------------------------------------------
-         * Create XBE loader
-         * ----------------------------------------------------
-         */
+        /* ----------------------------------------------------
+           DECODER
+        ---------------------------------------------------- */
 
-        try {
+        if (
+            modules.decoder
+        ) {
 
-            this.xbe =
-                new XBEClass();
+            try {
 
-        } catch (error) {
+                if (
+                    typeof WebBktxDecoder ===
+                    "function"
+                ) {
 
-            throw new Error(
-                "XBE loader initialization failed: " +
-                error.message
+                    this.decoder =
+                        new WebBktxDecoder(
+                            this.memory
+                        );
+
+                } else {
+
+                    this.decoder =
+                        WebBktxDecoder;
+
+                }
+
+
+                if (
+                    this.cpu &&
+                    typeof this.cpu.attachDecoder ===
+                    "function"
+                ) {
+
+                    this.cpu.attachDecoder(
+                        this.decoder
+                    );
+
+                }
+
+
+                this.log(
+                    "Decoder attached."
+                );
+
+            } catch (error) {
+
+                this.error(
+                    "Decoder initialization failed.",
+                    error
+                );
+
+            }
+
+        } else {
+
+            this.log(
+                "Decoder not available. CPU can be initialized without it."
             );
 
         }
 
 
+        /* ----------------------------------------------------
+           XBE
+        ---------------------------------------------------- */
+
+        this.xbe =
+            new WebBktxXBE();
+
+
         this.log(
-            "XBE loader initialized."
+            "XBE subsystem initialized."
         );
+
+
+        /* ----------------------------------------------------
+           KERNEL
+        ---------------------------------------------------- */
+
+        if (
+            this.settings.autoKernel
+        ) {
+
+            this.initializeKernel(
+                modules.kernel
+            );
+
+        }
+
+
+        /* ----------------------------------------------------
+           CPU RESET
+        ---------------------------------------------------- */
+
+        if (
+            this.cpu &&
+            typeof this.cpu.reset ===
+            "function"
+        ) {
+
+            this.cpu.reset();
+
+        }
 
 
         this.initialized =
             true;
 
 
-        this.reset();
-
-
         this.log(
-            "WebBktx Core 0.8 READY."
+            "WebBktx Core 1.0 initialized."
         );
 
 
+        if (
+            typeof this.onReady ===
+            "function"
+        ) {
+
+            try {
+
+                this.onReady(
+                    this
+                );
+
+            } catch (_) {}
+
+        }
+
+
         return true;
+
+    }
+
+
+    /* ========================================================
+       KERNEL INITIALIZATION
+    ======================================================== */
+
+    initializeKernel(
+        available = true
+    ) {
+
+        if (
+            !available ||
+            typeof WebBktxKernel ===
+            "undefined"
+        ) {
+
+            this.log(
+                "Kernel not available. Core will continue without Kernel."
+            );
+
+            return null;
+
+        }
+
+
+        try {
+
+            const options = {
+
+                memory:
+                    this.memory,
+
+                cpu:
+                    this.cpu,
+
+                xbe:
+                    this.xbe,
+
+                decoder:
+                    this.decoder,
+
+                core:
+                    this
+
+            };
+
+
+            this.kernel =
+                new WebBktxKernel(
+                    options
+                );
+
+
+            /*
+             * Optional kernel initialization.
+             */
+
+            if (
+                typeof this.kernel.initialize ===
+                "function"
+            ) {
+
+                this.kernel.initialize();
+
+            }
+
+
+            this.log(
+                "Xbox Kernel attached."
+            );
+
+
+            return this.kernel;
+
+        } catch (error) {
+
+            this.error(
+                "Kernel initialization failed.",
+                error
+            );
+
+
+            /*
+             * Do not destroy the entire
+             * emulator if the optional
+             * kernel is unavailable.
+             */
+
+            this.kernel =
+                null;
+
+
+            return null;
+
+        }
+
+    }
+
+
+    /* ========================================================
+       ENSURE INITIALIZED
+    ======================================================== */
+
+    ensureInitialized() {
+
+        if (
+            !this.initialized
+        ) {
+
+            this.initialize();
+
+        }
+
+    }
+
+
+    /* ========================================================
+       LOAD GAME
+    ======================================================== */
+
+    async loadGame(
+        source
+    ) {
+
+        this.ensureInitialized();
+
+
+        if (
+            !source
+        ) {
+
+            throw new Error(
+                "No XBE supplied."
+            );
+
+        }
+
+
+        this.log(
+            "Loading XBE..."
+        );
+
+
+        /*
+         * Store original source.
+         */
+
+        this.gameFile =
+            source;
+
+
+        try {
+
+            /*
+             * Create a new XBE instance
+             * for this game.
+             */
+
+            this.xbe =
+                new WebBktxXBE(
+                    source
+                );
+
+
+            /*
+             * XBE loader accepts:
+             *
+             * ArrayBuffer
+             * Uint8Array
+             * Blob
+             */
+
+            await this.xbe.load();
+
+
+            this.game =
+                this.xbe;
+
+
+            this.log(
+                "XBE loaded.",
+                this.getGameInfo()
+            );
+
+
+            /*
+             * Reconnect XBE to Kernel.
+             */
+
+            if (
+                this.kernel
+            ) {
+
+                if (
+                    typeof this.kernel.attachXBE ===
+                    "function"
+                ) {
+
+                    this.kernel.attachXBE(
+                        this.xbe
+                    );
+
+                }
+
+
+                if (
+                    typeof this.kernel.loadGame ===
+                    "function"
+                ) {
+
+                    await this.kernel.loadGame(
+                        this.xbe
+                    );
+
+                }
+
+            }
+
+
+            /*
+             * Load executable section.
+             */
+
+            const memoryResult =
+                this.mapXBEIntoMemory();
+
+
+            /*
+             * Set CPU entry point.
+             */
+
+            const cpuEntry =
+                this.getCPUEntryAddress();
+
+
+            if (
+                cpuEntry !== null
+            ) {
+
+                this.setCPUEntry(
+                    cpuEntry
+                );
+
+            }
+
+
+            /*
+             * Notify.
+             */
+
+            if (
+                typeof this.onGameLoaded ===
+                "function"
+            ) {
+
+                try {
+
+                    this.onGameLoaded(
+                        this.game
+                    );
+
+                } catch (_) {}
+
+            }
+
+
+            return {
+
+                success:
+                    true,
+
+                xbe:
+                    this.xbe,
+
+                game:
+                    this.game,
+
+                memory:
+                    memoryResult,
+
+                entryPoint:
+                    cpuEntry,
+
+                info:
+                    this.getGameInfo()
+
+            };
+
+        } catch (error) {
+
+            this.game =
+                null;
+
+
+            this.error(
+                "XBE loading failed.",
+                error
+            );
+
+
+            throw error;
+
+        }
+
+    }
+
+
+    /* ========================================================
+       MAP XBE
+    ======================================================== */
+
+    mapXBEIntoMemory() {
+
+        this.ensureInitialized();
+
+
+        if (
+            !this.xbe
+        ) {
+
+            throw new Error(
+                "XBE subsystem is unavailable."
+            );
+
+        }
+
+
+        if (
+            !this.xbe.parser ||
+            !this.xbe.parser.sections
+        ) {
+
+            /*
+             * Newer XBE implementations may
+             * expose sections directly.
+             */
+
+            if (
+                Array.isArray(
+                    this.xbe.sections
+                )
+            ) {
+
+                const results = [];
+
+
+                for (
+                    const section
+                    of this.xbe.sections
+                ) {
+
+                    if (
+                        typeof this.xbe.loadSectionIntoMemory ===
+                        "function"
+                    ) {
+
+                        results.push(
+                            this.xbe
+                                .loadSectionIntoMemory(
+                                    this.memory,
+                                    section
+                                )
+                        );
+
+                    } else if (
+                        this.xbe.parser &&
+                        typeof this.xbe.parser.loadSectionIntoMemory ===
+                        "function"
+                    ) {
+
+                        results.push(
+                            this.xbe.parser
+                                .loadSectionIntoMemory(
+                                    this.memory,
+                                    section
+                                )
+                        );
+
+                    }
+
+                }
+
+
+                return results;
+
+            }
+
+
+            return null;
+
+        }
+
+
+        const sections =
+            this.xbe.parser.sections;
+
+
+        const results =
+            [];
+
+
+        for (
+            const section
+            of sections
+        ) {
+
+            try {
+
+                if (
+                    typeof this.xbe.parser
+                        .loadSectionIntoMemory ===
+                    "function"
+                ) {
+
+                    const result =
+                        this.xbe.parser
+                            .loadSectionIntoMemory(
+                                this.memory,
+                                section
+                            );
+
+
+                    results.push(
+                        result
+                    );
+
+                }
+
+            } catch (error) {
+
+                /*
+                 * Do not silently ignore
+                 * malformed sections.
+                 */
+
+                this.error(
+                    `Failed to map XBE section: ${
+                        section.name ||
+                        section.index
+                    }`,
+                    error
+                );
+
+            }
+
+        }
+
+
+        return results;
+
+    }
+
+
+    /* ========================================================
+       CPU ENTRY
+    ======================================================== */
+
+    getCPUEntryAddress() {
+
+        if (
+            !this.game
+        ) {
+
+            return null;
+
+        }
+
+
+        /*
+         * Preferred XBE API.
+         */
+
+        if (
+            typeof this.xbe.getCPUEntryAddress ===
+            "function"
+        ) {
+
+            const address =
+                this.xbe.getCPUEntryAddress(
+                    this.memory
+                );
+
+
+            if (
+                address !== null &&
+                address !== undefined
+            ) {
+
+                return address >>> 0;
+
+            }
+
+        }
+
+
+        /*
+         * Fallback through parser.
+         */
+
+        if (
+            this.xbe.parser &&
+            typeof this.xbe.parser.getCPUEntryAddress ===
+            "function"
+        ) {
+
+            const address =
+                this.xbe.parser.getCPUEntryAddress(
+                    this.memory
+                );
+
+
+            if (
+                address !== null &&
+                address !== undefined
+            ) {
+
+                return address >>> 0;
+
+            }
+
+        }
+
+
+        /*
+         * Last-resort entry point handling.
+         */
+
+        if (
+            this.xbe.entryPoint !==
+            undefined &&
+            this.xbe.entryPoint !==
+            null
+        ) {
+
+            const entry =
+                this.xbe.entryPoint >>> 0;
+
+
+            if (
+                entry <
+                this.memory.size
+            ) {
+
+                return entry;
+
+            }
+
+        }
+
+
+        return null;
+
+    }
+
+
+    setCPUEntry(
+        address
+    ) {
+
+        address >>>
+            = 0;
+
+
+        if (
+            !this.cpu
+        ) {
+
+            throw new Error(
+                "CPU is unavailable."
+            );
+
+        }
+
+
+        if (
+            typeof this.cpu.setEIP ===
+            "function"
+        ) {
+
+            this.cpu.setEIP(
+                address
+            );
+
+        } else if (
+            typeof this.cpu.setInstructionPointer ===
+            "function"
+        ) {
+
+            this.cpu.setInstructionPointer(
+                address
+            );
+
+        } else {
+
+            this.cpu.EIP =
+                address >>> 0;
+
+        }
+
+
+        this.log(
+            "CPU entry point configured.",
+            {
+                EIP:
+                    "0x" +
+                    address
+                        .toString(16)
+                        .padStart(
+                            8,
+                            "0"
+                        )
+                        .toUpperCase()
+            }
+        );
+
+    }
+
+
+    /* ========================================================
+       STEP
+    ======================================================== */
+
+    step() {
+
+        this.ensureInitialized();
+
+
+        if (
+            !this.game
+        ) {
+
+            throw new Error(
+                "No XBE supplied."
+            );
+
+        }
+
+
+        /*
+         * Let Kernel prepare the execution
+         * environment if it provides a hook.
+         */
+
+        if (
+            this.kernel &&
+            typeof this.kernel.beforeCPUInstruction ===
+            "function"
+        ) {
+
+            this.kernel.beforeCPUInstruction(
+                this.cpu
+            );
+
+        }
+
+
+        let result;
+
+
+        try {
+
+            result =
+                this.cpu.step();
+
+        } catch (error) {
+
+            this.error(
+                "CPU execution error.",
+                error
+            );
+
+
+            this.stop();
+
+
+            throw error;
+
+        }
+
+
+        /*
+         * Kernel instruction hook.
+         */
+
+        if (
+            this.kernel &&
+            typeof this.kernel.afterCPUInstruction ===
+            "function"
+        ) {
+
+            this.kernel.afterCPUInstruction(
+                this.cpu,
+                result
+            );
+
+        }
+
+
+        return result;
+
+    }
+
+
+    /* ========================================================
+       RUN
+    ======================================================== */
+
+    run(
+        instructionLimit =
+            this.settings.maxInstructions
+    ) {
+
+        this.ensureInitialized();
+
+
+        if (
+            !this.game
+        ) {
+
+            throw new Error(
+                "No XBE supplied."
+            );
+
+        }
+
+
+        if (
+            !Number.isInteger(
+                instructionLimit
+            ) ||
+            instructionLimit <= 0
+        ) {
+
+            throw new Error(
+                "Invalid instruction limit."
+            );
+
+        }
+
+
+        this.running =
+            true;
+
+        this.paused =
+            false;
+
+
+        let executed =
+            0;
+
+        let last =
+            null;
+
+
+        try {
+
+            /*
+             * Kernel start hook.
+             */
+
+            if (
+                this.kernel &&
+                typeof this.kernel.startProcess ===
+                "function"
+            ) {
+
+                this.kernel.startProcess(
+                    this.game
+                );
+
+            }
+
+
+            while (
+                this.running &&
+                !this.paused &&
+                executed <
+                instructionLimit
+            ) {
+
+                last =
+                    this.step();
+
+
+                executed++;
+
+
+                /*
+                 * CPU HALT.
+                 */
+
+                if (
+                    last &&
+                    last.halted
+                ) {
+
+                    break;
+
+                }
+
+
+                if (
+                    this.cpu &&
+                    this.cpu.halted
+                ) {
+
+                    break;
+
+                }
+
+            }
+
+        } catch (error) {
+
+            this.running =
+                false;
+
+
+            this.error(
+                "Execution stopped because of an error.",
+                error
+            );
+
+
+            throw error;
+
+        }
+
+
+        this.running =
+            false;
+
+
+        /*
+         * Kernel stop hook.
+         */
+
+        if (
+            this.kernel &&
+            typeof this.kernel.stopProcess ===
+            "function"
+        ) {
+
+            try {
+
+                this.kernel.stopProcess();
+
+            } catch (error) {
+
+                this.error(
+                    "Kernel stop hook failed.",
+                    error
+                );
+
+            }
+
+        }
+
+
+        return {
+
+            executed,
+
+            last,
+
+            running:
+                this.running,
+
+            paused:
+                this.paused
+
+        };
+
+    }
+
+
+    /* ========================================================
+       PAUSE
+    ======================================================== */
+
+    pause() {
+
+        this.paused =
+            true;
+
+        this.running =
+            false;
+
+
+        if (
+            this.cpu &&
+            typeof this.cpu.stop ===
+            "function"
+        ) {
+
+            this.cpu.stop();
+
+        }
+
+
+        if (
+            this.kernel &&
+            typeof this.kernel.pause ===
+            "function"
+        ) {
+
+            try {
+
+                this.kernel.pause();
+
+            } catch (_) {}
+
+        }
+
+
+        this.log(
+            "Execution paused."
+        );
+
+    }
+
+
+    /* ========================================================
+       STOP
+    ======================================================== */
+
+    stop() {
+
+        this.running =
+            false;
+
+        this.paused =
+            false;
+
+
+        if (
+            this.cpu &&
+            typeof this.cpu.stop ===
+            "function"
+        ) {
+
+            this.cpu.stop();
+
+        }
+
+
+        if (
+            this.kernel &&
+            typeof this.kernel.stop ===
+            "function"
+        ) {
+
+            try {
+
+                this.kernel.stop();
+
+            } catch (_) {}
+
+        }
+
+
+        if (
+            typeof this.onStop ===
+            "function"
+        ) {
+
+            try {
+
+                this.onStop();
+
+            } catch (_) {}
+
+        }
+
+
+        this.log(
+            "Execution stopped."
+        );
 
     }
 
@@ -398,15 +1559,10 @@ class WebBktxCore {
 
     reset() {
 
-        if (!this.initialized) {
-
-            return;
-
-        }
+        this.ensureInitialized();
 
 
-        this.running =
-            false;
+        this.stop();
 
 
         if (
@@ -431,7 +1587,32 @@ class WebBktxCore {
         }
 
 
+        if (
+            this.kernel &&
+            typeof this.kernel.reset ===
+            "function"
+        ) {
+
+            try {
+
+                this.kernel.reset();
+
+            } catch (error) {
+
+                this.error(
+                    "Kernel reset failed.",
+                    error
+                );
+
+            }
+
+        }
+
+
         this.game =
+            null;
+
+        this.gameFile =
             null;
 
 
@@ -443,569 +1624,65 @@ class WebBktxCore {
 
 
     /* ========================================================
-       LOAD XBE
+       GAME INFORMATION
     ======================================================== */
 
-    async loadGame(file) {
-
-        this.ensureInitialized();
-
-
-        if (!file) {
-
-            throw new Error(
-                "No XBE supplied."
-            );
-
-        }
-
-
-        this.log(
-            "Loading XBE...",
-            {
-                name:
-                    file.name,
-
-                size:
-                    file.size
-            }
-        );
-
-
-        let image;
-
-
-        /*
-         * ----------------------------------------------------
-         * Use xbe.js
-         * ----------------------------------------------------
-         */
+    getGameInfo() {
 
         if (
-            this.xbe &&
-            typeof this.xbe.load ===
-            "function"
+            !this.game
         ) {
-
-            image =
-                await this.xbe.load(
-                    file
-                );
-
-        }
-
-
-        /*
-         * Some XBE modules expose loadFile()
-         */
-
-        else if (
-            this.xbe &&
-            typeof this.xbe.loadFile ===
-            "function"
-        ) {
-
-            image =
-                await this.xbe.loadFile(
-                    file
-                );
-
-        }
-
-
-        else {
-
-            throw new Error(
-                "XBE loader does not provide load() " +
-                "or loadFile()."
-            );
-
-        }
-
-
-        if (!image) {
-
-            throw new Error(
-                "XBE loader returned no image."
-            );
-
-        }
-
-
-        this.game =
-            image;
-
-
-        /*
-         * ----------------------------------------------------
-         * Load executable into RAM
-         * ----------------------------------------------------
-         */
-
-        let memoryMap =
-            null;
-
-
-        if (
-            typeof this.xbe.loadIntoMemory ===
-            "function"
-        ) {
-
-            memoryMap =
-                this.xbe.loadIntoMemory(
-                    this.memory
-                );
-
-        }
-
-        else if (
-            typeof image.loadIntoMemory ===
-            "function"
-        ) {
-
-            memoryMap =
-                image.loadIntoMemory(
-                    this.memory
-                );
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * ENTRY POINT
-         * ----------------------------------------------------
-         */
-
-        const entryPoint =
-            this.getImageEntryPoint(
-                image
-            );
-
-
-        if (
-            entryPoint !== null
-        ) {
-
-            this.setEIP(
-                entryPoint
-            );
-
-        }
-
-
-        this.log(
-            "XBE loaded successfully.",
-            {
-
-                entryPoint,
-
-                memoryMap
-
-            }
-        );
-
-
-        return {
-
-            success: true,
-
-            image,
-
-            entryPoint,
-
-            memory:
-                memoryMap
-
-        };
-
-    }
-
-
-    /* ========================================================
-       GET ENTRY POINT
-    ======================================================== */
-
-    getImageEntryPoint(image) {
-
-        if (!image) {
-
-            return null;
-
-        }
-
-
-        const possible = [
-
-            image.entryPoint,
-
-            image.entrypoint,
-
-            image.EntryPoint,
-
-            image.header &&
-                image.header.entryPoint,
-
-            image.header &&
-                image.header.entrypoint
-
-        ];
-
-
-        for (
-            const value
-            of possible
-        ) {
-
-            if (
-                typeof value ===
-                "number"
-            ) {
-
-                return value >>> 0;
-
-            }
-
-        }
-
-
-        return null;
-
-    }
-
-
-    /* ========================================================
-       SET EIP
-    ======================================================== */
-
-    setEIP(value) {
-
-        const address =
-            value >>> 0;
-
-
-        if (
-            this.cpu &&
-            typeof this.cpu.setInstructionPointer ===
-            "function"
-        ) {
-
-            this.cpu.setInstructionPointer(
-                address
-            );
-
-            return;
-
-        }
-
-
-        if (
-            this.cpu
-        ) {
-
-            this.cpu.EIP =
-                address;
-
-        }
-
-    }
-
-
-    /* ========================================================
-       GET EIP
-    ======================================================== */
-
-    getEIP() {
-
-        if (!this.cpu) {
-
-            return 0;
-
-        }
-
-
-        if (
-            typeof this.cpu.getInstructionPointer ===
-            "function"
-        ) {
-
-            return (
-                this.cpu.getInstructionPointer()
-                >>> 0
-            );
-
-        }
-
-
-        return (
-            this.cpu.EIP
-            >>> 0
-        );
-
-    }
-
-
-    /* ========================================================
-       READ MEMORY
-    ======================================================== */
-
-    readMemory(address, length = 16) {
-
-        this.ensureInitialized();
-
-
-        if (
-            !this.memory
-        ) {
-
-            throw new Error(
-                "Memory unavailable."
-            );
-
-        }
-
-
-        if (
-            typeof this.memory.readBytes ===
-            "function"
-        ) {
-
-            return this.memory.readBytes(
-                address >>> 0,
-                length
-            );
-
-        }
-
-
-        if (
-            this.memory.memory
-        ) {
-
-            return this.memory.memory.slice(
-                address >>> 0,
-                (address >>> 0) + length
-            );
-
-        }
-
-
-        throw new Error(
-            "Memory read API unavailable."
-        );
-
-    }
-
-
-    /* ========================================================
-       PEEK ENTRY POINT
-    ======================================================== */
-
-    peekEntryPoint(length = 16) {
-
-        const entry =
-            this.getEntryPoint();
-
-
-        if (
-            entry === null
-        ) {
-
-            return null;
-
-        }
-
-
-        try {
-
-            const bytes =
-                this.readMemory(
-                    entry,
-                    length
-                );
-
 
             return {
 
-                address:
-                    entry,
-
-                bytes:
-
-                    Array.from(
-                        bytes
-                    )
+                loaded:
+                    false
 
             };
 
-        } catch (error) {
-
-            this.error(
-                "Unable to read entry point.",
-                error
-            );
-
-
-            return null;
-
-        }
-
-    }
-
-
-    /* ========================================================
-       STEP ONE INSTRUCTION
-    ======================================================== */
-
-    step() {
-
-        this.ensureInitialized();
-
-
-        if (!this.game) {
-
-            throw new Error(
-                "No XBE loaded."
-            );
-
         }
 
 
-        if (
-            !this.cpu ||
-            typeof this.cpu.step !==
-            "function"
-        ) {
-
-            throw new Error(
-                "CPU step() is not available."
-            );
-
-        }
-
-
-        const result =
-            this.cpu.step();
-
-
-        return result;
-
-    }
-
-
-    /* ========================================================
-       RUN
-    ======================================================== */
-
-    run(limit = null) {
-
-        this.ensureInitialized();
-
-
-        if (!this.game) {
-
-            throw new Error(
-                "No XBE loaded."
-            );
-
-        }
-
-
-        const maximum =
-            limit ||
-            this.options.maxInstructions;
-
-
-        let executed = 0;
-
-        let last =
+        let report =
             null;
 
 
-        this.running =
-            true;
+        if (
+            typeof this.game.getReport ===
+            "function"
+        ) {
 
+            try {
 
-        try {
+                report =
+                    this.game.getReport();
 
-            while (
-                this.running &&
-                executed <
-                maximum
-            ) {
-
-                last =
-                    this.step();
-
-
-                executed++;
-
-
-                if (
-                    last &&
-                    last.halted
-                ) {
-
-                    break;
-
-                }
-
-            }
-
-        } catch (error) {
-
-            this.running =
-                false;
-
-
-            this.error(
-                "CPU execution error.",
-                error
-            );
-
-
-            throw error;
+            } catch (_) {}
 
         }
-
-
-        this.running =
-            false;
 
 
         return {
 
-            executed,
+            loaded:
+                true,
 
-            last,
+            entryPoint:
+                this.game.entryPoint !==
+                undefined
+                    ? this.game.entryPoint
+                    : null,
 
-            EIP:
-                this.getEIP()
+            sections:
+                Array.isArray(
+                    this.game.sections
+                )
+                    ? this.game.sections.length
+                    : 0,
+
+            report
 
         };
-
-    }
-
-
-    /* ========================================================
-       STOP
-    ======================================================== */
-
-    stop() {
-
-        this.running =
-            false;
-
-
-        if (
-            this.cpu &&
-            typeof this.cpu.stop ===
-            "function"
-        ) {
-
-            this.cpu.stop();
-
-        }
 
     }
 
@@ -1020,62 +1697,78 @@ class WebBktxCore {
 
 
         if (
-            this.cpu &&
-            typeof this.cpu.getState ===
-            "function"
+            !this.cpu
         ) {
 
-            return this.cpu.getState();
+            return null;
 
         }
-
-
-        const state = {
-
-            EIP:
-                this.getEIP(),
-
-            EAX:
-                0,
-
-            EBX:
-                0,
-
-            ECX:
-                0,
-
-            EDX:
-                0,
-
-            ESI:
-                0,
-
-            EDI:
-                0,
-
-            EBP:
-                0,
-
-            ESP:
-                0
-
-        };
 
 
         if (
-            this.cpu &&
-            this.cpu.registers
+            typeof this.cpu.getStatus ===
+            "function"
         ) {
 
-            Object.assign(
-                state,
-                this.cpu.registers
-            );
+            return this.cpu.getStatus();
 
         }
 
 
-        return state;
+        if (
+            typeof this.cpu.getRegisters ===
+            "function"
+        ) {
+
+            return {
+
+                registers:
+                    this.cpu.getRegisters(),
+
+                running:
+                    this.cpu.running,
+
+                halted:
+                    this.cpu.halted
+
+            };
+
+        }
+
+
+        return {
+
+            EAX:
+                this.cpu.EAX >>> 0,
+
+            EBX:
+                this.cpu.EBX >>> 0,
+
+            ECX:
+                this.cpu.ECX >>> 0,
+
+            EDX:
+                this.cpu.EDX >>> 0,
+
+            ESI:
+                this.cpu.ESI >>> 0,
+
+            EDI:
+                this.cpu.EDI >>> 0,
+
+            EBP:
+                this.cpu.EBP >>> 0,
+
+            ESP:
+                this.cpu.ESP >>> 0,
+
+            EIP:
+                this.cpu.EIP >>> 0,
+
+            EFLAGS:
+                this.cpu.EFLAGS >>> 0
+
+        };
 
     }
 
@@ -1089,24 +1782,91 @@ class WebBktxCore {
         this.ensureInitialized();
 
 
-        const size =
-            this.memory &&
-            Number.isFinite(
-                this.memory.size
-            )
-                ? this.memory.size
-                : 0;
+        if (
+            !this.memory
+        ) {
+
+            return null;
+
+        }
 
 
         return {
 
-            bytes:
-                size,
+            size:
+                this.memory.size ||
+                0,
 
-            megabytes:
-                size /
+            sizeMB:
+                (
+                    this.memory.size ||
+                    0
+                ) /
                 1024 /
                 1024
+
+        };
+
+    }
+
+
+    /* ========================================================
+       KERNEL STATUS
+    ======================================================== */
+
+    getKernelStatus() {
+
+        if (
+            !this.kernel
+        ) {
+
+            return {
+
+                available:
+                    false
+
+            };
+
+        }
+
+
+        if (
+            typeof this.kernel.getStatus ===
+            "function"
+        ) {
+
+            try {
+
+                return {
+
+                    available:
+                        true,
+
+                    ...this.kernel.getStatus()
+
+                };
+
+            } catch (error) {
+
+                return {
+
+                    available:
+                        true,
+
+                    error:
+                        error.message
+
+                };
+
+            }
+
+        }
+
+
+        return {
+
+            available:
+                true
 
         };
 
@@ -1133,107 +1893,29 @@ class WebBktxCore {
                     this.initialized,
 
                 running:
-                    this.running
+                    this.running,
+
+                paused:
+                    this.paused
 
             },
 
-
-            modules: {
-
-                memory:
-                    !!this.memory,
-
-                cpu:
-                    !!this.cpu,
-
-                xbe:
-                    !!this.xbe
-
-            },
-
+            modules:
+                this.checkModules(),
 
             memory:
                 this.getMemoryInfo(),
 
-
             cpu:
                 this.getCPUState(),
 
+            kernel:
+                this.getKernelStatus(),
 
             game:
-
-                this.game
-
-                    ? {
-
-                        loaded:
-                            true,
-
-                        name:
-                            this.game.name ||
-                            "XBE",
-
-                        entryPoint:
-                            this.getEntryPoint(),
-
-                        firstBytes:
-                            this.peekEntryPoint(16)
-
-                    }
-
-                    : {
-
-                        loaded:
-                            false
-
-                    }
+                this.getGameInfo()
 
         };
-
-    }
-
-
-    /* ========================================================
-       STATUS
-    ======================================================== */
-
-    getStatus() {
-
-        return {
-
-            version:
-                this.version,
-
-            initialized:
-                this.initialized,
-
-            running:
-                this.running,
-
-            gameLoaded:
-                !!this.game,
-
-            entryPoint:
-                this.getEntryPoint()
-
-        };
-
-    }
-
-
-    /* ========================================================
-       ENSURE INITIALIZED
-    ======================================================== */
-
-    ensureInitialized() {
-
-        if (
-            !this.initialized
-        ) {
-
-            this.initialize();
-
-        }
 
     }
 
@@ -1245,8 +1927,16 @@ class WebBktxCore {
     getLogs() {
 
         return [
-            ...this.logs
+            ...this.logBuffer
         ];
+
+    }
+
+
+    clearLogs() {
+
+        this.logBuffer =
+            [];
 
     }
 
@@ -1254,82 +1944,39 @@ class WebBktxCore {
 
 
 /* ============================================================
-   GLOBAL EXPORT
+   GLOBAL API
 ============================================================ */
 
-/*
- * Main export
- */
+if (
+    typeof window !==
+    "undefined"
+) {
 
-window.WebBktxCore =
-    WebBktxCore;
-
-
-/*
- * Compatibility with older app.js
- */
-
-window.WebBktxCoreAPI = {
-
-    WebBktxCore:
-        WebBktxCore
-
-};
+    window.WebBktxCore =
+        WebBktxCore;
 
 
-/*
- * Explicit API object.
- *
- * This also allows:
- *
- * WebBktxCoreAPI.WebBktxCore
- */
+    window.WebBktxCoreAPI = {
 
-window.WebBktx =
-    {
+        WebBktxCore,
 
         version:
-            WEBBKTX_VERSION,
-
-        Core:
-            WebBktxCore
+            WEBBKTX_CORE_VERSION
 
     };
 
+}
+
 
 /* ============================================================
-   READY MESSAGE
+   READY
 ============================================================ */
 
 console.log(
-    `%cWebBktx Core ${WEBBKTX_VERSION} loaded`,
+    `%cWebBktx Core ${WEBBKTX_CORE_VERSION}`,
     "font-weight:bold"
 );
 
-
-/* ============================================================
-   MODULE STATUS
-============================================================ */
-
 console.log(
-    "Memory:",
-    typeof window.WebBktxMemory
-);
-
-
-console.log(
-    "CPU:",
-    typeof window.WebBktxCPU
-);
-
-
-console.log(
-    "XBE:",
-    typeof window.WebBktxXBE
-);
-
-
-console.log(
-    "Core:",
-    typeof window.WebBktxCore
+    "Core → CPU → XBE → Xbox Kernel architecture ready."
 );
