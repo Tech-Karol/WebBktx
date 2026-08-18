@@ -282,604 +282,1586 @@
 
     class CPU {
 
-        constructor(memory) {
+    constructor(memory) {
 
-            this.memory = memory;
-
-            this.reset();
-
-            this.instructions = 0;
-
-            this.cycles = 0;
-
-            this.running = false;
-
-            this.halted = false;
-
-            this.faulted = false;
-
-            this.lastFault = null;
-
-            this.decoder = null;
-
-            this.breakpoints = new Set();
-
-            this.maxInstructions = 1000000;
-
-            this.traceEnabled = false;
-
-            this.trace = [];
-
-            this.maxTrace = 2000;
+        if (!memory) {
+            throw new Error("CPU requires memory.");
         }
 
+        this.memory = memory;
 
-        reset() {
+        /*
+         * Decoder jest podpinany przez Machine/Core.
+         */
+        this.decoder = null;
 
-            this.EAX = 0;
-            this.EBX = 0;
-            this.ECX = 0;
-            this.EDX = 0;
+        /*
+         * Execution configuration.
+         */
+        this.maxInstructions = 100000;
 
-            this.ESI = 0;
-            this.EDI = 0;
-            this.EBP = 0;
-            this.ESP = this.memory.size - 0x100;
+        /*
+         * Debugger.
+         */
+        this.breakpoints = new Set();
 
-            this.EIP = 0;
+        this.traceEnabled = false;
+        this.trace = [];
+        this.maxTraceEntries = 1000;
 
-            this.EFLAGS = 0x202;
+        /*
+         * Callbacks.
+         */
+        this.onInstruction = null;
+        this.onBreakpoint = null;
+        this.onHalt = null;
+        this.onFault = null;
 
-            this.instructions = 0;
+        /*
+         * CPU state.
+         *
+         * x86 32-bit general purpose registers.
+         */
+        this.EAX = 0;
+        this.EBX = 0;
+        this.ECX = 0;
+        this.EDX = 0;
 
-            this.cycles = 0;
+        this.ESI = 0;
+        this.EDI = 0;
 
-            this.running = false;
+        this.EBP = 0;
+        this.ESP = 0;
 
-            this.halted = false;
+        this.EIP = 0;
 
-            this.faulted = false;
+        /*
+         * x86 EFLAGS.
+         * Bit 1 is reserved and normally set.
+         */
+        this.EFLAGS = 0x00000002;
 
-            this.lastFault = null;
+        /*
+         * Runtime state.
+         */
+        this.running = false;
+        this.halted = false;
+        this.faulted = false;
 
+        this.lastError = null;
+
+        this.cycles = 0;
+        this.instructionsExecuted = 0;
+
+        /*
+         * IMPORTANT:
+         *
+         * Wszystkie pola istnieją już tutaj,
+         * zanim reset() zostanie wywołany.
+         */
+        this.reset();
+    }
+
+
+    /* =========================================================
+       RESET
+    ========================================================= */
+
+    reset() {
+
+        this.EAX = 0;
+        this.EBX = 0;
+        this.ECX = 0;
+        this.EDX = 0;
+
+        this.ESI = 0;
+        this.EDI = 0;
+
+        this.EBP = 0;
+
+        /*
+         * Stack grows downward.
+         */
+        this.ESP =
+            Math.max(
+                0,
+                this.memory.size - 4
+            ) >>> 0;
+
+        this.EIP = 0;
+
+        /*
+         * Reserved bit 1.
+         */
+        this.EFLAGS = 0x00000002;
+
+        this.running = false;
+        this.halted = false;
+        this.faulted = false;
+
+        this.lastError = null;
+
+        this.cycles = 0;
+        this.instructionsExecuted = 0;
+
+        /*
+         * trace MUST already exist.
+         */
+        if (!Array.isArray(this.trace)) {
+            this.trace = [];
+        } else {
             this.trace.length = 0;
         }
+    }
 
 
-        attachDecoder(decoder) {
+    /* =========================================================
+       DECODER
+    ========================================================= */
 
-            this.decoder = decoder;
+    attachDecoder(decoder) {
+
+        if (!decoder) {
+            throw new Error(
+                "CPU: invalid decoder."
+            );
         }
 
+        if (
+            typeof decoder.decode !== "function"
+        ) {
+            throw new Error(
+                "CPU: decoder must provide decode()."
+            );
+        }
 
-        getRegister(name) {
+        this.decoder = decoder;
 
-            name = String(name).toUpperCase();
+        return true;
+    }
 
-            if (!(name in this)) {
+
+    /* =========================================================
+       REGISTER ACCESS
+    ========================================================= */
+
+    getRegister(name) {
+
+        const register =
+            String(name)
+                .toUpperCase();
+
+        switch (register) {
+
+            case "EAX":
+            case "EBX":
+            case "ECX":
+            case "EDX":
+            case "ESI":
+            case "EDI":
+            case "EBP":
+            case "ESP":
+            case "EIP":
+            case "EFLAGS":
+
+                return this[register] >>> 0;
+
+            default:
+
                 throw new Error(
-                    `Unknown register ${name}`
+                    `Unknown CPU register: ${register}`
                 );
-            }
-
-            return U32(this[name]);
         }
+    }
 
 
-        setRegister(name, value) {
+    setRegister(name, value) {
 
-            name = String(name).toUpperCase();
+        const register =
+            String(name)
+                .toUpperCase();
 
-            if (
-                ![
-                    "EAX",
-                    "EBX",
-                    "ECX",
-                    "EDX",
-                    "ESI",
-                    "EDI",
-                    "EBP",
-                    "ESP",
-                    "EIP",
-                    "EFLAGS"
-                ].includes(name)
-            ) {
+        const v =
+            Number(value) >>> 0;
+
+        switch (register) {
+
+            case "EAX":
+            case "EBX":
+            case "ECX":
+            case "EDX":
+            case "ESI":
+            case "EDI":
+            case "EBP":
+            case "ESP":
+            case "EIP":
+
+                this[register] = v;
+
+                return;
+
+            case "EFLAGS":
+
+                this.EFLAGS =
+                    (v | 0x02) >>> 0;
+
+                return;
+
+            default:
+
                 throw new Error(
-                    `Unknown register ${name}`
+                    `Unknown CPU register: ${register}`
                 );
-            }
+        }
+    }
 
-            this[name] = U32(value);
 
-            if (name === "EFLAGS") {
-                this.EFLAGS |= 2;
-            }
+    getRegisters() {
+
+        return {
+
+            EAX: this.EAX >>> 0,
+            EBX: this.EBX >>> 0,
+            ECX: this.ECX >>> 0,
+            EDX: this.EDX >>> 0,
+
+            ESI: this.ESI >>> 0,
+            EDI: this.EDI >>> 0,
+
+            EBP: this.EBP >>> 0,
+            ESP: this.ESP >>> 0,
+
+            EIP: this.EIP >>> 0,
+
+            EFLAGS:
+                this.EFLAGS >>> 0
+        };
+    }
+
+
+    /* =========================================================
+       FLAGS
+    ========================================================= */
+
+    getFlag(flag) {
+
+        return (
+            (
+                this.EFLAGS &
+                flag
+            ) !== 0
+        );
+    }
+
+
+    setFlag(flag, enabled) {
+
+        if (enabled) {
+
+            this.EFLAGS |= flag;
+
+        } else {
+
+            this.EFLAGS &= ~flag;
         }
 
+        /*
+         * x86 reserved bit 1.
+         */
+        this.EFLAGS |= 0x02;
 
-        getRegisters() {
+        this.EFLAGS >>>= 0;
+    }
+
+
+    parity8(value) {
+
+        value =
+            Number(value) & 0xFF;
+
+        let ones = 0;
+
+        while (value !== 0) {
+
+            ones ^=
+                value & 1;
+
+            value >>>= 1;
+        }
+
+        /*
+         * PF = 1 for even parity.
+         */
+        return ones === 0;
+    }
+
+
+    updateLogicFlags(result) {
+
+        result =
+            Number(result) >>> 0;
+
+        this.setFlag(
+            0x00000001,
+            false
+        );
+
+        this.setFlag(
+            0x00000800,
+            false
+        );
+
+        this.setFlag(
+            0x00000040,
+            result === 0
+        );
+
+        this.setFlag(
+            0x00000080,
+            (
+                result &
+                0x80000000
+            ) !== 0
+        );
+
+        this.setFlag(
+            0x00000004,
+            this.parity8(result)
+        );
+    }
+
+
+    updateAddFlags(
+        a,
+        b,
+        result
+    ) {
+
+        a =
+            Number(a) >>> 0;
+
+        b =
+            Number(b) >>> 0;
+
+        result =
+            Number(result) >>> 0;
+
+        /*
+         * Carry.
+         */
+        this.setFlag(
+            0x00000001,
+            result < a
+        );
+
+        /*
+         * Auxiliary carry.
+         */
+        this.setFlag(
+            0x00000010,
+            (
+                (
+                    a ^
+                    b ^
+                    result
+                ) &
+                0x10
+            ) !== 0
+        );
+
+        /*
+         * Zero.
+         */
+        this.setFlag(
+            0x00000040,
+            result === 0
+        );
+
+        /*
+         * Sign.
+         */
+        this.setFlag(
+            0x00000080,
+            (
+                result &
+                0x80000000
+            ) !== 0
+        );
+
+        /*
+         * Parity.
+         */
+        this.setFlag(
+            0x00000004,
+            this.parity8(result)
+        );
+
+        /*
+         * Signed overflow.
+         */
+        this.setFlag(
+            0x00000800,
+            (
+                (
+                    (~(a ^ b)) &
+                    (a ^ result) &
+                    0x80000000
+                ) !== 0
+            )
+        );
+    }
+
+
+    updateSubFlags(
+        a,
+        b,
+        result
+    ) {
+
+        a =
+            Number(a) >>> 0;
+
+        b =
+            Number(b) >>> 0;
+
+        result =
+            Number(result) >>> 0;
+
+        /*
+         * Borrow.
+         */
+        this.setFlag(
+            0x00000001,
+            a < b
+        );
+
+        /*
+         * Auxiliary borrow.
+         */
+        this.setFlag(
+            0x00000010,
+            (
+                (
+                    a ^
+                    b ^
+                    result
+                ) &
+                0x10
+            ) !== 0
+        );
+
+        /*
+         * Zero.
+         */
+        this.setFlag(
+            0x00000040,
+            result === 0
+        );
+
+        /*
+         * Sign.
+         */
+        this.setFlag(
+            0x00000080,
+            (
+                result &
+                0x80000000
+            ) !== 0
+        );
+
+        /*
+         * Parity.
+         */
+        this.setFlag(
+            0x00000004,
+            this.parity8(result)
+        );
+
+        /*
+         * Signed overflow.
+         */
+        this.setFlag(
+            0x00000800,
+            (
+                (
+                    (a ^ b) &
+                    (a ^ result) &
+                    0x80000000
+                ) !== 0
+            )
+        );
+    }
+
+
+    /* =========================================================
+       ARITHMETIC
+    ========================================================= */
+
+    add32(a, b) {
+
+        a =
+            Number(a) >>> 0;
+
+        b =
+            Number(b) >>> 0;
+
+        const result =
+            (
+                a +
+                b
+            ) >>> 0;
+
+        this.updateAddFlags(
+            a,
+            b,
+            result
+        );
+
+        return result;
+    }
+
+
+    sub32(a, b) {
+
+        a =
+            Number(a) >>> 0;
+
+        b =
+            Number(b) >>> 0;
+
+        const result =
+            (
+                a -
+                b
+            ) >>> 0;
+
+        this.updateSubFlags(
+            a,
+            b,
+            result
+        );
+
+        return result;
+    }
+
+
+    inc32(value) {
+
+        const oldCarry =
+            this.getFlag(
+                0x00000001
+            );
+
+        const result =
+            (
+                (
+                    Number(value) >>> 0
+                ) +
+                1
+            ) >>> 0;
+
+        this.updateAddFlags(
+            value,
+            1,
+            result
+        );
+
+        /*
+         * INC does NOT modify CF.
+         */
+        this.setFlag(
+            0x00000001,
+            oldCarry
+        );
+
+        return result;
+    }
+
+
+    dec32(value) {
+
+        const oldCarry =
+            this.getFlag(
+                0x00000001
+            );
+
+        const result =
+            (
+                (
+                    Number(value) >>> 0
+                ) -
+                1
+            ) >>> 0;
+
+        this.updateSubFlags(
+            value,
+            1,
+            result
+        );
+
+        /*
+         * DEC does NOT modify CF.
+         */
+        this.setFlag(
+            0x00000001,
+            oldCarry
+        );
+
+        return result;
+    }
+
+
+    /* =========================================================
+       LOGICAL
+    ========================================================= */
+
+    xor32(a, b) {
+
+        const result =
+            (
+                (
+                    Number(a) >>> 0
+                ) ^
+                (
+                    Number(b) >>> 0
+                )
+            ) >>> 0;
+
+        this.updateLogicFlags(
+            result
+        );
+
+        return result;
+    }
+
+
+    and32(a, b) {
+
+        const result =
+            (
+                (
+                    Number(a) >>> 0
+                ) &
+                (
+                    Number(b) >>> 0
+                )
+            ) >>> 0;
+
+        this.updateLogicFlags(
+            result
+        );
+
+        return result;
+    }
+
+
+    or32(a, b) {
+
+        const result =
+            (
+                (
+                    Number(a) >>> 0
+                ) |
+                (
+                    Number(b) >>> 0
+                )
+            ) >>> 0;
+
+        this.updateLogicFlags(
+            result
+        );
+
+        return result;
+    }
+
+
+    /* =========================================================
+       MEMORY ACCESS
+    ========================================================= */
+
+    read8(address) {
+
+        return this.memory.read8(
+            Number(address) >>> 0
+        );
+    }
+
+
+    read16(address) {
+
+        return this.memory.read16(
+            Number(address) >>> 0
+        );
+    }
+
+
+    read32(address) {
+
+        return this.memory.read32(
+            Number(address) >>> 0
+        );
+    }
+
+
+    readSigned8(address) {
+
+        if (
+            typeof this.memory.readSigned8 ===
+            "function"
+        ) {
+            return this.memory.readSigned8(
+                Number(address) >>> 0
+            );
+        }
+
+        return (
+            this.read8(address) << 24
+        ) >> 24;
+    }
+
+
+    readSigned16(address) {
+
+        if (
+            typeof this.memory.readSigned16 ===
+            "function"
+        ) {
+            return this.memory.readSigned16(
+                Number(address) >>> 0
+            );
+        }
+
+        return (
+            this.read16(address) << 16
+        ) >> 16;
+    }
+
+
+    readSigned32(address) {
+
+        if (
+            typeof this.memory.readSigned32 ===
+            "function"
+        ) {
+            return this.memory.readSigned32(
+                Number(address) >>> 0
+            );
+        }
+
+        return (
+            this.read32(address) | 0
+        );
+    }
+
+
+    write8(address, value) {
+
+        this.memory.write8(
+            Number(address) >>> 0,
+            value
+        );
+    }
+
+
+    write16(address, value) {
+
+        this.memory.write16(
+            Number(address) >>> 0,
+            value
+        );
+    }
+
+
+    write32(address, value) {
+
+        this.memory.write32(
+            Number(address) >>> 0,
+            value
+        );
+    }
+
+
+    /* =========================================================
+       STACK
+    ========================================================= */
+
+    push32(value) {
+
+        if (this.ESP < 4) {
+
+            throw new Error(
+                "CPU stack underflow."
+            );
+        }
+
+        this.ESP =
+            (
+                this.ESP -
+                4
+            ) >>> 0;
+
+        this.memory.write32(
+            this.ESP,
+            value
+        );
+    }
+
+
+    pop32() {
+
+        if (
+            this.ESP >
+            this.memory.size - 4
+        ) {
+
+            throw new Error(
+                "CPU stack overflow."
+            );
+        }
+
+        const value =
+            this.memory.read32(
+                this.ESP
+            );
+
+        this.ESP =
+            (
+                this.ESP +
+                4
+            ) >>> 0;
+
+        return value >>> 0;
+    }
+
+
+    peekStack32(offset = 0) {
+
+        const numericOffset =
+            Number(offset) | 0;
+
+        const address =
+            (
+                this.ESP +
+                numericOffset
+            ) >>> 0;
+
+        return this.memory.read32(
+            address
+        ) >>> 0;
+    }
+
+
+    /* =========================================================
+       BREAKPOINTS
+    ========================================================= */
+
+    addBreakpoint(address) {
+
+        this.breakpoints.add(
+            Number(address) >>> 0
+        );
+    }
+
+
+    removeBreakpoint(address) {
+
+        this.breakpoints.delete(
+            Number(address) >>> 0
+        );
+    }
+
+
+    clearBreakpoints() {
+
+        this.breakpoints.clear();
+    }
+
+
+    hasBreakpoint(address) {
+
+        return this.breakpoints.has(
+            Number(address) >>> 0
+        );
+    }
+
+
+    getBreakpoints() {
+
+        return Array.from(
+            this.breakpoints
+        );
+    }
+
+
+    /* =========================================================
+       TRACE
+    ========================================================= */
+
+    enableTrace(enabled = true) {
+
+        this.traceEnabled =
+            Boolean(enabled);
+
+        return this.traceEnabled;
+    }
+
+
+    clearTrace() {
+
+        /*
+         * Defensive check.
+         */
+        if (!Array.isArray(this.trace)) {
+            this.trace = [];
+        }
+
+        this.trace.length = 0;
+    }
+
+
+    getTrace() {
+
+        if (!Array.isArray(this.trace)) {
+            this.trace = [];
+        }
+
+        return [
+            ...this.trace
+        ];
+    }
+
+
+    addTrace(entry) {
+
+        if (!this.traceEnabled) {
+            return;
+        }
+
+        if (!Array.isArray(this.trace)) {
+            this.trace = [];
+        }
+
+        this.trace.push(
+            entry
+        );
+
+        while (
+            this.trace.length >
+            this.maxTraceEntries
+        ) {
+            this.trace.shift();
+        }
+    }
+
+
+    /* =========================================================
+       EXECUTION
+    ========================================================= */
+
+    step() {
+
+        if (this.halted) {
 
             return {
-                EAX: U32(this.EAX),
-                EBX: U32(this.EBX),
-                ECX: U32(this.ECX),
-                EDX: U32(this.EDX),
-                ESI: U32(this.ESI),
-                EDI: U32(this.EDI),
-                EBP: U32(this.EBP),
-                ESP: U32(this.ESP),
-                EIP: U32(this.EIP),
-                EFLAGS: U32(this.EFLAGS)
+                executed: false,
+                halted: true,
+                reason: "CPU HALTED"
             };
         }
 
 
-        flag(flag) {
+        if (this.faulted) {
 
-            return (this.EFLAGS & flag) !== 0;
+            return {
+                executed: false,
+                faulted: true,
+                reason: this.lastError
+            };
         }
 
 
-        setFlag(flag, value) {
+        if (!this.decoder) {
 
-            if (value) {
-                this.EFLAGS |= flag;
-            } else {
-                this.EFLAGS &= ~flag;
-            }
-
-            this.EFLAGS |= 2;
-
-            this.EFLAGS >>>= 0;
-        }
-
-
-        parity(value) {
-
-            value &= 0xFF;
-
-            let p = 0;
-
-            while (value) {
-                p ^= value & 1;
-                value >>>= 1;
-            }
-
-            return p === 0;
-        }
-
-
-        logicFlags(result) {
-
-            result = U32(result);
-
-            this.setFlag(FLAGS.CF, false);
-            this.setFlag(FLAGS.OF, false);
-
-            this.setFlag(
-                FLAGS.ZF,
-                result === 0
-            );
-
-            this.setFlag(
-                FLAGS.SF,
-                (result & 0x80000000) !== 0
-            );
-
-            this.setFlag(
-                FLAGS.PF,
-                this.parity(result)
+            throw new Error(
+                "CPU decoder is not attached."
             );
         }
 
 
-        add(a, b) {
-
-            a = U32(a);
-            b = U32(b);
-
-            const result =
-                U32(a + b);
-
-            this.setFlag(
-                FLAGS.CF,
-                result < a
-            );
-
-            this.setFlag(
-                FLAGS.ZF,
-                result === 0
-            );
-
-            this.setFlag(
-                FLAGS.SF,
-                !!(result & 0x80000000)
-            );
-
-            this.setFlag(
-                FLAGS.PF,
-                this.parity(result)
-            );
-
-            this.setFlag(
-                FLAGS.AF,
-                !!((a ^ b ^ result) & 0x10)
-            );
-
-            this.setFlag(
-                FLAGS.OF,
-                !!(
-                    (~(a ^ b) &
-                    (a ^ result) &
-                    0x80000000)
-                )
-            );
-
-            return result;
-        }
-
-
-        sub(a, b) {
-
-            a = U32(a);
-            b = U32(b);
-
-            const result =
-                U32(a - b);
-
-            this.setFlag(
-                FLAGS.CF,
-                a < b
-            );
-
-            this.setFlag(
-                FLAGS.ZF,
-                result === 0
-            );
-
-            this.setFlag(
-                FLAGS.SF,
-                !!(result & 0x80000000)
-            );
-
-            this.setFlag(
-                FLAGS.PF,
-                this.parity(result)
-            );
-
-            this.setFlag(
-                FLAGS.AF,
-                !!((a ^ b ^ result) & 0x10)
-            );
-
-            this.setFlag(
-                FLAGS.OF,
-                !!(
-                    ((a ^ b) &
-                    (a ^ result) &
-                    0x80000000)
-                )
-            );
-
-            return result;
-        }
-
-
-        inc(value) {
-
-            const cf = this.flag(FLAGS.CF);
-
-            const result =
-                this.add(value, 1);
-
-            this.setFlag(FLAGS.CF, cf);
-
-            return result;
-        }
-
-
-        dec(value) {
-
-            const cf = this.flag(FLAGS.CF);
-
-            const result =
-                this.sub(value, 1);
-
-            this.setFlag(FLAGS.CF, cf);
-
-            return result;
-        }
-
-
-        push(value) {
-
-            this.ESP =
-                U32(this.ESP - 4);
-
-            this.memory.write32(
-                this.ESP,
-                value
-            );
-        }
-
-
-        pop() {
-
-            const value =
-                this.memory.read32(this.ESP);
-
-            this.ESP =
-                U32(this.ESP + 4);
-
-            return value;
-        }
-
-
-        fetch8() {
-
-            const value =
-                this.memory.read8(this.EIP);
-
-            this.EIP =
-                U32(this.EIP + 1);
-
-            return value;
-        }
-
-
-        fetch32() {
-
-            const value =
-                this.memory.read32(this.EIP);
-
-            this.EIP =
-                U32(this.EIP + 4);
-
-            return value;
-        }
-
-
-        fetchS8() {
-
-            return this.memory.readS8(
-                this.EIP++
-            );
-        }
-
-
-        fetchS32() {
-
-            const value =
-                this.memory.readS32(this.EIP);
-
-            this.EIP =
-                U32(this.EIP + 4);
-
-            return value;
-        }
-
-
-        addBreakpoint(address) {
-
-            this.breakpoints.add(U32(address));
-        }
-
-
-        removeBreakpoint(address) {
-
-            this.breakpoints.delete(U32(address));
-        }
-
-
-        clearBreakpoints() {
-
-            this.breakpoints.clear();
-        }
-
-
-        step() {
-
-            if (this.halted) {
-                return {
-                    halted: true,
-                    executed: false
-                };
-            }
-
-            if (this.faulted) {
-                return {
-                    faulted: true,
-                    executed: false
-                };
-            }
-
-            if (!this.decoder) {
-                throw new Error(
-                    "CPU decoder unavailable."
+        const address =
+            this.EIP >>> 0;
+
+
+        /*
+         * Breakpoint check.
+         */
+        if (
+            this.hasBreakpoint(address)
+        ) {
+
+            this.running = false;
+
+            const result = {
+                executed: false,
+                breakpoint: true,
+                address
+            };
+
+            if (
+                typeof this.onBreakpoint ===
+                "function"
+            ) {
+                this.onBreakpoint(
+                    result
                 );
             }
 
-            if (
-                this.breakpoints.has(
-                    U32(this.EIP)
-                )
-            ) {
-                return {
-                    breakpoint: true,
-                    executed: false,
-                    address: U32(this.EIP)
-                };
-            }
-
-            const address = U32(this.EIP);
-
-            try {
-
-                const result =
-                    this.decoder.execute(this);
-
-                this.instructions++;
-                this.cycles++;
-
-                if (this.traceEnabled) {
-
-                    this.trace.push({
-                        address,
-                        mnemonic:
-                            result.mnemonic,
-                        registers:
-                            this.getRegisters()
-                    });
-
-                    if (
-                        this.trace.length >
-                        this.maxTrace
-                    ) {
-                        this.trace.shift();
-                    }
-                }
-
-                return {
-                    executed: true,
-                    address,
-                    ...result
-                };
-
-            } catch (error) {
-
-                this.faulted = true;
-
-                this.running = false;
-
-                this.lastFault =
-                    error instanceof Error
-                        ? error.message
-                        : String(error);
-
-                throw error;
-            }
+            return result;
         }
 
 
-        run(limit = this.maxInstructions) {
+        let instruction = null;
 
-            limit =
-                Math.max(
+
+        try {
+
+            instruction =
+                this.decoder.decode(
+                    this,
+                    address
+                );
+
+
+            if (!instruction) {
+
+                throw new Error(
+                    `Decoder returned no instruction at 0x${
+                        address
+                            .toString(16)
+                            .padStart(8, "0")
+                    }`
+                );
+            }
+
+
+            if (
+                typeof instruction.execute !==
+                "function"
+            ) {
+
+                throw new Error(
+                    "Decoded instruction has no execute() method."
+                );
+            }
+
+
+            instruction.execute(
+                this
+            );
+
+
+            this.cycles++;
+
+            this.instructionsExecuted++;
+
+
+            const result = {
+
+                executed: true,
+
+                address,
+
+                opcode:
+                    instruction.opcode ??
+                    null,
+
+                mnemonic:
+                    instruction.mnemonic ??
+                    instruction.name ??
+                    "UNKNOWN",
+
+                size:
+                    instruction.size ??
                     1,
-                    Number(limit) | 0
-                );
 
-            this.running = true;
+                cycles:
+                    this.cycles,
 
-            let executed = 0;
+                instructions:
+                    this.instructionsExecuted,
 
-            let last = null;
-
-            try {
-
-                while (
-                    this.running &&
-                    !this.halted &&
-                    !this.faulted &&
-                    executed < limit
-                ) {
-
-                    last = this.step();
-
-                    if (
-                        !last.executed
-                    ) {
-                        break;
-                    }
-
-                    executed++;
-                }
-
-            } finally {
-
-                this.running = false;
-            }
-
-            return {
-                executed,
-                instructions: this.instructions,
-                cycles: this.cycles,
-                halted: this.halted,
-                faulted: this.faulted,
-                last,
-                registers:
-                    this.getRegisters()
-            };
-        }
-
-
-        stop() {
-
-            this.running = false;
-        }
-
-
-        halt() {
-
-            this.halted = true;
-            this.running = false;
-        }
-
-
-        status() {
-
-            return {
-                available: true,
-                running: this.running,
-                halted: this.halted,
-                faulted: this.faulted,
-                instructions: this.instructions,
-                cycles: this.cycles,
-                EIP: U32(this.EIP),
                 registers:
                     this.getRegisters(),
-                fault: this.lastFault
+
+                halted:
+                    this.halted,
+
+                faulted:
+                    this.faulted
+            };
+
+
+            this.addTrace(
+                result
+            );
+
+
+            if (
+                typeof this.onInstruction ===
+                "function"
+            ) {
+
+                this.onInstruction(
+                    result
+                );
+            }
+
+
+            if (
+                this.halted &&
+                typeof this.onHalt ===
+                "function"
+            ) {
+
+                this.onHalt(
+                    result
+                );
+            }
+
+
+            return result;
+
+        } catch (error) {
+
+            this.raiseFault(
+                error
+            );
+
+            throw error;
+        }
+    }
+
+
+    /* =========================================================
+       RUN
+    ========================================================= */
+
+    run(limit = this.maxInstructions) {
+
+        limit =
+            Number(limit);
+
+
+        if (
+            !Number.isInteger(limit) ||
+            limit <= 0
+        ) {
+
+            throw new Error(
+                "Invalid CPU execution limit."
+            );
+        }
+
+
+        if (this.halted) {
+
+            return {
+                executed: 0,
+                cycles: this.cycles,
+                instructions:
+                    this.instructionsExecuted,
+                halted: true,
+                faulted: false,
+                registers:
+                    this.getRegisters(),
+                last: null
             };
         }
 
 
-        selfTest() {
+        if (this.faulted) {
 
+            return {
+                executed: 0,
+                cycles: this.cycles,
+                instructions:
+                    this.instructionsExecuted,
+                halted: false,
+                faulted: true,
+                registers:
+                    this.getRegisters(),
+                last: null
+            };
+        }
+
+
+        this.running = true;
+
+
+        let executed = 0;
+
+        let last = null;
+
+
+        try {
+
+            while (
+                this.running &&
+                !this.halted &&
+                !this.faulted &&
+                executed < limit
+            ) {
+
+                last =
+                    this.step();
+
+
+                if (
+                    last &&
+                    last.breakpoint
+                ) {
+                    break;
+                }
+
+
+                if (
+                    last &&
+                    last.executed
+                ) {
+                    executed++;
+                }
+            }
+
+        } finally {
+
+            this.running = false;
+        }
+
+
+        return {
+
+            executed,
+
+            cycles:
+                this.cycles,
+
+            instructions:
+                this.instructionsExecuted,
+
+            halted:
+                this.halted,
+
+            faulted:
+                this.faulted,
+
+            registers:
+                this.getRegisters(),
+
+            last
+        };
+    }
+
+
+    /* =========================================================
+       CONTROL
+    ========================================================= */
+
+    stop() {
+
+        this.running = false;
+    }
+
+
+    halt() {
+
+        this.halted = true;
+        this.running = false;
+    }
+
+
+    resume() {
+
+        if (this.faulted) {
+
+            throw new Error(
+                "Cannot resume a faulted CPU."
+            );
+        }
+
+        this.halted = false;
+        this.running = true;
+    }
+
+
+    clearFault() {
+
+        this.faulted = false;
+        this.lastError = null;
+    }
+
+
+    raiseFault(error) {
+
+        this.faulted = true;
+        this.running = false;
+
+        this.lastError =
+            error instanceof Error
+                ? error.message
+                : String(error);
+
+
+        if (
+            typeof this.onFault ===
+            "function"
+        ) {
+
+            try {
+
+                this.onFault(
+                    error
+                );
+
+            } catch (_) {
+
+                /*
+                 * Nie pozwalamy, żeby callback diagnostyczny
+                 * zamaskował prawdziwy błąd CPU.
+                 */
+            }
+        }
+    }
+
+
+    /* =========================================================
+       STATE
+    ========================================================= */
+
+    getStatus() {
+
+        return {
+
+            available: true,
+
+            running:
+                this.running,
+
+            halted:
+                this.halted,
+
+            faulted:
+                this.faulted,
+
+            error:
+                this.lastError,
+
+            cycles:
+                this.cycles,
+
+            instructionsExecuted:
+                this.instructionsExecuted,
+
+            registers:
+                this.getRegisters(),
+
+            breakpoints:
+                this.breakpoints.size,
+
+            traceEnabled:
+                this.traceEnabled,
+
+            traceEntries:
+                Array.isArray(this.trace)
+                    ? this.trace.length
+                    : 0
+        };
+    }
+
+
+    getState() {
+
+        return this.getStatus();
+    }
+
+
+    snapshot() {
+
+        return {
+
+            EAX:
+                this.EAX >>> 0,
+
+            EBX:
+                this.EBX >>> 0,
+
+            ECX:
+                this.ECX >>> 0,
+
+            EDX:
+                this.EDX >>> 0,
+
+            ESI:
+                this.ESI >>> 0,
+
+            EDI:
+                this.EDI >>> 0,
+
+            EBP:
+                this.EBP >>> 0,
+
+            ESP:
+                this.ESP >>> 0,
+
+            EIP:
+                this.EIP >>> 0,
+
+            EFLAGS:
+                this.EFLAGS >>> 0,
+
+            cycles:
+                this.cycles,
+
+            instructionsExecuted:
+                this.instructionsExecuted,
+
+            running:
+                this.running,
+
+            halted:
+                this.halted,
+
+            faulted:
+                this.faulted,
+
+            error:
+                this.lastError
+        };
+    }
+
+
+    /* =========================================================
+       SELF TEST
+    ========================================================= */
+
+    selfTest() {
+
+        const originalTrace =
+            this.traceEnabled;
+
+        this.traceEnabled = false;
+
+
+        const tests = [];
+
+
+        try {
+
+            /*
+             * ADD
+             */
             this.reset();
-
-            const tests = [];
 
             tests.push({
                 name: "ADD",
                 pass:
-                    this.add(10, 20) === 30
+                    this.add32(
+                        10,
+                        20
+                    ) === 30
             });
+
+
+            /*
+             * SUB
+             */
+            this.reset();
 
             tests.push({
                 name: "SUB",
                 pass:
-                    this.sub(50, 20) === 30
+                    this.sub32(
+                        50,
+                        20
+                    ) === 30
             });
+
+
+            /*
+             * XOR
+             */
+            this.reset();
 
             tests.push({
                 name: "XOR",
                 pass:
-                    ((0xFF00 ^ 0x0F00) >>> 0)
-                    === 0xF000
+                    this.xor32(
+                        0xFF00,
+                        0x0F00
+                    ) === 0xF000
             });
 
-            const esp = this.ESP;
 
-            this.push(0x12345678);
+            /*
+             * AND
+             */
+            this.reset();
+
+            tests.push({
+                name: "AND",
+                pass:
+                    this.and32(
+                        0xFFFF,
+                        0x00FF
+                    ) === 0x00FF
+            });
+
+
+            /*
+             * OR
+             */
+            this.reset();
+
+            tests.push({
+                name: "OR",
+                pass:
+                    this.or32(
+                        0xF000,
+                        0x000F
+                    ) === 0xF00F
+            });
+
+
+            /*
+             * STACK
+             */
+            this.reset();
+
+            const oldESP =
+                this.ESP;
+
+            this.push32(
+                0x12345678
+            );
+
+            const stackValue =
+                this.pop32();
 
             tests.push({
                 name: "STACK",
                 pass:
-                    this.pop() === 0x12345678 &&
-                    this.ESP === esp
+                    stackValue ===
+                        0x12345678 &&
+                    this.ESP ===
+                        oldESP
             });
 
-            this.memory.write32(
+
+            /*
+             * MEMORY
+             */
+            this.reset();
+
+            this.write32(
                 0x1000,
                 0xDEADBEEF
             );
@@ -887,19 +1869,110 @@
             tests.push({
                 name: "MEMORY",
                 pass:
-                    this.memory.read32(0x1000)
-                    === 0xDEADBEEF
+                    this.read32(
+                        0x1000
+                    ) ===
+                    0xDEADBEEF
             });
 
+
+            /*
+             * INC
+             */
+            this.reset();
+
+            tests.push({
+                name: "INC",
+                pass:
+                    this.inc32(
+                        9
+                    ) === 10
+            });
+
+
+            /*
+             * DEC
+             */
+            this.reset();
+
+            tests.push({
+                name: "DEC",
+                pass:
+                    this.dec32(
+                        10
+                    ) === 9
+            });
+
+
+            /*
+             * Register write/read.
+             */
+            this.reset();
+
+            this.setRegister(
+                "EAX",
+                0xCAFEBABE
+            );
+
+            tests.push({
+                name: "REGISTERS",
+                pass:
+                    this.getRegister(
+                        "EAX"
+                    ) ===
+                    0xCAFEBABE
+            });
+
+
+            /*
+             * EFLAGS reserved bit.
+             */
+            this.reset();
+
+            this.setRegister(
+                "EFLAGS",
+                0
+            );
+
+            tests.push({
+                name: "EFLAGS",
+                pass:
+                    (
+                        this.EFLAGS &
+                        0x02
+                    ) !== 0
+            });
+
+
             return {
+
+                available: true,
+
                 passed:
-                    tests.every(x => x.pass),
-                tests
+                    tests.every(
+                        test =>
+                            test.pass
+                    ),
+
+                tests,
+
+                registers:
+                    this.getRegisters(),
+
+                cycles:
+                    this.cycles,
+
+                instructionsExecuted:
+                    this.instructionsExecuted
             };
+
+        } finally {
+
+            this.traceEnabled =
+                originalTrace;
         }
     }
-
-
+}
     /* ========================================================
        X86 DECODER
     ======================================================== */
