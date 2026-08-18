@@ -1,3 +1,4 @@
+
 /*
  * ============================================================
  * WebBktx Unified Runtime
@@ -9,7 +10,6 @@
  *     1.1
  *
  * Unified browser runtime:
- *
  *     Memory
  *     CPU
  *     Decoder
@@ -22,23 +22,7 @@
  *     XGraphics
  *     Core
  *
- * IMPORTANT:
- * This is an experimental Xbox-compatible runtime framework.
- * It is NOT a complete Xbox emulator.
- *
- * It does not implement:
- *
- *     - complete Xbox hardware
- *     - complete Intel Pentium III behavior
- *     - NV2A GPU
- *     - DirectX 8
- *     - complete Xbox kernel
- *     - complete XDK
- *     - complete XAPI
- *     - complete XBE loader
- *
- * The purpose of this runtime is to provide a clean,
- * extensible foundation for WebBktx.
+ * Experimental Xbox-compatible runtime framework.
  * ============================================================
  */
 
@@ -46,56 +30,13 @@
 
 
 /* ============================================================
-   GLOBAL CONFIGURATION
+   GLOBAL CONFIG
 ============================================================ */
 
-const WEBBKTX_VERSION =
-    "1.1";
-
-const WEBBKTX_CPU_VERSION =
-    "1.1";
+const WEBBKTX_VERSION = "1.1";
 
 const WEBBKTX_RAM_SIZE =
     64 * 1024 * 1024;
-
-
-/* ============================================================
-   UTILITY
-============================================================ */
-
-function webBktxU32(value) {
-
-    return Number(value) >>> 0;
-
-}
-
-
-function webBktxHex(value, width = 8) {
-
-    return (
-        webBktxU32(value)
-            .toString(16)
-            .padStart(width, "0")
-            .toUpperCase()
-    );
-
-}
-
-
-function webBktxNow() {
-
-    if (
-        typeof performance !== "undefined" &&
-        typeof performance.now === "function"
-    ) {
-
-        return performance.now();
-
-    }
-
-    return Date.now();
-
-}
 
 
 /* ============================================================
@@ -108,8 +49,7 @@ class WebBktxMemory {
         size = WEBBKTX_RAM_SIZE
     ) {
 
-        size =
-            Number(size);
+        size = Number(size);
 
         if (
             !Number.isInteger(size) ||
@@ -122,13 +62,10 @@ class WebBktxMemory {
 
         }
 
-        this.size =
-            size;
+        this.size = size;
 
         this.buffer =
-            new ArrayBuffer(
-                size
-            );
+            new ArrayBuffer(size);
 
         this.view =
             new DataView(
@@ -141,7 +78,6 @@ class WebBktxMemory {
             );
 
         this.reset();
-
     }
 
 
@@ -157,41 +93,41 @@ class WebBktxMemory {
         bytes = 1
     ) {
 
-        const start =
-            Number(address);
+        address =
+            Number(address) >>> 0;
 
-        const length =
+        bytes =
             Number(bytes);
 
         if (
-            !Number.isFinite(start) ||
-            !Number.isFinite(length) ||
-            start < 0 ||
-            length < 0 ||
-            !Number.isInteger(start) ||
-            !Number.isInteger(length)
+            !Number.isInteger(bytes) ||
+            bytes < 0
         ) {
 
             throw new RangeError(
-                "Invalid memory access."
+                "Invalid memory access size."
             );
 
         }
+
+        /*
+         * Avoid JS integer overflow.
+         */
 
         if (
-            start + length >
-            this.size
+            address > this.size ||
+            bytes > this.size - address
         ) {
 
             throw new RangeError(
-                `Memory access violation: 0x${webBktxHex(start)} ` +
-                `(size=${length}, RAM=${this.size})`
+                `Memory access violation: 0x${
+                    address.toString(16)
+                }`
             );
 
         }
 
-        return start;
-
+        return address;
     }
 
 
@@ -200,7 +136,6 @@ class WebBktxMemory {
         return this.u8[
             this.check(address)
         ];
-
     }
 
 
@@ -210,7 +145,6 @@ class WebBktxMemory {
             this.check(address, 2),
             true
         );
-
     }
 
 
@@ -220,7 +154,6 @@ class WebBktxMemory {
             this.check(address, 4),
             true
         );
-
     }
 
 
@@ -229,7 +162,6 @@ class WebBktxMemory {
         return this.view.getInt8(
             this.check(address)
         );
-
     }
 
 
@@ -239,7 +171,6 @@ class WebBktxMemory {
             this.check(address, 2),
             true
         );
-
     }
 
 
@@ -249,7 +180,6 @@ class WebBktxMemory {
             this.check(address, 4),
             true
         );
-
     }
 
 
@@ -262,7 +192,6 @@ class WebBktxMemory {
             this.check(address)
         ] =
             Number(value) & 0xFF;
-
     }
 
 
@@ -276,7 +205,6 @@ class WebBktxMemory {
             Number(value) & 0xFFFF,
             true
         );
-
     }
 
 
@@ -290,7 +218,6 @@ class WebBktxMemory {
             Number(value) >>> 0,
             true
         );
-
     }
 
 
@@ -304,7 +231,7 @@ class WebBktxMemory {
                 ? bytes
                 : new Uint8Array(bytes);
 
-        const start =
+        const target =
             this.check(
                 address,
                 data.length
@@ -312,9 +239,8 @@ class WebBktxMemory {
 
         this.u8.set(
             data,
-            start
+            target
         );
-
     }
 
 
@@ -323,22 +249,31 @@ class WebBktxMemory {
         length
     ) {
 
-        const start =
+        address =
             Number(address) >>> 0;
 
-        const size =
+        length =
             Number(length);
 
         this.check(
-            start,
-            size
+            address,
+            length
         );
+
+        /*
+         * Important:
+         *
+         * Old code had:
+         *
+         * Number(address) >>> 0 + Number(length)
+         *
+         * which has incorrect operator precedence.
+         */
 
         return this.u8.slice(
-            start,
-            start + size
+            address,
+            address + length
         );
-
     }
 
 
@@ -351,7 +286,6 @@ class WebBktxMemory {
             address,
             data
         );
-
     }
 
 
@@ -361,22 +295,22 @@ class WebBktxMemory {
         value = 0
     ) {
 
-        const start =
-            this.check(
-                address,
-                length
-            );
+        address =
+            Number(address) >>> 0;
 
-        const end =
-            start +
+        length =
             Number(length);
+
+        this.check(
+            address,
+            length
+        );
 
         this.u8.fill(
             Number(value) & 0xFF,
-            start,
-            end
+            address,
+            address + length
         );
-
     }
 
 
@@ -394,13 +328,6 @@ class WebBktxMemory {
     }
 
 
-    getUint8Array() {
-
-        return this.u8;
-
-    }
-
-
     getStatus() {
 
         return {
@@ -413,17 +340,17 @@ class WebBktxMemory {
 
             megabytes:
                 this.size /
-                (1024 * 1024)
+                1024 /
+                1024
 
         };
-
     }
 
 }
 
 
 /* ============================================================
-   X86 FLAGS
+   CPU FLAGS
 ============================================================ */
 
 const WebBktxCPUFlags = {
@@ -440,24 +367,6 @@ const WebBktxCPUFlags = {
     OF: 0x00000800
 
 };
-
-
-/* ============================================================
-   CPU REGISTER NAMES
-============================================================ */
-
-const WEBBKTX_REGISTER_NAMES = [
-
-    "EAX",
-    "ECX",
-    "EDX",
-    "EBX",
-    "ESP",
-    "EBP",
-    "ESI",
-    "EDI"
-
-];
 
 
 /* ============================================================
@@ -490,32 +399,25 @@ class WebBktxCPU {
         /*
          * IMPORTANT:
          *
-         * These properties must exist BEFORE
-         * reset() is called.
+         * These fields MUST exist before reset().
          *
-         * The previous version crashed because
-         * reset() executed:
+         * This fixes:
          *
-         *     this.trace.length = 0
-         *
-         * before this.trace existed.
+         * Cannot set properties of undefined
+         * (setting 'length')
          */
 
         this.maxInstructions =
             100000;
 
-
         this.breakpoints =
             new Set();
-
 
         this.traceEnabled =
             false;
 
-
         this.trace =
             [];
-
 
         this.maxTraceEntries =
             1000;
@@ -524,21 +426,21 @@ class WebBktxCPU {
         this.onInstruction =
             null;
 
-
         this.onBreakpoint =
             null;
 
-
         this.onHalt =
             null;
-
 
         this.onFault =
             null;
 
 
-        this.reset();
+        /*
+         * CPU state.
+         */
 
+        this.reset();
     }
 
 
@@ -555,10 +457,6 @@ class WebBktxCPU {
         this.EBP = 0;
 
 
-        /*
-         * Stack begins near the end of RAM.
-         */
-
         this.ESP =
             Math.max(
                 0,
@@ -566,8 +464,7 @@ class WebBktxCPU {
             ) >>> 0;
 
 
-        this.EIP =
-            0;
+        this.EIP = 0;
 
 
         /*
@@ -581,14 +478,11 @@ class WebBktxCPU {
         this.running =
             false;
 
-
         this.halted =
             false;
 
-
         this.faulted =
             false;
-
 
         this.lastError =
             null;
@@ -596,7 +490,6 @@ class WebBktxCPU {
 
         this.cycles =
             0;
-
 
         this.instructionsExecuted =
             0;
@@ -606,66 +499,49 @@ class WebBktxCPU {
             Array.isArray(this.trace)
         ) {
 
-            this.trace.length =
-                0;
+            this.trace.length = 0;
 
         } else {
 
-            this.trace =
-                [];
+            this.trace = [];
 
         }
-
     }
 
 
+    /* ========================================================
+       REGISTER ACCESS
+    ======================================================== */
+
     getRegister(name) {
 
-        const register =
+        const n =
             String(name)
                 .toUpperCase();
 
 
-        switch (register) {
+        switch (n) {
 
             case "EAX":
-                return this.EAX >>> 0;
-
             case "EBX":
-                return this.EBX >>> 0;
-
             case "ECX":
-                return this.ECX >>> 0;
-
             case "EDX":
-                return this.EDX >>> 0;
-
             case "ESI":
-                return this.ESI >>> 0;
-
             case "EDI":
-                return this.EDI >>> 0;
-
             case "EBP":
-                return this.EBP >>> 0;
-
             case "ESP":
-                return this.ESP >>> 0;
-
             case "EIP":
-                return this.EIP >>> 0;
-
             case "EFLAGS":
-                return this.EFLAGS >>> 0;
+
+                return this[n] >>> 0;
+
 
             default:
 
                 throw new Error(
-                    `Unknown register: ${register}`
+                    `Unknown register: ${n}`
                 );
-
         }
-
     }
 
 
@@ -674,74 +550,50 @@ class WebBktxCPU {
         value
     ) {
 
-        const register =
+        const n =
             String(name)
                 .toUpperCase();
 
 
-        const normalized =
-            Number(value) >>> 0;
+        if (
+            n === "EFLAGS"
+        ) {
+
+            this.EFLAGS =
+                Number(value) >>> 0;
+
+            this.EFLAGS |= 0x02;
+
+            this.EFLAGS >>>= 0;
+
+            return;
+        }
 
 
-        switch (register) {
+        switch (n) {
 
             case "EAX":
-                this.EAX = normalized;
-                break;
-
             case "EBX":
-                this.EBX = normalized;
-                break;
-
             case "ECX":
-                this.ECX = normalized;
-                break;
-
             case "EDX":
-                this.EDX = normalized;
-                break;
-
             case "ESI":
-                this.ESI = normalized;
-                break;
-
             case "EDI":
-                this.EDI = normalized;
-                break;
-
             case "EBP":
-                this.EBP = normalized;
-                break;
-
             case "ESP":
-                this.ESP = normalized;
-                break;
-
             case "EIP":
-                this.EIP = normalized;
-                break;
 
-            case "EFLAGS":
+                this[n] =
+                    Number(value) >>> 0;
 
-                this.EFLAGS =
-                    normalized;
+                return;
 
-                this.EFLAGS |=
-                    0x02;
-
-                this.EFLAGS >>>=
-                    0;
-
-                break;
 
             default:
 
                 throw new Error(
-                    `Unknown register: ${register}`
+                    `Unknown register: ${n}`
                 );
-
         }
-
     }
 
 
@@ -780,17 +632,12 @@ class WebBktxCPU {
                 this.EFLAGS >>> 0
 
         };
-
     }
 
 
-    setEIP(address) {
-
-        this.EIP =
-            Number(address) >>> 0;
-
-    }
-
+    /* ========================================================
+       FLAGS
+    ======================================================== */
 
     getFlag(flag) {
 
@@ -800,7 +647,6 @@ class WebBktxCPU {
                 flag
             ) !== 0
         );
-
     }
 
 
@@ -811,48 +657,18 @@ class WebBktxCPU {
 
         if (enabled) {
 
-            this.EFLAGS |=
-                flag;
+            this.EFLAGS |= flag;
 
         } else {
 
-            this.EFLAGS &=
-                ~flag;
+            this.EFLAGS &= ~flag;
 
         }
 
 
-        /*
-         * Reserved x86 bit 1.
-         */
+        this.EFLAGS |= 0x02;
 
-        this.EFLAGS |=
-            0x02;
-
-        this.EFLAGS >>>=
-            0;
-
-    }
-
-
-    clearArithmeticFlags() {
-
-        this.EFLAGS &= ~(
-            WebBktxCPUFlags.CF |
-            WebBktxCPUFlags.PF |
-            WebBktxCPUFlags.AF |
-            WebBktxCPUFlags.ZF |
-            WebBktxCPUFlags.SF |
-            WebBktxCPUFlags.OF
-        );
-
-
-        this.EFLAGS |=
-            0x02;
-
-        this.EFLAGS >>>=
-            0;
-
+        this.EFLAGS >>>= 0;
     }
 
 
@@ -864,7 +680,6 @@ class WebBktxCPU {
         let parity =
             0;
 
-
         while (value) {
 
             parity ^=
@@ -872,18 +687,13 @@ class WebBktxCPU {
 
             value >>>=
                 1;
-
         }
 
-
         return parity === 0;
-
     }
 
 
-    updateLogicFlags(
-        result
-    ) {
+    updateLogicFlags(result) {
 
         result >>>
             = 0;
@@ -894,18 +704,15 @@ class WebBktxCPU {
             false
         );
 
-
         this.setFlag(
             WebBktxCPUFlags.OF,
             false
         );
 
-
         this.setFlag(
             WebBktxCPUFlags.ZF,
             result === 0
         );
-
 
         this.setFlag(
             WebBktxCPUFlags.SF,
@@ -915,14 +722,10 @@ class WebBktxCPU {
             ) !== 0
         );
 
-
         this.setFlag(
             WebBktxCPUFlags.PF,
-            this.parity8(
-                result
-            )
+            this.parity8(result)
         );
-
     }
 
 
@@ -941,6 +744,11 @@ class WebBktxCPU {
         result >>>
             = 0;
 
+
+        /*
+         * CF:
+         * unsigned carry.
+         */
 
         this.setFlag(
             WebBktxCPUFlags.CF,
@@ -965,9 +773,7 @@ class WebBktxCPU {
 
         this.setFlag(
             WebBktxCPUFlags.PF,
-            this.parity8(
-                result
-            )
+            this.parity8(result)
         );
 
 
@@ -994,7 +800,6 @@ class WebBktxCPU {
                 ) !== 0
             )
         );
-
     }
 
 
@@ -1037,9 +842,7 @@ class WebBktxCPU {
 
         this.setFlag(
             WebBktxCPUFlags.PF,
-            this.parity8(
-                result
-            )
+            this.parity8(result)
         );
 
 
@@ -1066,14 +869,14 @@ class WebBktxCPU {
                 ) !== 0
             )
         );
-
     }
 
 
-    add32(
-        a,
-        b
-    ) {
+    /* ========================================================
+       ARITHMETIC
+    ======================================================== */
+
+    add32(a, b) {
 
         a >>>=
             0;
@@ -1081,10 +884,10 @@ class WebBktxCPU {
         b >>>=
             0;
 
-
         const result =
             (
-                a + b
+                a +
+                b
             ) >>> 0;
 
 
@@ -1096,14 +899,10 @@ class WebBktxCPU {
 
 
         return result;
-
     }
 
 
-    sub32(
-        a,
-        b
-    ) {
+    sub32(a, b) {
 
         a >>>=
             0;
@@ -1111,10 +910,10 @@ class WebBktxCPU {
         b >>>=
             0;
 
-
         const result =
             (
-                a - b
+                a -
+                b
             ) >>> 0;
 
 
@@ -1126,13 +925,10 @@ class WebBktxCPU {
 
 
         return result;
-
     }
 
 
-    inc32(
-        value
-    ) {
+    inc32(value) {
 
         const oldCF =
             this.getFlag(
@@ -1155,7 +951,7 @@ class WebBktxCPU {
 
 
         /*
-         * INC preserves CF.
+         * INC does not modify CF.
          */
 
         this.setFlag(
@@ -1165,13 +961,10 @@ class WebBktxCPU {
 
 
         return result;
-
     }
 
 
-    dec32(
-        value
-    ) {
+    dec32(value) {
 
         const oldCF =
             this.getFlag(
@@ -1194,7 +987,7 @@ class WebBktxCPU {
 
 
         /*
-         * DEC preserves CF.
+         * DEC does not modify CF.
          */
 
         this.setFlag(
@@ -1204,14 +997,14 @@ class WebBktxCPU {
 
 
         return result;
-
     }
 
 
-    xor32(
-        a,
-        b
-    ) {
+    /* ========================================================
+       LOGICAL
+    ======================================================== */
+
+    xor32(a, b) {
 
         const result =
             (
@@ -1226,14 +1019,10 @@ class WebBktxCPU {
 
 
         return result;
-
     }
 
 
-    and32(
-        a,
-        b
-    ) {
+    and32(a, b) {
 
         const result =
             (
@@ -1248,14 +1037,10 @@ class WebBktxCPU {
 
 
         return result;
-
     }
 
 
-    or32(
-        a,
-        b
-    ) {
+    or32(a, b) {
 
         const result =
             (
@@ -1270,13 +1055,14 @@ class WebBktxCPU {
 
 
         return result;
-
     }
 
 
-    push32(
-        value
-    ) {
+    /* ========================================================
+       STACK
+    ======================================================== */
+
+    push32(value) {
 
         if (
             this.ESP < 4
@@ -1285,13 +1071,13 @@ class WebBktxCPU {
             throw new Error(
                 "Stack underflow."
             );
-
         }
 
 
         this.ESP =
             (
-                this.ESP - 4
+                this.ESP -
+                4
             ) >>> 0;
 
 
@@ -1299,7 +1085,6 @@ class WebBktxCPU {
             this.ESP,
             value
         );
-
     }
 
 
@@ -1313,7 +1098,6 @@ class WebBktxCPU {
             throw new Error(
                 "Stack overflow."
             );
-
         }
 
 
@@ -1325,12 +1109,12 @@ class WebBktxCPU {
 
         this.ESP =
             (
-                this.ESP + 4
+                this.ESP +
+                4
             ) >>> 0;
 
 
         return value >>> 0;
-
     }
 
 
@@ -1347,17 +1131,19 @@ class WebBktxCPU {
 
         return this.memory.read32(
             address
-        );
-
+        ) >>> 0;
     }
 
+
+    /* ========================================================
+       MEMORY
+    ======================================================== */
 
     read8(address) {
 
         return this.memory.read8(
             address
         );
-
     }
 
 
@@ -1366,7 +1152,6 @@ class WebBktxCPU {
         return this.memory.read16(
             address
         );
-
     }
 
 
@@ -1375,7 +1160,6 @@ class WebBktxCPU {
         return this.memory.read32(
             address
         );
-
     }
 
 
@@ -1388,7 +1172,6 @@ class WebBktxCPU {
             address,
             value
         );
-
     }
 
 
@@ -1401,7 +1184,6 @@ class WebBktxCPU {
             address,
             value
         );
-
     }
 
 
@@ -1414,24 +1196,22 @@ class WebBktxCPU {
             address,
             value
         );
-
     }
 
+
+    /* ========================================================
+       DECODER
+    ======================================================== */
 
     attachDecoder(
         decoder
     ) {
 
-        if (
-            !decoder ||
-            typeof decoder.decode !==
-            "function"
-        ) {
+        if (!decoder) {
 
             throw new Error(
                 "Invalid decoder."
             );
-
         }
 
 
@@ -1440,9 +1220,12 @@ class WebBktxCPU {
 
 
         return true;
-
     }
 
+
+    /* ========================================================
+       BREAKPOINTS
+    ======================================================== */
 
     addBreakpoint(
         address
@@ -1451,7 +1234,6 @@ class WebBktxCPU {
         this.breakpoints.add(
             Number(address) >>> 0
         );
-
     }
 
 
@@ -1462,14 +1244,12 @@ class WebBktxCPU {
         this.breakpoints.delete(
             Number(address) >>> 0
         );
-
     }
 
 
     clearBreakpoints() {
 
         this.breakpoints.clear();
-
     }
 
 
@@ -1480,9 +1260,12 @@ class WebBktxCPU {
         return this.breakpoints.has(
             Number(address) >>> 0
         );
-
     }
 
+
+    /* ========================================================
+       TRACE
+    ======================================================== */
 
     enableTrace(
         enabled = true
@@ -1490,26 +1273,12 @@ class WebBktxCPU {
 
         this.traceEnabled =
             Boolean(enabled);
-
     }
 
 
     clearTrace() {
 
-        if (
-            Array.isArray(this.trace)
-        ) {
-
-            this.trace.length =
-                0;
-
-        } else {
-
-            this.trace =
-                [];
-
-        }
-
+        this.trace.length = 0;
     }
 
 
@@ -1518,20 +1287,14 @@ class WebBktxCPU {
         return [
             ...this.trace
         ];
-
     }
 
 
-    addTrace(
-        entry
-    ) {
+    addTrace(entry) {
 
-        if (
-            !this.traceEnabled
-        ) {
+        if (!this.traceEnabled) {
 
             return;
-
         }
 
 
@@ -1546,17 +1309,17 @@ class WebBktxCPU {
         ) {
 
             this.trace.shift();
-
         }
-
     }
 
 
+    /* ========================================================
+       STEP
+    ======================================================== */
+
     step() {
 
-        if (
-            this.halted
-        ) {
+        if (this.halted) {
 
             return {
 
@@ -1568,15 +1331,11 @@ class WebBktxCPU {
 
                 reason:
                     "CPU HALTED"
-
             };
-
         }
 
 
-        if (
-            this.faulted
-        ) {
+        if (this.faulted) {
 
             return {
 
@@ -1587,22 +1346,16 @@ class WebBktxCPU {
                     true,
 
                 reason:
-                    this.lastError ||
-                    "CPU FAULT"
-
+                    this.lastError
             };
-
         }
 
 
-        if (
-            !this.decoder
-        ) {
+        if (!this.decoder) {
 
             throw new Error(
-                "No x86 decoder attached."
+                "No decoder attached."
             );
-
         }
 
 
@@ -1610,14 +1363,8 @@ class WebBktxCPU {
             this.EIP >>> 0;
 
 
-        /*
-         * Breakpoint.
-         */
-
         if (
-            this.hasBreakpoint(
-                address
-            )
+            this.hasBreakpoint(address)
         ) {
 
             this.running =
@@ -1632,7 +1379,6 @@ class WebBktxCPU {
                 this.onBreakpoint(
                     address
                 );
-
             }
 
 
@@ -1645,9 +1391,7 @@ class WebBktxCPU {
                     true,
 
                 address
-
             };
-
         }
 
 
@@ -1663,14 +1407,13 @@ class WebBktxCPU {
                 );
 
 
-            if (
-                !instruction
-            ) {
+            if (!instruction) {
 
                 throw new Error(
-                    `Decoder returned no instruction at 0x${webBktxHex(address)}`
+                    `No instruction at 0x${
+                        address.toString(16)
+                    }`
                 );
-
             }
 
 
@@ -1680,9 +1423,8 @@ class WebBktxCPU {
             ) {
 
                 throw new Error(
-                    "Decoded instruction has no execute()."
+                    "Instruction has no execute()."
                 );
-
             }
 
 
@@ -1691,12 +1433,9 @@ class WebBktxCPU {
             );
 
 
-            this.cycles +=
-                1;
+            this.cycles++;
 
-
-            this.instructionsExecuted +=
-                1;
+            this.instructionsExecuted++;
 
 
             const result = {
@@ -1704,8 +1443,7 @@ class WebBktxCPU {
                 executed:
                     true,
 
-                address:
-                    address,
+                address,
 
                 opcode:
                     instruction.opcode ??
@@ -1726,9 +1464,6 @@ class WebBktxCPU {
                 cycles:
                     this.cycles,
 
-                instructionsExecuted:
-                    this.instructionsExecuted,
-
                 halted:
                     this.halted
 
@@ -1748,7 +1483,6 @@ class WebBktxCPU {
                 this.onInstruction(
                     result
                 );
-
             }
 
 
@@ -1761,7 +1495,6 @@ class WebBktxCPU {
                 this.onHalt(
                     result
                 );
-
             }
 
 
@@ -1774,11 +1507,13 @@ class WebBktxCPU {
             );
 
             throw error;
-
         }
-
     }
 
+
+    /* ========================================================
+       RUN
+    ======================================================== */
 
     run(
         limit =
@@ -1797,7 +1532,6 @@ class WebBktxCPU {
             throw new Error(
                 "Invalid CPU execution limit."
             );
-
         }
 
 
@@ -1807,7 +1541,6 @@ class WebBktxCPU {
 
         let executed =
             0;
-
 
         let last =
             null;
@@ -1832,21 +1565,16 @@ class WebBktxCPU {
                 ) {
 
                     break;
-
                 }
 
 
                 if (
                     last &&
-                    !last.executed
+                    last.executed
                 ) {
 
-                    break;
-
+                    executed++;
                 }
-
-
-                executed++;
 
             }
 
@@ -1854,7 +1582,6 @@ class WebBktxCPU {
 
             this.running =
                 false;
-
         }
 
 
@@ -1878,9 +1605,7 @@ class WebBktxCPU {
                 this.getRegisters(),
 
             last
-
         };
-
     }
 
 
@@ -1888,7 +1613,6 @@ class WebBktxCPU {
 
         this.running =
             false;
-
     }
 
 
@@ -1899,17 +1623,13 @@ class WebBktxCPU {
 
         this.running =
             false;
-
     }
 
 
-    raiseFault(
-        error
-    ) {
+    raiseFault(error) {
 
         this.faulted =
             true;
-
 
         this.running =
             false;
@@ -1929,9 +1649,7 @@ class WebBktxCPU {
             this.onFault(
                 error
             );
-
         }
-
     }
 
 
@@ -1940,7 +1658,7 @@ class WebBktxCPU {
         return {
 
             version:
-                WEBBKTX_CPU_VERSION,
+                WEBBKTX_VERSION,
 
             running:
                 this.running,
@@ -1994,24 +1712,14 @@ class WebBktxCPU {
                     this.getFlag(
                         WebBktxCPUFlags.OF
                     )
-
-            },
-
-            breakpoints:
-                this.breakpoints.size,
-
-            traceEntries:
-                this.trace.length
-
+            }
         };
-
     }
 
 
     getState() {
 
         return this.getStatus();
-
     }
 
 
@@ -2061,36 +1769,22 @@ class WebBktxCPU {
             faulted:
                 this.faulted,
 
-            lastError:
+            error:
                 this.lastError
-
         };
-
     }
 
 
-    selfTest() {
+    /* ========================================================
+       SELF TEST
+    ======================================================== */
 
-        /*
-         * Start from a clean CPU state.
-         */
+    selfTest() {
 
         this.reset();
 
 
-        const tests =
-            [];
-
-
-        /*
-         * ADD
-         */
-
-        let result =
-            this.add32(
-                10,
-                20
-            );
+        const tests = [];
 
 
         tests.push({
@@ -2099,20 +1793,12 @@ class WebBktxCPU {
                 "ADD",
 
             pass:
-                result === 30
+                this.add32(
+                    10,
+                    20
+                ) === 30
 
         });
-
-
-        /*
-         * SUB
-         */
-
-        result =
-            this.sub32(
-                50,
-                20
-            );
 
 
         tests.push({
@@ -2121,20 +1807,12 @@ class WebBktxCPU {
                 "SUB",
 
             pass:
-                result === 30
+                this.sub32(
+                    50,
+                    20
+                ) === 30
 
         });
-
-
-        /*
-         * XOR
-         */
-
-        result =
-            this.xor32(
-                0xFF00,
-                0x0F00
-            );
 
 
         tests.push({
@@ -2143,100 +1821,13 @@ class WebBktxCPU {
                 "XOR",
 
             pass:
-                result === 0xF000
+                this.xor32(
+                    0xFF00,
+                    0x0F00
+                ) === 0xF000
 
         });
 
-
-        /*
-         * AND
-         */
-
-        result =
-            this.and32(
-                0xFFFF,
-                0x00FF
-            );
-
-
-        tests.push({
-
-            name:
-                "AND",
-
-            pass:
-                result === 0x00FF
-
-        });
-
-
-        /*
-         * OR
-         */
-
-        result =
-            this.or32(
-                0xF000,
-                0x000F
-            );
-
-
-        tests.push({
-
-            name:
-                "OR",
-
-            pass:
-                result === 0xF00F
-
-        });
-
-
-        /*
-         * INC
-         */
-
-        result =
-            this.inc32(
-                9
-            );
-
-
-        tests.push({
-
-            name:
-                "INC",
-
-            pass:
-                result === 10
-
-        });
-
-
-        /*
-         * DEC
-         */
-
-        result =
-            this.dec32(
-                10
-            );
-
-
-        tests.push({
-
-            name:
-                "DEC",
-
-            pass:
-                result === 9
-
-        });
-
-
-        /*
-         * STACK
-         */
 
         const oldESP =
             this.ESP;
@@ -2247,34 +1838,22 @@ class WebBktxCPU {
         );
 
 
-        const popped =
-            this.pop32();
-
-
         tests.push({
 
             name:
                 "STACK",
 
             pass:
-                popped ===
-                0x12345678 &&
+                this.pop32() ===
+                    0x12345678 &&
                 this.ESP ===
-                oldESP
+                    oldESP
 
         });
 
 
-        /*
-         * MEMORY
-         */
-
-        const testAddress =
-            0x1000;
-
-
         this.write32(
-            testAddress,
+            0x1000,
             0xDEADBEEF
         );
 
@@ -2286,61 +1865,48 @@ class WebBktxCPU {
 
             pass:
                 this.read32(
-                    testAddress
+                    0x1000
                 ) ===
                 0xDEADBEEF
 
         });
 
 
-        /*
-         * FLAGS
-         */
+        tests.push({
 
-        this.sub32(
-            10,
-            10
-        );
+            name:
+                "INC",
+
+            pass:
+                this.inc32(9) === 10
+
+        });
 
 
         tests.push({
 
             name:
-                "ZF",
+                "DEC",
 
             pass:
-                this.getFlag(
-                    WebBktxCPUFlags.ZF
-                )
+                this.dec32(10) === 9
 
         });
 
 
-        /*
-         * Final result.
-         */
-
-        const passed =
-            tests.every(
-                test =>
-                    test.pass
-            );
-
-
         return {
 
-            passed,
-
-            cpu:
-                WEBBKTX_CPU_VERSION,
+            passed:
+                tests.every(
+                    test =>
+                        test.pass
+                ),
 
             tests,
 
-            registers:
-                this.getRegisters()
-
+            version:
+                WEBBKTX_VERSION
         };
-
     }
 
 }
@@ -2352,28 +1918,13 @@ class WebBktxCPU {
 
 class WebBktxDecoder {
 
-    constructor(
-        memory
-    ) {
-
-        if (
-            !(memory instanceof WebBktxMemory)
-        ) {
-
-            throw new Error(
-                "WebBktxDecoder requires WebBktxMemory."
-            );
-
-        }
-
+    constructor(memory) {
 
         this.memory =
             memory;
 
-
         this.version =
             "1.1";
-
     }
 
 
@@ -2382,13 +1933,9 @@ class WebBktxDecoder {
         address
     ) {
 
-        const ip =
-            Number(address) >>> 0;
-
-
         const opcode =
             this.memory.read8(
-                ip
+                address
             );
 
 
@@ -2417,9 +1964,7 @@ class WebBktxDecoder {
                             (
                                 cpu.EIP + 1
                             ) >>> 0;
-
                     }
-
                 };
 
 
@@ -2447,9 +1992,7 @@ class WebBktxDecoder {
                             ) >>> 0;
 
                         cpu.halt();
-
                     }
-
                 };
 
 
@@ -2466,21 +2009,28 @@ class WebBktxDecoder {
             case 0xBE:
             case 0xBF: {
 
-                const registerIndex =
-                    opcode -
-                    0xB8;
-
-
-                const registerName =
-                    WEBBKTX_REGISTER_NAMES[
-                        registerIndex
-                    ];
+                const reg =
+                    opcode - 0xB8;
 
 
                 const value =
                     this.memory.read32(
-                        ip + 1
+                        address + 1
                     );
+
+
+                const names = [
+
+                    "EAX",
+                    "ECX",
+                    "EDX",
+                    "EBX",
+                    "ESP",
+                    "EBP",
+                    "ESI",
+                    "EDI"
+
+                ];
 
 
                 return {
@@ -2488,7 +2038,7 @@ class WebBktxDecoder {
                     opcode,
 
                     mnemonic:
-                        `MOV ${registerName}, imm32`,
+                        `MOV ${names[reg]}, imm32`,
 
                     size:
                         5,
@@ -2496,20 +2046,16 @@ class WebBktxDecoder {
                     execute() {
 
                         cpu.setRegister(
-                            registerName,
+                            names[reg],
                             value
                         );
-
 
                         cpu.EIP =
                             (
                                 cpu.EIP + 5
                             ) >>> 0;
-
                     }
-
                 };
-
             }
 
 
@@ -2521,7 +2067,7 @@ class WebBktxDecoder {
 
                 const value =
                     this.memory.read32(
-                        ip + 1
+                        address + 1
                     );
 
 
@@ -2543,16 +2089,12 @@ class WebBktxDecoder {
                                 value
                             );
 
-
                         cpu.EIP =
                             (
                                 cpu.EIP + 5
                             ) >>> 0;
-
                     }
-
                 };
-
             }
 
 
@@ -2564,7 +2106,7 @@ class WebBktxDecoder {
 
                 const value =
                     this.memory.read32(
-                        ip + 1
+                        address + 1
                     );
 
 
@@ -2586,16 +2128,12 @@ class WebBktxDecoder {
                                 value
                             );
 
-
                         cpu.EIP =
                             (
                                 cpu.EIP + 5
                             ) >>> 0;
-
                     }
-
                 };
-
             }
 
 
@@ -2622,14 +2160,11 @@ class WebBktxDecoder {
                                 cpu.EAX
                             );
 
-
                         cpu.EIP =
                             (
                                 cpu.EIP + 1
                             ) >>> 0;
-
                     }
-
                 };
 
 
@@ -2656,14 +2191,11 @@ class WebBktxDecoder {
                                 cpu.EAX
                             );
 
-
                         cpu.EIP =
                             (
                                 cpu.EIP + 1
                             ) >>> 0;
-
                     }
-
                 };
 
 
@@ -2689,14 +2221,11 @@ class WebBktxDecoder {
                             cpu.EAX
                         );
 
-
                         cpu.EIP =
                             (
                                 cpu.EIP + 1
                             ) >>> 0;
-
                     }
-
                 };
 
 
@@ -2721,14 +2250,11 @@ class WebBktxDecoder {
                         cpu.EAX =
                             cpu.pop32();
 
-
                         cpu.EIP =
                             (
                                 cpu.EIP + 1
                             ) >>> 0;
-
                     }
-
                 };
 
 
@@ -2752,9 +2278,7 @@ class WebBktxDecoder {
 
                         cpu.EIP =
                             cpu.pop32();
-
                     }
-
                 };
 
 
@@ -2766,12 +2290,10 @@ class WebBktxDecoder {
                             .toString(16)
                             .padStart(2, "0")
                     } at 0x${
-                        webBktxHex(ip)
+                        address.toString(16)
                     }`
                 );
-
         }
-
     }
 
 }
@@ -2790,34 +2312,20 @@ class WebBktxXBE {
         this.source =
             source;
 
-
         this.loaded =
             false;
-
 
         this.buffer =
             null;
 
-
         this.header =
             null;
-
 
         this.entryPoint =
             0;
 
-
         this.imageBase =
             0;
-
-
-        this.sections =
-            [];
-
-
-        this.version =
-            "1.1";
-
     }
 
 
@@ -2825,14 +2333,11 @@ class WebBktxXBE {
         source = this.source
     ) {
 
-        if (
-            !source
-        ) {
+        if (!source) {
 
             throw new Error(
                 "No XBE source."
             );
-
         }
 
 
@@ -2873,7 +2378,6 @@ class WebBktxXBE {
             throw new Error(
                 "Unsupported XBE source."
             );
-
         }
 
 
@@ -2890,7 +2394,6 @@ class WebBktxXBE {
             throw new Error(
                 "File is too small to be an XBE."
             );
-
         }
 
 
@@ -2910,7 +2413,6 @@ class WebBktxXBE {
             throw new Error(
                 `Invalid XBE signature: ${magic}`
             );
-
         }
 
 
@@ -2920,7 +2422,6 @@ class WebBktxXBE {
 
             size:
                 bytes.length
-
         };
 
 
@@ -2929,7 +2430,6 @@ class WebBktxXBE {
 
 
         return this;
-
     }
 
 
@@ -2938,23 +2438,18 @@ class WebBktxXBE {
         return this.buffer
             ? this.buffer.byteLength
             : 0;
-
     }
 
 
     getEntryPoint() {
 
         return this.entryPoint >>> 0;
-
     }
 
 
     getStatus() {
 
         return {
-
-            version:
-                this.version,
 
             loaded:
                 this.loaded,
@@ -2968,14 +2463,9 @@ class WebBktxXBE {
             imageBase:
                 this.imageBase >>> 0,
 
-            sections:
-                this.sections.length,
-
             header:
                 this.header
-
         };
-
     }
 
 }
@@ -2992,10 +2482,8 @@ class WebBktxThunks {
         this.table =
             new Map();
 
-
         this.version =
             "1.1";
-
     }
 
 
@@ -3012,7 +2500,6 @@ class WebBktxThunks {
             throw new Error(
                 "Thunk handler must be a function."
             );
-
         }
 
 
@@ -3020,29 +2507,14 @@ class WebBktxThunks {
             Number(address) >>> 0,
             handler
         );
-
     }
 
 
-    unregister(
-        address
-    ) {
-
-        return this.table.delete(
-            Number(address) >>> 0
-        );
-
-    }
-
-
-    has(
-        address
-    ) {
+    has(address) {
 
         return this.table.has(
             Number(address) >>> 0
         );
-
     }
 
 
@@ -3051,38 +2523,33 @@ class WebBktxThunks {
         ...args
     ) {
 
-        const key =
-            Number(address) >>> 0;
-
-
         const handler =
             this.table.get(
-                key
+                Number(address) >>> 0
             );
 
 
-        if (
-            !handler
-        ) {
+        if (!handler) {
 
             throw new Error(
-                `Unknown thunk: 0x${webBktxHex(key)}`
+                `Unknown thunk: 0x${
+                    (
+                        Number(address) >>> 0
+                    ).toString(16)
+                }`
             );
-
         }
 
 
         return handler(
             ...args
         );
-
     }
 
 
     clear() {
 
         this.table.clear();
-
     }
 
 
@@ -3095,9 +2562,7 @@ class WebBktxThunks {
 
             count:
                 this.table.size
-
         };
-
     }
 
 }
@@ -3116,17 +2581,13 @@ class WebBktxXAPI {
         this.core =
             core;
 
-
         this.functions =
             new Map();
-
 
         this.version =
             "1.1";
 
-
         this.registerDefaults();
-
     }
 
 
@@ -3143,7 +2604,6 @@ class WebBktxXAPI {
             throw new Error(
                 `XAPI handler for ${name} must be a function.`
             );
-
         }
 
 
@@ -3151,29 +2611,14 @@ class WebBktxXAPI {
             String(name),
             handler
         );
-
     }
 
 
-    unregister(
-        name
-    ) {
-
-        return this.functions.delete(
-            String(name)
-        );
-
-    }
-
-
-    has(
-        name
-    ) {
+    has(name) {
 
         return this.functions.has(
             String(name)
         );
-
     }
 
 
@@ -3182,31 +2627,23 @@ class WebBktxXAPI {
         ...args
     ) {
 
-        const key =
-            String(name);
-
-
         const fn =
             this.functions.get(
-                key
+                String(name)
             );
 
 
-        if (
-            !fn
-        ) {
+        if (!fn) {
 
             throw new Error(
-                `Unknown XAPI function: ${key}`
+                `Unknown XAPI function: ${name}`
             );
-
         }
 
 
         return fn(
             ...args
         );
-
     }
 
 
@@ -3221,9 +2658,7 @@ class WebBktxXAPI {
                     ...args
                 );
 
-
                 return 0;
-
             }
         );
 
@@ -3232,23 +2667,38 @@ class WebBktxXAPI {
             "GetTickCount",
             () => {
 
-                return Math.floor(
-                    webBktxNow()
-                );
+                if (
+                    typeof performance !==
+                    "undefined"
+                ) {
 
+                    return Math.floor(
+                        performance.now()
+                    ) >>> 0;
+                }
+
+
+                return (
+                    Date.now() >>> 0
+                );
             }
         );
 
 
         this.register(
-            "GetVersion",
-            () => {
+            "Sleep",
+            milliseconds => {
 
-                return WEBBKTX_VERSION;
+                /*
+                 * Browser runtime cannot synchronously
+                 * block like the original Xbox kernel.
+                 */
 
+                return Number(
+                    milliseconds
+                ) || 0;
             }
         );
-
     }
 
 
@@ -3261,9 +2711,7 @@ class WebBktxXAPI {
 
             functions:
                 this.functions.size
-
         };
-
     }
 
 }
@@ -3280,14 +2728,11 @@ class WebBktxXFile {
         this.files =
             new Map();
 
-
         this.nextHandle =
             1;
 
-
         this.version =
             "1.1";
-
     }
 
 
@@ -3295,59 +2740,31 @@ class WebBktxXFile {
         file
     ) {
 
-        if (
-            !file
-        ) {
+        if (!file) {
 
             throw new Error(
                 "No file."
             );
-
         }
-
-
-        let buffer;
 
 
         if (
-            file instanceof ArrayBuffer
-        ) {
-
-            buffer =
-                file.slice(
-                    0
-                );
-
-        } else if (
-            file instanceof Uint8Array
-        ) {
-
-            buffer =
-                file.buffer.slice(
-                    file.byteOffset,
-                    file.byteOffset +
-                    file.byteLength
-                );
-
-        } else if (
-            typeof file.arrayBuffer ===
+            typeof file.arrayBuffer !==
             "function"
         ) {
 
-            buffer =
-                await file.arrayBuffer();
-
-        } else {
-
             throw new Error(
-                "Unsupported file source."
+                "Object does not provide arrayBuffer()."
             );
-
         }
 
 
+        const buffer =
+            await file.arrayBuffer();
+
+
         const handle =
-            `file_${this.nextHandle++}`;
+            this.nextHandle++;
 
 
         this.files.set(
@@ -3356,9 +2773,10 @@ class WebBktxXFile {
 
                 name:
                     file.name ||
-                    "memory-file",
+                    "file",
 
                 size:
+                    file.size ??
                     buffer.byteLength,
 
                 buffer
@@ -3368,36 +2786,31 @@ class WebBktxXFile {
 
 
         return handle;
-
     }
 
 
-    get(
-        handle
-    ) {
+    get(handle) {
 
-        return this.files.get(
-            String(handle)
-        ) || null;
-
+        return (
+            this.files.get(
+                handle
+            ) ||
+            null
+        );
     }
 
 
-    close(
-        handle
-    ) {
+    close(handle) {
 
         return this.files.delete(
-            String(handle)
+            handle
         );
-
     }
 
 
     clear() {
 
         this.files.clear();
-
     }
 
 
@@ -3410,9 +2823,7 @@ class WebBktxXFile {
 
             openFiles:
                 this.files.size
-
         };
-
     }
 
 }
@@ -3431,29 +2842,32 @@ class WebBktxKernel {
         this.core =
             core;
 
-
         this.initialized =
             false;
-
 
         this.version =
             "1.1";
 
-
         this.services =
             new Map();
-
     }
 
 
     async initialize() {
+
+        if (
+            this.initialized
+        ) {
+
+            return true;
+        }
+
 
         this.initialized =
             true;
 
 
         return true;
-
     }
 
 
@@ -3466,40 +2880,17 @@ class WebBktxKernel {
             String(name),
             service
         );
-
     }
 
 
-    unregisterService(
-        name
-    ) {
+    getService(name) {
 
-        return this.services.delete(
-            String(name)
+        return (
+            this.services.get(
+                String(name)
+            ) ||
+            null
         );
-
-    }
-
-
-    getService(
-        name
-    ) {
-
-        return this.services.get(
-            String(name)
-        ) || null;
-
-    }
-
-
-    hasService(
-        name
-    ) {
-
-        return this.services.has(
-            String(name)
-        );
-
     }
 
 
@@ -3508,9 +2899,7 @@ class WebBktxKernel {
         this.initialized =
             true;
 
-
         return true;
-
     }
 
 
@@ -3518,7 +2907,6 @@ class WebBktxKernel {
 
         this.initialized =
             false;
-
     }
 
 
@@ -3536,9 +2924,7 @@ class WebBktxKernel {
                 [
                     ...this.services.keys()
                 ]
-
         };
-
     }
 
 }
@@ -3557,31 +2943,19 @@ class WebBktxXInput {
 
 
         this.buttons =
-            Object.create(
-                null
-            );
+            Object.create(null);
 
 
         this.axes = {
 
-            leftX:
-                0,
+            leftX: 0,
+            leftY: 0,
 
-            leftY:
-                0,
+            rightX: 0,
+            rightY: 0,
 
-            rightX:
-                0,
-
-            rightY:
-                0,
-
-            leftTrigger:
-                0,
-
-            rightTrigger:
-                0
-
+            leftTrigger: 0,
+            rightTrigger: 0
         };
 
 
@@ -3590,9 +2964,7 @@ class WebBktxXInput {
 
 
         this.keyboard =
-            Object.create(
-                null
-            );
+            Object.create(null);
 
 
         this.touch =
@@ -3603,14 +2975,9 @@ class WebBktxXInput {
             false;
 
 
-        this.animationHandle =
-            null;
-
-
         this.boundGamepad =
-            this.pollGamepads.bind(
-                this
-            );
+            this.pollGamepads
+                .bind(this);
 
 
         this.boundKeyDown =
@@ -3618,9 +2985,7 @@ class WebBktxXInput {
 
                 this.keyboard[
                     event.code
-                ] =
-                    true;
-
+                ] = true;
             };
 
 
@@ -3629,11 +2994,20 @@ class WebBktxXInput {
 
                 this.keyboard[
                     event.code
-                ] =
-                    false;
-
+                ] = false;
             };
 
+
+        this.boundBlur =
+            () => {
+
+                this.keyboard =
+                    Object.create(null);
+            };
+
+
+        this.rafId =
+            null;
     }
 
 
@@ -3643,28 +3017,35 @@ class WebBktxXInput {
             this.started
         ) {
 
-            return;
-
+            return true;
         }
 
 
         if (
-            typeof window !==
+            typeof window ===
             "undefined"
         ) {
 
-            window.addEventListener(
-                "keydown",
-                this.boundKeyDown
-            );
-
-
-            window.addEventListener(
-                "keyup",
-                this.boundKeyUp
-            );
-
+            return false;
         }
+
+
+        window.addEventListener(
+            "keydown",
+            this.boundKeyDown
+        );
+
+
+        window.addEventListener(
+            "keyup",
+            this.boundKeyUp
+        );
+
+
+        window.addEventListener(
+            "blur",
+            this.boundBlur
+        );
 
 
         this.started =
@@ -3673,6 +3054,8 @@ class WebBktxXInput {
 
         this.pollGamepads();
 
+
+        return true;
     }
 
 
@@ -3683,125 +3066,120 @@ class WebBktxXInput {
         ) {
 
             return;
-
         }
 
 
         if (
-            typeof navigator ===
-            "undefined" ||
-            typeof navigator.getGamepads !==
+            typeof navigator !==
+            "undefined" &&
+            typeof navigator.getGamepads ===
             "function"
         ) {
 
-            return;
-
-        }
-
-
-        const pads =
-            navigator.getGamepads();
+            const pads =
+                navigator.getGamepads();
 
 
-        let found =
-            false;
-
-
-        for (
-            let i = 0;
-            i < pads.length;
-            i++
-        ) {
-
-            const pad =
-                pads[i];
-
-
-            if (
-                !pad
-            ) {
-
-                continue;
-
-            }
-
-
-            found =
-                true;
-
-
-            this.gamepadIndex =
-                i;
-
-
-            this.buttons =
-                Object.create(
-                    null
-                );
+            let found =
+                false;
 
 
             for (
-                let b = 0;
-                b < pad.buttons.length;
-                b++
+                let i = 0;
+                i < pads.length;
+                i++
             ) {
 
-                this.buttons[b] =
-                    Boolean(
-                        pad.buttons[b].pressed
-                    );
-
-            }
+                const pad =
+                    pads[i];
 
 
-            if (
-                pad.axes.length >= 4
-            ) {
+                if (!pad) {
 
-                this.axes.leftX =
-                    pad.axes[0];
-
-                this.axes.leftY =
-                    pad.axes[1];
-
-                this.axes.rightX =
-                    pad.axes[2];
-
-                this.axes.rightY =
-                    pad.axes[3];
-
-            }
+                    continue;
+                }
 
 
-            if (
-                pad.buttons.length >= 8
-            ) {
+                found =
+                    true;
 
-                this.axes.leftTrigger =
+
+                this.gamepadIndex =
+                    i;
+
+
+                this.buttons =
+                    Object.create(null);
+
+
+                for (
+                    let j = 0;
+                    j < pad.buttons.length;
+                    j++
+                ) {
+
+                    const button =
+                        pad.buttons[j];
+
+
+                    this.buttons[j] =
+                        Boolean(
+                            button &&
+                            button.pressed
+                        );
+                }
+
+
+                if (
+                    pad.axes.length >= 4
+                ) {
+
+                    this.axes.leftX =
+                        pad.axes[0] || 0;
+
+                    this.axes.leftY =
+                        pad.axes[1] || 0;
+
+                    this.axes.rightX =
+                        pad.axes[2] || 0;
+
+                    this.axes.rightY =
+                        pad.axes[3] || 0;
+                }
+
+
+                /*
+                 * Some browsers expose triggers
+                 * through buttons 6 and 7.
+                 */
+
+                if (
                     pad.buttons[6]
-                        .value ??
-                    0;
+                ) {
 
-                this.axes.rightTrigger =
+                    this.axes.leftTrigger =
+                        pad.buttons[6].value || 0;
+                }
+
+
+                if (
                     pad.buttons[7]
-                        .value ??
-                    0;
+                ) {
 
+                    this.axes.rightTrigger =
+                        pad.buttons[7].value || 0;
+                }
+
+
+                break;
             }
 
 
-            break;
+            if (!found) {
 
-        }
-
-
-        if (
-            !found
-        ) {
-
-            this.gamepadIndex =
-                null;
-
+                this.gamepadIndex =
+                    null;
+            }
         }
 
 
@@ -3810,25 +3188,17 @@ class WebBktxXInput {
             "function"
         ) {
 
-            this.animationHandle =
+            this.rafId =
                 requestAnimationFrame(
                     this.boundGamepad
                 );
-
         }
-
     }
 
 
     getState() {
 
         return {
-
-            version:
-                this.version,
-
-            started:
-                this.started,
 
             gamepadIndex:
                 this.gamepadIndex,
@@ -3846,41 +3216,8 @@ class WebBktxXInput {
             keyboard:
                 {
                     ...this.keyboard
-                },
-
-            touch:
-                [
-                    ...this.touch
-                ]
-
+                }
         };
-
-    }
-
-
-    isButtonPressed(
-        button
-    ) {
-
-        return Boolean(
-            this.buttons[
-                button
-            ]
-        );
-
-    }
-
-
-    isKeyDown(
-        code
-    ) {
-
-        return Boolean(
-            this.keyboard[
-                code
-            ]
-        );
-
     }
 
 
@@ -3902,30 +3239,48 @@ class WebBktxXInput {
                 this.boundKeyUp
             );
 
+
+            window.removeEventListener(
+                "blur",
+                this.boundBlur
+            );
         }
 
 
         if (
-            this.animationHandle !==
-            null &&
+            this.rafId !== null &&
             typeof cancelAnimationFrame ===
             "function"
         ) {
 
             cancelAnimationFrame(
-                this.animationHandle
+                this.rafId
             );
-
         }
 
 
-        this.animationHandle =
+        this.rafId =
             null;
 
 
         this.started =
             false;
+    }
 
+
+    getStatus() {
+
+        return {
+
+            version:
+                this.version,
+
+            started:
+                this.started,
+
+            gamepadIndex:
+                this.gamepadIndex
+        };
     }
 
 }
@@ -3944,49 +3299,34 @@ class WebBktxXGraphics {
         this.canvas =
             null;
 
-
         this.context =
             null;
-
 
         this.width =
             1280;
 
-
         this.height =
             720;
-
 
         this.running =
             false;
 
-
         this.frameCount =
             0;
 
-
         this.lastPresent =
             0;
-
 
         this.version =
             "1.1";
 
 
-        this.animationHandle =
-            null;
-
-
-        if (
-            canvas
-        ) {
+        if (canvas) {
 
             this.initialize(
                 canvas
             );
-
         }
-
     }
 
 
@@ -3994,16 +3334,11 @@ class WebBktxXGraphics {
         canvas
     ) {
 
-        if (
-            !canvas ||
-            typeof canvas.getContext !==
-            "function"
-        ) {
+        if (!canvas) {
 
             throw new Error(
-                "Invalid graphics canvas."
+                "Graphics requires a canvas."
             );
-
         }
 
 
@@ -4015,20 +3350,16 @@ class WebBktxXGraphics {
             canvas.getContext(
                 "2d",
                 {
-                    alpha:
-                        false
+                    alpha: false
                 }
             );
 
 
-        if (
-            !this.context
-        ) {
+        if (!this.context) {
 
             throw new Error(
                 "Unable to create 2D graphics context."
             );
-
         }
 
 
@@ -4045,6 +3376,8 @@ class WebBktxXGraphics {
             255
         );
 
+
+        return true;
     }
 
 
@@ -4057,7 +3390,6 @@ class WebBktxXGraphics {
             width,
             height
         );
-
     }
 
 
@@ -4069,30 +3401,29 @@ class WebBktxXGraphics {
         this.width =
             Math.max(
                 1,
-                Number(width) | 0
+                Math.floor(
+                    Number(width)
+                )
             );
 
 
         this.height =
             Math.max(
                 1,
-                Number(height) | 0
+                Math.floor(
+                    Number(height)
+                )
             );
 
 
-        if (
-            this.canvas
-        ) {
+        if (this.canvas) {
 
             this.canvas.width =
                 this.width;
 
-
             this.canvas.height =
                 this.height;
-
         }
-
     }
 
 
@@ -4109,7 +3440,6 @@ class WebBktxXGraphics {
             b,
             a
         );
-
     }
 
 
@@ -4120,17 +3450,22 @@ class WebBktxXGraphics {
         a = 255
     ) {
 
-        if (
-            !this.context
-        ) {
+        if (!this.context) {
 
             return;
-
         }
 
 
         this.context.fillStyle =
-            `rgba(${r},${g},${b},${a / 255})`;
+            `rgba(${
+                Number(r) || 0
+            },${
+                Number(g) || 0
+            },${
+                Number(b) || 0
+            },${
+                (Number(a) || 0) / 255
+            })`;
 
 
         this.context.fillRect(
@@ -4139,19 +3474,19 @@ class WebBktxXGraphics {
             this.width,
             this.height
         );
-
     }
 
 
     Present() {
 
-        this.frameCount +=
-            1;
+        this.frameCount++;
 
 
         this.lastPresent =
-            webBktxNow();
-
+            typeof performance !==
+            "undefined"
+                ? performance.now()
+                : Date.now();
     }
 
 
@@ -4162,7 +3497,6 @@ class WebBktxXGraphics {
         ) {
 
             return;
-
         }
 
 
@@ -4178,7 +3512,6 @@ class WebBktxXGraphics {
                 ) {
 
                     return;
-
                 }
 
 
@@ -4190,28 +3523,21 @@ class WebBktxXGraphics {
                     "function"
                 ) {
 
-                    this.animationHandle =
-                        requestAnimationFrame(
-                            frame
-                        );
+                    requestAnimationFrame(
+                        frame
+                    );
 
+                } else {
+
+                    setTimeout(
+                        frame,
+                        16
+                    );
                 }
-
             };
 
 
-        if (
-            typeof requestAnimationFrame ===
-            "function"
-        ) {
-
-            this.animationHandle =
-                requestAnimationFrame(
-                    frame
-                );
-
-        }
-
+        frame();
     }
 
 
@@ -4219,25 +3545,6 @@ class WebBktxXGraphics {
 
         this.running =
             false;
-
-
-        if (
-            this.animationHandle !==
-            null &&
-            typeof cancelAnimationFrame ===
-            "function"
-        ) {
-
-            cancelAnimationFrame(
-                this.animationHandle
-            );
-
-        }
-
-
-        this.animationHandle =
-            null;
-
     }
 
 
@@ -4264,9 +3571,7 @@ class WebBktxXGraphics {
 
             running:
                 this.running
-
         };
-
     }
 
 }
@@ -4312,9 +3617,7 @@ class WebBktxCore {
 
 
         /*
-         * ----------------------------------------------------
-         * MEMORY
-         * ----------------------------------------------------
+         * Core components.
          */
 
         this.memory =
@@ -4323,23 +3626,11 @@ class WebBktxCore {
             );
 
 
-        /*
-         * ----------------------------------------------------
-         * DECODER
-         * ----------------------------------------------------
-         */
-
         this.decoder =
             new WebBktxDecoder(
                 this.memory
             );
 
-
-        /*
-         * ----------------------------------------------------
-         * CPU
-         * ----------------------------------------------------
-         */
 
         this.cpu =
             new WebBktxCPU(
@@ -4351,12 +3642,6 @@ class WebBktxCore {
             this.decoder
         );
 
-
-        /*
-         * ----------------------------------------------------
-         * SYSTEM SERVICES
-         * ----------------------------------------------------
-         */
 
         this.thunks =
             new WebBktxThunks();
@@ -4378,17 +3663,7 @@ class WebBktxCore {
             );
 
 
-        /*
-         * ----------------------------------------------------
-         * OPTIONAL SUBSYSTEMS
-         * ----------------------------------------------------
-         */
-
         this.input =
-            null;
-
-
-        this.xinput =
             null;
 
 
@@ -4396,19 +3671,9 @@ class WebBktxCore {
             null;
 
 
-        this.xgraphics =
-            null;
-
-
         this.xbe =
             null;
 
-
-        /*
-         * ----------------------------------------------------
-         * STATE
-         * ----------------------------------------------------
-         */
 
         this.initialized =
             false;
@@ -4418,104 +3683,50 @@ class WebBktxCore {
             false;
 
 
-        this.lastError =
-            null;
+        /*
+         * CPU fault forwarding.
+         */
 
+        this.cpu.onFault =
+            error => {
+
+                if (this.debug) {
+
+                    console.error(
+                        "[WebBktx CPU FAULT]",
+                        error
+                    );
+                }
+            };
     }
 
 
-    async initialize() {
+    initialize() {
 
         if (
             this.initialized
         ) {
 
             return true;
-
         }
 
 
-        await this.kernel.initialize();
-
-
-        /*
-         * Register core services.
-         */
-
-        this.kernel.registerService(
-            "memory",
-            this.memory
-        );
-
-
-        this.kernel.registerService(
-            "cpu",
-            this.cpu
-        );
-
-
-        this.kernel.registerService(
-            "decoder",
-            this.decoder
-        );
-
-
-        this.kernel.registerService(
-            "thunks",
-            this.thunks
-        );
-
-
-        this.kernel.registerService(
-            "xapi",
-            this.xapi
-        );
-
-
-        this.kernel.registerService(
-            "xfile",
-            this.xfile
-        );
+        this.kernel.initialize();
 
 
         this.initialized =
             true;
 
 
-        if (
-            this.debug
-        ) {
+        if (this.debug) {
 
             console.log(
                 `[WebBktx Core ${this.version}] initialized`
             );
-
         }
 
 
         return true;
-
-    }
-
-
-    reset() {
-
-        this.stop();
-
-
-        this.cpu.reset();
-
-
-        this.memory.reset();
-
-
-        this.xbe =
-            null;
-
-
-        this.lastError =
-            null;
-
     }
 
 
@@ -4527,8 +3738,7 @@ class WebBktxCore {
             !this.initialized
         ) {
 
-            await this.initialize();
-
+            this.initialize();
         }
 
 
@@ -4540,13 +3750,6 @@ class WebBktxCore {
 
         await this.xbe.load();
 
-
-        /*
-         * The XBE is validated here.
-         *
-         * Actual Xbox image mapping remains a
-         * separate subsystem.
-         */
 
         return {
 
@@ -4561,44 +3764,29 @@ class WebBktxCore {
 
             status:
                 this.xbe.getStatus()
-
         };
-
     }
 
 
     step() {
 
         if (
-            !this.initialized
+            !this.xbe
         ) {
 
             throw new Error(
-                "WebBktx Core is not initialized."
+                "No XBE loaded."
             );
-
         }
 
 
         return this.cpu.step();
-
     }
 
 
     run(
         limit
     ) {
-
-        if (
-            !this.initialized
-        ) {
-
-            throw new Error(
-                "WebBktx Core is not initialized."
-            );
-
-        }
-
 
         this.running =
             true;
@@ -4614,9 +3802,7 @@ class WebBktxCore {
 
             this.running =
                 false;
-
         }
-
     }
 
 
@@ -4634,9 +3820,7 @@ class WebBktxCore {
         ) {
 
             this.graphics.stop();
-
         }
-
     }
 
 
@@ -4649,7 +3833,6 @@ class WebBktxCore {
         ) {
 
             this.graphics.stop();
-
         }
 
 
@@ -4659,18 +3842,7 @@ class WebBktxCore {
             );
 
 
-        this.xgraphics =
-            this.graphics;
-
-
-        this.kernel.registerService(
-            "graphics",
-            this.graphics
-        );
-
-
         return this.graphics;
-
     }
 
 
@@ -4681,7 +3853,6 @@ class WebBktxCore {
         ) {
 
             this.input.destroy();
-
         }
 
 
@@ -4692,18 +3863,23 @@ class WebBktxCore {
         this.input.initialize();
 
 
-        this.xinput =
-            this.input;
-
-
-        this.kernel.registerService(
-            "xinput",
-            this.input
-        );
-
-
         return this.input;
+    }
 
+
+    reset() {
+
+        this.stop();
+
+
+        this.memory.reset();
+
+
+        this.cpu.reset();
+
+
+        this.xbe =
+            null;
     }
 
 
@@ -4720,17 +3896,22 @@ class WebBktxCore {
             running:
                 this.running,
 
-            lastError:
-                this.lastError,
-
             memory:
                 this.memory.getStatus(),
 
             cpu:
                 this.cpu.getStatus(),
 
-            kernel:
-                this.kernel.getStatus(),
+            decoder:
+                {
+                    version:
+                        this.decoder.version
+                },
+
+            xbe:
+                this.xbe
+                    ? this.xbe.getStatus()
+                    : null,
 
             thunks:
                 this.thunks.getStatus(),
@@ -4741,204 +3922,53 @@ class WebBktxCore {
             xfile:
                 this.xfile.getStatus(),
 
-            xbe:
-                this.xbe
-                    ? this.xbe.getStatus()
-                    : null,
+            kernel:
+                this.kernel.getStatus(),
 
             input:
                 this.input
-                    ? this.input.getState()
+                    ? this.input.getStatus()
                     : null,
 
             graphics:
                 this.graphics
                     ? this.graphics.getStatus()
                     : null
-
         };
-
-    }
-
-
-    getState() {
-
-        return this.getStatus();
-
     }
 
 
     selfTest() {
 
-        const results = {
+        const cpu =
+            this.cpu.selfTest();
+
+
+        return {
+
+            version:
+                this.version,
 
             memory:
-                false,
+                true,
 
-            cpu:
-                null,
+            cpu,
 
             decoder:
-                false,
-
-            thunks:
-                false,
-
-            xapi:
-                false,
+                Boolean(
+                    this.decoder
+                ),
 
             kernel:
-                false,
+                this.kernel.initialized,
 
             passed:
-                false
-
+                Boolean(
+                    cpu.passed &&
+                    this.decoder &&
+                    this.kernel.initialized
+                )
         };
-
-
-        try {
-
-            /*
-             * MEMORY
-             */
-
-            const address =
-                0x2000;
-
-
-            this.memory.write32(
-                address,
-                0xDEADBEEF
-            );
-
-
-            results.memory =
-                this.memory.read32(
-                    address
-                ) ===
-                0xDEADBEEF;
-
-
-            /*
-             * CPU
-             */
-
-            results.cpu =
-                this.cpu.selfTest();
-
-
-            /*
-             * DECODER
-             */
-
-            this.memory.write8(
-                0,
-                0x90
-            );
-
-
-            const decoded =
-                this.decoder.decode(
-                    this.cpu,
-                    0
-                );
-
-
-            results.decoder =
-                Boolean(
-                    decoded &&
-                    decoded.opcode ===
-                    0x90 &&
-                    typeof decoded.execute ===
-                    "function"
-                );
-
-
-            /*
-             * THUNKS
-             */
-
-            const testThunkAddress =
-                0x1000;
-
-
-            this.thunks.register(
-                testThunkAddress,
-                value =>
-                    value + 1
-            );
-
-
-            results.thunks =
-                this.thunks.call(
-                    testThunkAddress,
-                    41
-                ) ===
-                42;
-
-
-            this.thunks.unregister(
-                testThunkAddress
-            );
-
-
-            /*
-             * XAPI
-             */
-
-            results.xapi =
-                this.xapi.call(
-                    "GetVersion"
-                ) ===
-                WEBBKTX_VERSION;
-
-
-            /*
-             * KERNEL
-             */
-
-            results.kernel =
-                this.kernel.initialized;
-
-
-            /*
-             * FINAL
-             */
-
-            results.passed =
-                Boolean(
-
-                    results.memory &&
-
-                    results.cpu &&
-                    results.cpu.passed &&
-
-                    results.decoder &&
-
-                    results.thunks &&
-
-                    results.xapi &&
-
-                    results.kernel
-
-                );
-
-        } catch (error) {
-
-            results.error =
-                error instanceof Error
-                    ? error.message
-                    : String(error);
-
-
-            results.passed =
-                false;
-
-        }
-
-
-        return results;
-
     }
 
 }
@@ -4948,237 +3978,83 @@ class WebBktxCore {
    GLOBAL EXPORTS
 ============================================================ */
 
-if (
-    typeof window !==
-    "undefined"
-) {
-
-    window.WebBktxMemory =
-        WebBktxMemory;
+window.WebBktxMemory =
+    WebBktxMemory;
 
 
-    window.WebBktxCPU =
-        WebBktxCPU;
+window.WebBktxCPU =
+    WebBktxCPU;
 
 
-    window.WebBktxCPUFlags =
-        WebBktxCPUFlags;
+window.WebBktxCPUFlags =
+    WebBktxCPUFlags;
 
 
-    window.WebBktxDecoder =
-        WebBktxDecoder;
+window.WebBktxDecoder =
+    WebBktxDecoder;
 
 
-    window.WebBktxXBE =
-        WebBktxXBE;
+window.WebBktxXBE =
+    WebBktxXBE;
 
 
-    window.WebBktxThunks =
-        WebBktxThunks;
+window.WebBktxThunks =
+    WebBktxThunks;
 
 
-    window.WebBktxXAPI =
-        WebBktxXAPI;
+window.WebBktxXAPI =
+    WebBktxXAPI;
 
 
-    window.WebBktxXFile =
-        WebBktxXFile;
+window.WebBktxXFile =
+    WebBktxXFile;
 
 
-    window.WebBktxKernel =
-        WebBktxKernel;
+window.WebBktxKernel =
+    WebBktxKernel;
 
 
-    window.WebBktxXInput =
-        WebBktxXInput;
+window.WebBktxXInput =
+    WebBktxXInput;
 
 
-    window.WebBktxInput =
-        WebBktxXInput;
+window.WebBktxInput =
+    WebBktxXInput;
 
 
-    window.WebBktxXGraphics =
-        WebBktxXGraphics;
+window.WebBktxXGraphics =
+    WebBktxXGraphics;
 
 
-    window.WebBktxGraphics =
-        WebBktxGraphics;
+window.WebBktxGraphics =
+    WebBktxGraphics;
 
 
-    window.WebBktxCore =
-        WebBktxCore;
+window.WebBktxCore =
+    WebBktxCore;
 
 
-    window.WebBktxVersion =
-        WEBBKTX_VERSION;
-
-
-    /*
-     * Unified runtime object.
-     */
-
-    window.WebBktx = {
-
-        version:
-            WEBBKTX_VERSION,
-
-        Memory:
-            WebBktxMemory,
-
-        CPU:
-            WebBktxCPU,
-
-        CPUFlags:
-            WebBktxCPUFlags,
-
-        Decoder:
-            WebBktxDecoder,
-
-        XBE:
-            WebBktxXBE,
-
-        Thunks:
-            WebBktxThunks,
-
-        XAPI:
-            WebBktxXAPI,
-
-        XFile:
-            WebBktxXFile,
-
-        Kernel:
-            WebBktxKernel,
-
-        XInput:
-            WebBktxXInput,
-
-        Input:
-            WebBktxXInput,
-
-        XGraphics:
-            WebBktxXGraphics,
-
-        Graphics:
-            WebBktxXGraphics,
-
-        Core:
-            WebBktxCore
-
-    };
-
-}
+window.WebBktxVersion =
+    WEBBKTX_VERSION;
 
 
 /* ============================================================
-   NODE / NON-BROWSER EXPORT
+   UNIFIED RUNTIME OBJECT
 ============================================================ */
 
-if (
-    typeof module !==
-    "undefined" &&
-    module.exports
-) {
+window.WebBktx = {
 
-    module.exports = {
-
+    version:
         WEBBKTX_VERSION,
 
+    Memory:
         WebBktxMemory,
 
+    CPU:
         WebBktxCPU,
 
+    CPUFlags:
         WebBktxCPUFlags,
 
-        WebBktxDecoder,
-
-        WebBktxXBE,
-
-        WebBktxThunks,
-
-        WebBktxXAPI,
-
-        WebBktxXFile,
-
-        WebBktxKernel,
-
-        WebBktxXInput,
-
-        WebBktxXGraphics,
-
-        WebBktxGraphics,
-
-        WebBktxCore
-
-    };
-
-}
-
-
-/* ============================================================
-   BOOT DIAGNOSTIC
-============================================================ */
-
-if (
-    typeof console !==
-    "undefined"
-) {
-
-    console.log(
-        `%cWebBktx Unified Runtime ${WEBBKTX_VERSION} loaded.`,
-        "font-weight:bold"
-    );
-
-
-    if (
-        typeof window !==
-        "undefined"
-    ) {
-
-        console.table({
-
-            memory:
-                typeof window.WebBktxMemory,
-
-            cpu:
-                typeof window.WebBktxCPU,
-
-            decoder:
-                typeof window.WebBktxDecoder,
-
-            xbe:
-                typeof window.WebBktxXBE,
-
-            thunks:
-                typeof window.WebBktxThunks,
-
-            xapi:
-                typeof window.WebBktxXAPI,
-
-            xfile:
-                typeof window.WebBktxXFile,
-
-            kernel:
-                typeof window.WebBktxKernel,
-
-            xinput:
-                typeof window.WebBktxXInput,
-
-            xgraphics:
-                typeof window.WebBktxXGraphics,
-
-            graphics:
-                typeof window.WebBktxGraphics,
-
-            core:
-                typeof window.WebBktxCore
-
-        });
-
-    }
-
-}
-
-
-/* ============================================================
-   END
-============================================================ */
+    Decoder:
+        WebBktxDecoder
