@@ -1,2000 +1,1359 @@
+"use strict";
+
 /*
  * ============================================================
  * WebBktx Application
+ * Version 1.3.0
  *
- * XBE Boot Frontend
+ * XBE BOOT FRONTEND
  *
- * Version: 1.3.0
- *
- * Handles:
- *  - runtime detection
- *  - loading screen
- *  - XBE selection
- *  - XBE parsing
- *  - XBE mapping
- *  - CPU boot
- *  - diagnostic execution
- *  - CPU test
- *  - About
- *  - emulator screen
- *
- * Audio intentionally disabled.
+ * Audio: DISABLED
  * ============================================================
  */
-
-"use strict";
-
-
-/* ============================================================
-   GLOBAL APPLICATION
-============================================================ */
 
 const WebBktxApp = {
 
     runtime: null,
 
-    file: null,
+    selectedFile: null,
 
-    xbe: null,
+    bootLoop: null,
 
-    boot: null,
+    fpsLoop: null,
 
-    running: false,
+    frameCounter: 0,
 
-    frameTimer: null,
+    lastFPS:
+        performance.now(),
 
-    instructionBudget:
-        5000,
+    fps: 0,
 
-    lastFrameTime:
-        0,
+    booted: false,
 
-    fps:
-        0,
-
-    frameCounter:
-        0,
-
-    fpsTimer:
-        0
-};
+    elements: {},
 
 
-/* ============================================================
-   DOM
-============================================================ */
+    /* ========================================================
+       INITIALIZE
+    ======================================================== */
 
-const $ = id =>
-    document.getElementById(id);
+    init() {
 
+        console.log(
+            "[WebBktx] Application initialization..."
+        );
 
-const loadingScreen =
-    $("loadingScreen");
+        this.runtime =
+            window.WebBktx &&
+            window.WebBktx.runtime
+                ? window.WebBktx.runtime
+                : null;
 
-const mainScreen =
-    $("mainScreen");
+        if (!this.runtime) {
 
-const cpuScreen =
-    $("cpuScreen");
-
-const aboutScreen =
-    $("aboutScreen");
-
-const gameScreen =
-    $("gameScreen");
-
-const gameFile =
-    $("gameFile");
-
-const startButton =
-    $("startButton");
-
-const cpuTestButton =
-    $("cpuTestButton");
-
-const aboutButton =
-    $("aboutButton");
-
-const cpuBackButton =
-    $("cpuBackButton");
-
-const aboutBackButton =
-    $("aboutBackButton");
-
-const backButton =
-    $("backButton");
-
-const progress =
-    $("progress");
-
-const loadingText =
-    $("loadingText");
-
-const message =
-    $("message");
-
-const fileInfo =
-    $("fileInfo");
-
-const canvas =
-    $("screen");
-
-const gameName =
-    $("gameName");
-
-const cpuOutput =
-    $("cpuOutput");
-
-
-/* ============================================================
-   UI HELPERS
-============================================================ */
-
-function showScreen(screen) {
-
-    [
-        loadingScreen,
-        mainScreen,
-        cpuScreen,
-        aboutScreen,
-        gameScreen
-    ].forEach(
-        element => {
-
-            if (!element) {
-                return;
-            }
-
-            element.classList.add(
-                "hidden"
+            this.showFatalError(
+                "Nie znaleziono WebBktx runtime."
             );
+
+            return;
         }
-    );
 
+        this.cacheElements();
 
-    if (screen) {
+        this.bindEvents();
 
-        screen.classList.remove(
-            "hidden"
-        );
-    }
-}
+        this.initializeRuntime();
 
-
-function setMessage(
-    text,
-    type = "normal"
-) {
-
-    if (!message) {
-        return;
-    }
-
-
-    message.textContent =
-        text;
-
-
-    message.dataset.type =
-        type;
-}
-
-
-function setProgress(
-    value
-) {
-
-    if (!progress) {
-        return;
-    }
-
-
-    progress.style.width =
-        `${Math.max(
-            0,
-            Math.min(
-                100,
-                value
-            )
-        )}%`;
-}
-
-
-function setLoadingText(text) {
-
-    if (loadingText) {
-        loadingText.textContent =
-            text;
-    }
-}
-
-
-function setModule(
-    name,
-    status
-) {
-
-    const element =
-        document.querySelector(
-            `.module[data-module="${name}"]`
-        );
-
-
-    if (!element) {
-        return;
-    }
-
-
-    const strong =
-        element.querySelector(
-            "strong"
-        );
-
-
-    if (strong) {
-
-        strong.textContent =
-            status;
-    }
-}
-
-
-function sleep(ms) {
-
-    return new Promise(
-        resolve =>
-            setTimeout(
-                resolve,
-                ms
-            )
-    );
-}
-
-
-/* ============================================================
-   RUNTIME DETECTION
-============================================================ */
-
-function detectRuntime() {
-
-    if (
-        typeof window ===
-        "undefined"
-    ) {
-
-        throw new Error(
-            "Window is unavailable."
-        );
-    }
-
-
-    if (
-        !window.WebBktx
-    ) {
-
-        throw new Error(
-            "Nie znaleziono window.WebBktx."
-        );
-    }
-
-
-    if (
-        !window.WebBktxRuntime
-    ) {
-
-        throw new Error(
-            "Nie znaleziono window.WebBktxRuntime."
-        );
-    }
-
-
-    WebBktxApp.runtime =
-        window.WebBktxRuntime;
-
-
-    console.log(
-        "[WebBktx] Runtime detected:",
-        window.WebBktx
-    );
-
-
-    return true;
-}
-
-
-/* ============================================================
-   RUNTIME STATUS
-============================================================ */
-
-function runtimeStatus() {
-
-    if (
-        !WebBktxApp.runtime
-    ) {
-        return {
-            runtime: "undefined"
-        };
-    }
-
-
-    const status =
-        WebBktxApp.runtime.getStatus();
-
-
-    return {
-
-        runtime:
-            status.version ||
-            "undefined",
-
-        memory:
-            status.memory
-                ? status.memory.megabytes + " MB"
-                : "undefined",
-
-        cpu:
-            status.cpu
-                ? "available"
-                : "undefined",
-
-        decoder:
-            status.decoder
-                ? "available"
-                : "undefined",
-
-        xbe:
-            status.xbe
-                ? "loaded"
-                : "undefined",
-
-        kernel:
-            status.kernel
-                ? (
-                    status.kernel.initialized
-                        ? "ready"
-                        : "not initialized"
-                )
-                : "undefined",
-
-        thunks:
-            status.thunks
-                ? "available"
-                : "undefined",
-
-        xapi:
-            status.xapi
-                ? "available"
-                : "undefined",
-
-        xfile:
-            status.xfile
-                ? "available"
-                : "undefined",
-
-        xinput:
-            status.input
-                ? "available"
-                : "undefined",
-
-        xgraphics:
-            status.graphics
-                ? "available"
-                : "undefined"
-    };
-}
-
-
-/* ============================================================
-   LOADING SEQUENCE
-============================================================ */
-
-async function loadingSequence() {
-
-    try {
-
-        setProgress(5);
-
-        setLoadingText(
-            "Checking local runtime..."
-        );
-
-
-        setModule(
-            "cache",
-            "OK"
-        );
-
-
-        await sleep(150);
-
-
-        setProgress(25);
-
-        setLoadingText(
-            "Loading WebBktx Core..."
-        );
-
-
-        setModule(
-            "core",
-            "OK"
-        );
-
-
-        await sleep(150);
-
-
-        setProgress(50);
-
-        setLoadingText(
-            "Initializing graphics system..."
-        );
-
-
-        setModule(
-            "graphics",
-            "OK"
-        );
-
-
-        await sleep(150);
-
-
-        setProgress(75);
-
-        setLoadingText(
-            "Initializing controller system..."
-        );
-
-
-        setModule(
-            "input",
-            "OK"
-        );
-
-
-        await sleep(150);
-
-
-        detectRuntime();
-
-
-        setProgress(100);
-
-        setLoadingText(
-            "WebBktx ready."
-        );
-
-
-        await sleep(300);
-
-
-        showScreen(
-            mainScreen
-        );
-
+        this.startFPSCounter();
 
         console.log(
             "[WebBktx] Application ready."
         );
+    },
 
 
-    } catch (error) {
+    /* ========================================================
+       ELEMENTS
+    ======================================================== */
 
-        setProgress(100);
+    cacheElements() {
 
-        setLoadingText(
-            "CORE ERROR"
-        );
+        const ids = [
 
+            "loadingScreen",
+            "mainScreen",
+            "cpuScreen",
+            "aboutScreen",
+            "gameScreen",
 
-        console.error(
-            "[WebBktx] Runtime error:",
-            error
-        );
+            "progress",
+            "loadingText",
 
+            "gameFile",
+            "fileInfo",
+            "startButton",
+            "message",
 
-        setMessage(
-            error.message,
-            "error"
-        );
-    }
-}
+            "gameName",
 
+            "screen",
 
-/* ============================================================
-   FILE SELECTION
-============================================================ */
+            "cpuOutput",
 
-function handleFile(file) {
+            "cpuTestButton",
+            "cpuBackButton",
 
-    if (!file) {
-        return;
-    }
+            "aboutButton",
+            "aboutBackButton",
 
+            "backButton"
+        ];
 
-    WebBktxApp.file =
-        file;
+        for (const id of ids) {
 
-
-    const sizeMB =
-        (
-            file.size /
-            1024 /
-            1024
-        ).toFixed(2);
-
-
-    if (fileInfo) {
-
-        const name =
-            fileInfo.querySelector(
-                ".file-name"
-            );
-
-
-        if (name) {
-
-            name.textContent =
-                `${file.name} • ${sizeMB} MB`;
+            this.elements[id] =
+                document.getElementById(id);
         }
-    }
+    },
 
 
-    if (startButton) {
+    /* ========================================================
+       EVENTS
+    ======================================================== */
 
-        startButton.disabled =
-            false;
-    }
+    bindEvents() {
 
-
-    setMessage(
-        `XBE selected: ${file.name}`,
-        "success"
-    );
+        const e = this.elements;
 
 
-    console.log(
-        "[WebBktx] XBE selected:",
-        {
-            name: file.name,
-            size: file.size,
-            type: file.type
-        }
-    );
-}
+        if (e.gameFile) {
 
-
-/* ============================================================
-   XBE LOAD
-============================================================ */
-
-async function loadXBE() {
-
-    if (
-        !WebBktxApp.file
-    ) {
-
-        throw new Error(
-            "Najpierw wybierz plik XBE."
-        );
-    }
-
-
-    if (
-        !WebBktxApp.runtime
-    ) {
-
-        detectRuntime();
-    }
-
-
-    setMessage(
-        "Ładowanie XBE...",
-        "normal"
-    );
-
-
-    startButton.disabled =
-        true;
-
-
-    try {
-
-        const result =
-            await WebBktxApp.runtime.loadGame(
-                WebBktxApp.file
-            );
-
-
-        console.log(
-            "[WebBktx] XBE LOAD RESULT:",
-            result
-        );
-
-
-        if (
-            !result ||
-            !result.success
-        ) {
-
-            throw new Error(
-                "XBE loading failed."
+            e.gameFile.addEventListener(
+                "change",
+                event =>
+                    this.handleFile(
+                        event.target.files[0]
+                    )
             );
         }
 
 
-        WebBktxApp.xbe =
-            result.xbe;
+        if (e.startButton) {
 
-
-        console.log(
-            "[WebBktx] XBE STATUS:",
-            result.status
-        );
-
-
-        setMessage(
-            `XBE loaded: ${
-                result.status.name
-            }`,
-            "success"
-        );
-
-
-        return result;
-
-    } finally {
-
-        startButton.disabled =
-            false;
-    }
-}
-
-
-/* ============================================================
-   FORMAT DIAGNOSTIC
-============================================================ */
-
-function formatDiagnostic(
-    status
-) {
-
-    if (!status) {
-        return "No status.";
-    }
-
-
-    const lines = [];
-
-
-    lines.push(
-        "================================================"
-    );
-
-    lines.push(
-        "WebBktx XBE BOOT DIAGNOSTIC"
-    );
-
-    lines.push(
-        "================================================"
-    );
-
-    lines.push(
-        ""
-    );
-
-
-    lines.push(
-        `Runtime : ${status.version}`
-    );
-
-    lines.push(
-        `Boot    : ${status.bootState}`
-    );
-
-    lines.push(
-        `Running : ${status.running}`
-    );
-
-    lines.push(
-        ""
-    );
-
-
-    if (status.xbe) {
-
-        lines.push(
-            "XBE"
-        );
-
-        lines.push(
-            "------------------------------------------------"
-        );
-
-        lines.push(
-            `Name          : ${status.xbe.name}`
-        );
-
-        lines.push(
-            `Size          : ${status.xbe.size} bytes`
-        );
-
-        lines.push(
-            `Image Base    : 0x${status.xbe.imageBase.toString(16).toUpperCase()}`
-        );
-
-        lines.push(
-            `Entry Raw     : 0x${status.xbe.entryPointRaw.toString(16).toUpperCase()}`
-        );
-
-        lines.push(
-            `Entry Point   : ${status.xbe.entryPointHex}`
-        );
-
-        lines.push(
-            `Boot Ready    : ${status.xbe.bootReady}`
-        );
-
-        lines.push(
-            `Sections      : ${status.xbe.sections.length}`
-        );
-
-        lines.push(
-            ""
-        );
-
-
-        lines.push(
-            "XBE SECTIONS"
-        );
-
-        lines.push(
-            "------------------------------------------------"
-        );
-
-
-        for (
-            const section of status.xbe.sections
-        ) {
-
-            lines.push(
-                `#${section.index} ${
-                    section.name || "(unnamed)"
-                }`
-            );
-
-            lines.push(
-                `  VA       : ${hexLocal(section.virtualAddress)}`
-            );
-
-            lines.push(
-                `  VSIZE    : ${hexLocal(section.virtualSize)}`
-            );
-
-            lines.push(
-                `  RAW      : ${hexLocal(section.rawAddress)}`
-            );
-
-            lines.push(
-                `  RAWSIZE  : ${hexLocal(section.rawSize)}`
-            );
-
-            lines.push(
-                ""
+            e.startButton.addEventListener(
+                "click",
+                () =>
+                    this.startGame()
             );
         }
-    }
 
 
-    lines.push(
-        "CPU"
-    );
+        if (e.cpuTestButton) {
 
-    lines.push(
-        "------------------------------------------------"
-    );
-
-
-    if (status.cpu) {
-
-        const r =
-            status.cpu.registers;
-
-
-        lines.push(
-            `EIP         : ${hexLocal(r.EIP)}`
-        );
-
-        lines.push(
-            `ESP         : ${hexLocal(r.ESP)}`
-        );
-
-        lines.push(
-            `EAX         : ${hexLocal(r.EAX)}`
-        );
-
-        lines.push(
-            `EBX         : ${hexLocal(r.EBX)}`
-        );
-
-        lines.push(
-            `ECX         : ${hexLocal(r.ECX)}`
-        );
-
-        lines.push(
-            `EDX         : ${hexLocal(r.EDX)}`
-        );
-
-        lines.push(
-            `ESI         : ${hexLocal(r.ESI)}`
-        );
-
-        lines.push(
-            `EDI         : ${hexLocal(r.EDI)}`
-        );
-
-        lines.push(
-            `EBP         : ${hexLocal(r.EBP)}`
-        );
-
-        lines.push(
-            `EFLAGS      : ${hexLocal(r.EFLAGS)}`
-        );
-
-        lines.push(
-            `Instructions: ${status.cpu.instructionsExecuted}`
-        );
-
-        lines.push(
-            `Cycles      : ${status.cpu.cycles}`
-        );
-
-        lines.push(
-            `Halted      : ${status.cpu.halted}`
-        );
-
-        lines.push(
-            `Faulted     : ${status.cpu.faulted}`
-        );
-
-
-        if (status.cpu.error) {
-
-            lines.push(
-                `CPU ERROR   : ${status.cpu.error}`
+            e.cpuTestButton.addEventListener(
+                "click",
+                () =>
+                    this.showCPU()
             );
         }
-    }
 
 
-    lines.push(
-        ""
-    );
+        if (e.cpuBackButton) {
 
-    lines.push(
-        "================================================"
-    );
-
-
-    return lines.join("\n");
-}
+            e.cpuBackButton.addEventListener(
+                "click",
+                () =>
+                    this.showMain()
+            );
+        }
 
 
-function hexLocal(
-    value
-) {
+        if (e.aboutButton) {
 
-    return (
-        "0x" +
-        (
-            Number(value) >>> 0
-        )
-        .toString(16)
-        .toUpperCase()
-        .padStart(8, "0")
-    );
-}
+            e.aboutButton.addEventListener(
+                "click",
+                () =>
+                    this.showAbout()
+            );
+        }
 
 
-/* ============================================================
-   SHOW BOOT SCREEN
-============================================================ */
+        if (e.aboutBackButton) {
 
-function showBootScreen() {
+            e.aboutBackButton.addEventListener(
+                "click",
+                () =>
+                    this.showMain()
+            );
+        }
 
-    showScreen(
-        gameScreen
-    );
+
+        if (e.backButton) {
+
+            e.backButton.addEventListener(
+                "click",
+                () =>
+                    this.stopGame()
+            );
+        }
+    },
 
 
-    if (
-        canvas &&
-        WebBktxApp.runtime
-    ) {
+    /* ========================================================
+       RUNTIME
+    ======================================================== */
+
+    initializeRuntime() {
 
         try {
 
-            WebBktxApp.runtime.attachGraphics(
-                canvas
+            this.runtime.initialize();
+
+            this.log(
+                "Runtime initialized."
+            );
+
+            this.runLoadingSequence();
+
+        } catch (error) {
+
+            console.error(error);
+
+            this.showFatalError(
+                error.message
+            );
+        }
+    },
+
+
+    /* ========================================================
+       LOADING SCREEN
+    ======================================================== */
+
+    runLoadingSequence() {
+
+        const modules = [
+
+            [
+                "cache",
+                "LOCAL STORAGE"
+            ],
+
+            [
+                "core",
+                "WEBBKTX CORE"
+            ],
+
+            [
+                "graphics",
+                "GRAPHICS SYSTEM"
+            ],
+
+            [
+                "input",
+                "CONTROLLER SYSTEM"
+            ]
+        ];
+
+        let index = 0;
+
+        const next = () => {
+
+            if (index >= modules.length) {
+
+                this.setProgress(
+                    100,
+                    "System ready."
+                );
+
+                setTimeout(
+                    () =>
+                        this.showMain(),
+                    350
+                );
+
+                return;
+            }
+
+            const [id, name] =
+                modules[index];
+
+            const module =
+                document.querySelector(
+                    `.module[data-module="${id}"]`
+                );
+
+            if (module) {
+
+                const status =
+                    module.querySelector(
+                        "strong"
+                    );
+
+                if (status) {
+                    status.textContent =
+                        "OK";
+                }
+            }
+
+            const progress =
+                Math.round(
+                    (
+                        (index + 1) /
+                        modules.length
+                    ) * 100
+                );
+
+            this.setProgress(
+                progress,
+                `${name} ready.`
+            );
+
+            index++;
+
+            setTimeout(
+                next,
+                250
+            );
+        };
+
+        next();
+    },
+
+
+    setProgress(percent, text) {
+
+        if (this.elements.progress) {
+
+            this.elements.progress.style.width =
+                `${percent}%`;
+        }
+
+        if (this.elements.loadingText) {
+
+            this.elements.loadingText.textContent =
+                text;
+        }
+    },
+
+
+    /* ========================================================
+       SCREENS
+    ======================================================== */
+
+    hideAllScreens() {
+
+        document
+            .querySelectorAll(".screen")
+            .forEach(
+                screen =>
+                    screen.classList.add(
+                        "hidden"
+                    )
+            );
+    },
+
+
+    showMain() {
+
+        this.stopBootLoop();
+
+        this.hideAllScreens();
+
+        this.elements.mainScreen
+            ?.classList.remove(
+                "hidden"
+            );
+    },
+
+
+    showCPU() {
+
+        this.stopBootLoop();
+
+        this.hideAllScreens();
+
+        this.elements.cpuScreen
+            ?.classList.remove(
+                "hidden"
+            );
+
+        this.runCPUDiagnostic();
+    },
+
+
+    showAbout() {
+
+        this.stopBootLoop();
+
+        this.hideAllScreens();
+
+        this.elements.aboutScreen
+            ?.classList.remove(
+                "hidden"
+            );
+    },
+
+
+    showGame() {
+
+        this.hideAllScreens();
+
+        this.elements.gameScreen
+            ?.classList.remove(
+                "hidden"
+            );
+    },
+
+
+    /* ========================================================
+       FILE
+    ======================================================== */
+
+    async handleFile(file) {
+
+        if (!file) {
+            return;
+        }
+
+        this.selectedFile = file;
+
+        const name =
+            file.name || "unknown.xbe";
+
+        const size =
+            file.size || 0;
+
+        this.updateFileInfo(
+            `${name} • ${this.formatBytes(size)}`
+        );
+
+        this.setMessage(
+            "Loading XBE..."
+        );
+
+        try {
+
+            const result =
+                await this.runtime.loadGame(
+                    file
+                );
+
+            console.log(
+                "[WebBktx] XBE LOAD RESULT:",
+                result
+            );
+
+            console.log(
+                "[WebBktx] XBE STATUS:",
+                result.status
+            );
+
+            this.updateFileInfo(
+                `${name} • ${this.formatBytes(size)} • XBE OK`
+            );
+
+            this.setMessage(
+                "XBE loaded. Ready to boot."
+            );
+
+            if (this.elements.startButton) {
+
+                this.elements.startButton.disabled =
+                    false;
+            }
+
+            /*
+             * Show useful XBE data.
+             */
+
+            this.showXBEInfo(
+                result.status
             );
 
         } catch (error) {
 
-            console.warn(
-                "[WebBktx] Graphics initialization:",
+            console.error(
+                "[WebBktx] XBE LOAD ERROR:",
+                error
+            );
+
+            this.setMessage(
+                `XBE ERROR: ${error.message}`,
+                true
+            );
+
+            if (this.elements.startButton) {
+                this.elements.startButton.disabled =
+                    true;
+            }
+        }
+    },
+
+
+    updateFileInfo(text) {
+
+        const element =
+            this.elements.fileInfo;
+
+        if (!element) {
+            return;
+        }
+
+        const name =
+            element.querySelector(
+                ".file-name"
+            );
+
+        if (name) {
+            name.textContent =
+                text;
+        }
+    },
+
+
+    showXBEInfo(status) {
+
+        console.log(
+            "[WebBktx] XBE HEADER:",
+            status.header
+        );
+
+        console.log(
+            "[WebBktx] XBE SECTIONS:",
+            status.sections
+        );
+
+        console.log(
+            "[WebBktx] XBE ENTRY:",
+            this.hex(
+                status.entryPoint
+            )
+        );
+    },
+
+
+    /* ========================================================
+       START GAME
+    ======================================================== */
+
+    async startGame() {
+
+        if (!this.selectedFile) {
+
+            this.setMessage(
+                "Select an XBE first.",
+                true
+            );
+
+            return;
+        }
+
+        this.showGame();
+
+        this.booted = false;
+
+        this.frameCounter = 0;
+
+        if (this.elements.gameName) {
+
+            this.elements.gameName.textContent =
+                this.selectedFile.name
+                    .replace(
+                        /\.xbe$/i,
+                        ""
+                    )
+                    .toUpperCase();
+        }
+
+        try {
+
+            this.prepareGraphics();
+
+            this.runtime.attachInput();
+
+            /*
+             * AUDIO IS INTENTIONALLY DISABLED.
+             */
+
+            console.log(
+                "[WebBktx] AUDIO: DISABLED"
+            );
+
+            const boot =
+                this.runtime.bootXBE();
+
+            console.log(
+                "[WebBktx] BOOT XBE:",
+                boot
+            );
+
+            this.booted = true;
+
+            this.renderBootScreen(
+                "XBE BOOTING",
+                [
+                    `ENTRY: ${this.hex(boot.entryPoint)}`,
+                    `MAPPED: ${this.formatBytes(boot.mapping.mappedBytes)}`,
+                    "AUDIO: DISABLED",
+                    "CPU: STARTING"
+                ]
+            );
+
+            this.startBootLoop();
+
+        } catch (error) {
+
+            console.error(
+                "[WebBktx] BOOT ERROR:",
+                error
+            );
+
+            this.renderBootError(
                 error
             );
         }
-    }
+    },
 
 
-    if (
-        WebBktxApp.file
-    ) {
+    /* ========================================================
+       GRAPHICS
+    ======================================================== */
 
-        gameName.textContent =
-            WebBktxApp.file.name;
-    }
-}
+    prepareGraphics() {
 
+        const canvas =
+            this.elements.screen;
 
-/* ============================================================
-   DRAW BOOT SCREEN
-============================================================ */
+        if (!canvas) {
 
-function drawBootScreen() {
-
-    if (!canvas) {
-        return;
-    }
-
-
-    const ctx =
-        canvas.getContext(
-            "2d"
-        );
-
-
-    if (!ctx) {
-        return;
-    }
-
-
-    const width =
-        canvas.width;
-
-    const height =
-        canvas.height;
-
-
-    ctx.fillStyle =
-        "#050708";
-
-
-    ctx.fillRect(
-        0,
-        0,
-        width,
-        height
-    );
-
-
-    ctx.fillStyle =
-        "#107C10";
-
-
-    ctx.fillRect(
-        0,
-        0,
-        width,
-        8
-    );
-
-
-    ctx.fillStyle =
-        "#FFFFFF";
-
-
-    ctx.font =
-        "bold 42px monospace";
-
-
-    ctx.fillText(
-        "WebBktx",
-        60,
-        90
-    );
-
-
-    ctx.font =
-        "24px monospace";
-
-
-    ctx.fillStyle =
-        "#AAAAAA";
-
-
-    ctx.fillText(
-        "XBE BOOT",
-        60,
-        135
-    );
-
-
-    const runtime =
-        WebBktxApp.runtime;
-
-
-    if (!runtime) {
-        return;
-    }
-
-
-    const status =
-        runtime.getStatus();
-
-
-    let y = 200;
-
-
-    const line =
-        (
-            label,
-            value
-        ) => {
-
-            ctx.fillStyle =
-                "#777777";
-
-            ctx.fillText(
-                label,
-                70,
-                y
+            throw new Error(
+                "Canvas #screen not found."
             );
-
-
-            ctx.fillStyle =
-                "#FFFFFF";
-
-            ctx.fillText(
-                String(value),
-                320,
-                y
-            );
-
-
-            y += 36;
-        };
-
-
-    line(
-        "BOOT",
-        status.bootState
-    );
-
-
-    if (status.xbe) {
-
-        line(
-            "XBE",
-            status.xbe.name
-        );
-
-        line(
-            "SIZE",
-            `${status.xbe.size} bytes`
-        );
-
-        line(
-            "BASE",
-            status.xbe.entryPointHex
-        );
-
-        line(
-            "ENTRY",
-            status.xbe.entryPointHex
-        );
-    }
-
-
-    if (status.cpu) {
-
-        line(
-            "CPU EIP",
-            hexLocal(
-                status.cpu.registers.EIP
-            )
-        );
-
-        line(
-            "CPU ESP",
-            hexLocal(
-                status.cpu.registers.ESP
-            )
-        );
-
-        line(
-            "INSTRUCTIONS",
-            status.cpu.instructionsExecuted
-        );
-
-        line(
-            "CPU STATE",
-            status.cpu.faulted
-                ? "FAULT"
-                : status.cpu.halted
-                    ? "HALTED"
-                    : status.cpu.running
-                        ? "RUNNING"
-                        : "READY"
-        );
-
-
-        if (status.cpu.error) {
-
-            y += 15;
-
-
-            ctx.fillStyle =
-                "#FF5555";
-
-
-            ctx.font =
-                "18px monospace";
-
-
-            ctx.fillText(
-                "CPU ERROR:",
-                70,
-                y
-            );
-
-
-            y += 30;
-
-
-            const error =
-                String(
-                    status.cpu.error
-                );
-
-
-            const maxChars =
-                90;
-
-
-            for (
-                let i = 0;
-                i < error.length;
-                i += maxChars
-            ) {
-
-                ctx.fillText(
-                    error.substring(
-                        i,
-                        i + maxChars
-                    ),
-                    70,
-                    y
-                );
-
-                y += 25;
-            }
         }
-    }
+
+        this.runtime.attachGraphics(
+            canvas
+        );
+
+        canvas.width = 1280;
+        canvas.height = 720;
+    },
 
 
-    ctx.fillStyle =
-        "#555555";
+    /* ========================================================
+       BOOT LOOP
+    ======================================================== */
 
+    startBootLoop() {
 
-    ctx.font =
-        "16px monospace";
+        this.stopBootLoop();
 
+        let last =
+            performance.now();
 
-    ctx.fillText(
-        "AUDIO: DISABLED",
-        70,
-        height - 65
-    );
+        const frame = now => {
 
+            if (!this.booted) {
+                return;
+            }
 
-    ctx.fillText(
-        "VIDEO: BOOT DIAGNOSTIC",
-        300,
-        height - 65
-    );
+            const delta =
+                now - last;
 
+            last = now;
 
-    ctx.fillText(
-        "XBE RUNTIME: EXPERIMENTAL",
-        650,
-        height - 65
-    );
-}
+            /*
+             * Around 10 FPS minimum target.
+             *
+             * We do not run one enormous CPU loop,
+             * because that would freeze the browser.
+             */
 
+            try {
 
-/* ============================================================
-   BOOT LOOP
-============================================================ */
+                const result =
+                    this.runtime.runFrame(
+                        5000
+                    );
 
-function startBootLoop() {
+                this.updateEmulatorScreen(
+                    result,
+                    delta
+                );
 
-    if (
-        WebBktxApp.frameTimer
-    ) {
+            } catch (error) {
 
-        return;
-    }
+                console.error(
+                    "[WebBktx] FRAME ERROR:",
+                    error
+                );
 
+                this.booted = false;
 
-    WebBktxApp.running =
-        true;
-
-
-    WebBktxApp.lastFrameTime =
-        performance.now();
-
-
-    WebBktxApp.frameCounter =
-        0;
-
-
-    WebBktxApp.fpsTimer =
-        performance.now();
-
-
-    const loop =
-        () => {
-
-            if (
-                !WebBktxApp.running
-            ) {
-
-                WebBktxApp.frameTimer =
-                    null;
+                this.renderBootError(
+                    error
+                );
 
                 return;
             }
 
-
-            try {
-
-                const now =
-                    performance.now();
-
-
-                /*
-                 * Execute a small batch instead
-                 * of blocking the browser for too long.
-                 *
-                 * Target is intentionally low.
-                 */
-
-                const result =
-                    WebBktxApp.runtime.runFrame(
-                        WebBktxApp.instructionBudget
-                    );
-
-
-                WebBktxApp.frameCounter++;
-
-
-                if (
-                    now -
-                    WebBktxApp.fpsTimer >=
-                    1000
-                ) {
-
-                    WebBktxApp.fps =
-                        WebBktxApp.frameCounter;
-
-                    WebBktxApp.frameCounter =
-                        0;
-
-                    WebBktxApp.fpsTimer =
-                        now;
-                }
-
-
-                drawBootScreen();
-
-
-                /*
-                 * Stop after fault/halt.
-                 */
-
-                if (
-                    result &&
-                    (
-                        result.faulted ||
-                        result.halted
-                    )
-                ) {
-
-                    WebBktxApp.running =
-                        false;
-
-
-                    console.warn(
-                        "[WebBktx] CPU stopped:",
-                        result
-                    );
-                }
-
-
-            } catch (error) {
-
-                WebBktxApp.running =
-                    false;
-
-
-                console.error(
-                    "[WebBktx] BOOT LOOP ERROR:",
-                    error
+            this.bootLoop =
+                requestAnimationFrame(
+                    frame
                 );
-
-
-                drawBootScreen();
-            }
-
-
-            if (
-                WebBktxApp.running
-            ) {
-
-                WebBktxApp.frameTimer =
-                    requestAnimationFrame(
-                        loop
-                    );
-            }
         };
 
+        this.bootLoop =
+            requestAnimationFrame(
+                frame
+            );
+    },
 
-    WebBktxApp.frameTimer =
+
+    stopBootLoop() {
+
+        if (this.bootLoop !== null) {
+
+            cancelAnimationFrame(
+                this.bootLoop
+            );
+
+            this.bootLoop = null;
+        }
+    },
+
+
+    /* ========================================================
+       FRAME
+    ======================================================== */
+
+    updateEmulatorScreen(
+        result,
+        delta
+    ) {
+
+        const canvas =
+            this.elements.screen;
+
+        if (!canvas) {
+            return;
+        }
+
+        const ctx =
+            canvas.getContext(
+                "2d"
+            );
+
+        if (!ctx) {
+            return;
+        }
+
+        ctx.fillStyle =
+            "#050708";
+
+        ctx.fillRect(
+            0,
+            0,
+            canvas.width,
+            canvas.height
+        );
+
+        ctx.fillStyle =
+            "#00ff88";
+
+        ctx.font =
+            "bold 34px monospace";
+
+        ctx.fillText(
+            "WebBktx",
+            60,
+            80
+        );
+
+        ctx.font =
+            "20px monospace";
+
+        ctx.fillText(
+            "XBE BOOT RUNTIME",
+            60,
+            120
+        );
+
+        ctx.fillStyle =
+            "#ffffff";
+
+        ctx.fillText(
+            `STATE: ${result.state}`,
+            60,
+            180
+        );
+
+        const cpu =
+            result.cpu;
+
+        if (cpu) {
+
+            ctx.fillText(
+                `EIP: ${this.hex(
+                    cpu.registers.EIP
+                )}`,
+                60,
+                220
+            );
+
+            ctx.fillText(
+                `EAX: ${this.hex(
+                    cpu.registers.EAX
+                )}`,
+                60,
+                250
+            );
+
+            ctx.fillText(
+                `EBX: ${this.hex(
+                    cpu.registers.EBX
+                )}`,
+                60,
+                280
+            );
+
+            ctx.fillText(
+                `ESP: ${this.hex(
+                    cpu.registers.ESP
+                )}`,
+                60,
+                310
+            );
+
+            ctx.fillText(
+                `Instructions: ${cpu.instructionsExecuted}`,
+                60,
+                350
+            );
+
+            ctx.fillText(
+                `Cycles: ${cpu.cycles}`,
+                60,
+                380
+            );
+        }
+
+        ctx.fillStyle =
+            "#aaaaaa";
+
+        ctx.fillText(
+            "AUDIO: DISABLED",
+            60,
+            440
+        );
+
+        ctx.fillText(
+            "GPU: BOOT MODE",
+            60,
+            470
+        );
+
+        if (
+            result.last &&
+            result.last.mnemonic
+        ) {
+
+            ctx.fillText(
+                `LAST: ${result.last.mnemonic}`,
+                60,
+                520
+            );
+        }
+
+        /*
+         * CPU fault.
+         */
+
+        if (
+            result.state ===
+            "CPU FAULT"
+        ) {
+
+            ctx.fillStyle =
+                "#ff4444";
+
+            ctx.font =
+                "18px monospace";
+
+            ctx.fillText(
+                "CPU FAULT",
+                60,
+                570
+            );
+
+            ctx.fillText(
+                result.error ||
+                "Unknown CPU error",
+                60,
+                600
+            );
+
+            /*
+             * Stop automatically on fault.
+             */
+
+            this.booted = false;
+
+            return;
+        }
+
+        /*
+         * HLT.
+         */
+
+        if (
+            result.state ===
+            "HALTED"
+        ) {
+
+            this.booted = false;
+        }
+    },
+
+
+    /* ========================================================
+       BOOT SCREEN
+    ======================================================== */
+
+    renderBootScreen(
+        title,
+        lines
+    ) {
+
+        const canvas =
+            this.elements.screen;
+
+        if (!canvas) {
+            return;
+        }
+
+        const ctx =
+            canvas.getContext(
+                "2d"
+            );
+
+        ctx.fillStyle =
+            "#050708";
+
+        ctx.fillRect(
+            0,
+            0,
+            canvas.width,
+            canvas.height
+        );
+
+        ctx.fillStyle =
+            "#00ff88";
+
+        ctx.font =
+            "bold 40px monospace";
+
+        ctx.fillText(
+            "WebBktx",
+            60,
+            80
+        );
+
+        ctx.fillStyle =
+            "#ffffff";
+
+        ctx.font =
+            "26px monospace";
+
+        ctx.fillText(
+            title,
+            60,
+            140
+        );
+
+        ctx.font =
+            "18px monospace";
+
+        lines.forEach(
+            (line, index) => {
+
+                ctx.fillText(
+                    line,
+                    60,
+                    200 +
+                    index * 35
+                );
+            }
+        );
+    },
+
+
+    renderBootError(error) {
+
+        this.stopBootLoop();
+
+        const canvas =
+            this.elements.screen;
+
+        if (!canvas) {
+            return;
+        }
+
+        const ctx =
+            canvas.getContext(
+                "2d"
+            );
+
+        ctx.fillStyle =
+            "#050708";
+
+        ctx.fillRect(
+            0,
+            0,
+            canvas.width,
+            canvas.height
+        );
+
+        ctx.fillStyle =
+            "#ff3333";
+
+        ctx.font =
+            "bold 32px monospace";
+
+        ctx.fillText(
+            "WEBBKTX CPU FAULT",
+            50,
+            80
+        );
+
+        ctx.fillStyle =
+            "#ffffff";
+
+        ctx.font =
+            "18px monospace";
+
+        ctx.fillText(
+            error.message ||
+            String(error),
+            50,
+            130
+        );
+
+        const status =
+            this.runtime.getStatus();
+
+        if (
+            status.cpu &&
+            status.cpu.registers
+        ) {
+
+            ctx.fillText(
+                `EIP: ${this.hex(
+                    status.cpu.registers.EIP
+                )}`,
+                50,
+                190
+            );
+
+            ctx.fillText(
+                `EAX: ${this.hex(
+                    status.cpu.registers.EAX
+                )}`,
+                50,
+                220
+            );
+
+            ctx.fillText(
+                `ESP: ${this.hex(
+                    status.cpu.registers.ESP
+                )}`,
+                50,
+                250
+            );
+        }
+
+        ctx.fillStyle =
+            "#aaaaaa";
+
+        ctx.fillText(
+            "Audio: disabled",
+            50,
+            310
+        );
+
+        ctx.fillText(
+            "XBE pozostaje załadowane.",
+            50,
+            340
+        );
+
+        ctx.fillText(
+            "Następny etap: rozszerzenie dekodera/XAPI.",
+            50,
+            370
+        );
+
+        this.booted = false;
+    },
+
+
+    /* ========================================================
+       CPU TEST
+    ======================================================== */
+
+    runCPUDiagnostic() {
+
+        const output =
+            this.elements.cpuOutput;
+
+        if (!output) {
+            return;
+        }
+
+        let text = "";
+
+        try {
+
+            const result =
+                this.runtime.selfTest();
+
+            text +=
+                "WebBktx CPU Diagnostic\n";
+
+            text +=
+                "======================\n\n";
+
+            text +=
+                `Runtime: ${this.runtime.version}\n`;
+
+            text +=
+                `CPU: AVAILABLE\n`;
+
+            text +=
+                `Memory: OK\n`;
+
+            text +=
+                `Decoder: OK\n`;
+
+            text +=
+                `Kernel: ${
+                    result.kernel
+                        ? "OK"
+                        : "ERROR"
+                }\n\n`;
+
+            for (
+                const test of result.cpu.tests
+            ) {
+
+                text +=
+                    `${test.name}: ${
+                        test.pass
+                            ? "PASS"
+                            : "FAIL"
+                    }\n`;
+            }
+
+            text +=
+                `\nRESULT: ${
+                    result.passed
+                        ? "PASS"
+                        : "FAIL"
+                }\n`;
+
+        } catch (error) {
+
+            text +=
+                "CPU DIAGNOSTIC ERROR\n\n";
+
+            text +=
+                error.message;
+        }
+
+        output.textContent =
+            text;
+    },
+
+
+    /* ========================================================
+       STOP GAME
+    ======================================================== */
+
+    stopGame() {
+
+        this.booted = false;
+
+        this.stopBootLoop();
+
+        try {
+            this.runtime.stop();
+        } catch (_) {}
+
+        this.showMain();
+
+        this.setMessage(
+            "Emulator stopped."
+        );
+    },
+
+
+    /* ========================================================
+       FPS
+    ======================================================== */
+
+    startFPSCounter() {
+
+        const loop = now => {
+
+            this.frameCounter++;
+
+            if (
+                now -
+                this.lastFPS >=
+                1000
+            ) {
+
+                this.fps =
+                    this.frameCounter;
+
+                this.frameCounter =
+                    0;
+
+                this.lastFPS =
+                    now;
+            }
+
+            requestAnimationFrame(
+                loop
+            );
+        };
+
         requestAnimationFrame(
             loop
         );
-}
+    },
 
 
-/* ============================================================
-   STOP BOOT
-============================================================ */
-
-function stopBoot() {
-
-    WebBktxApp.running =
-        false;
-
-
-    if (
-        WebBktxApp.frameTimer
-    ) {
-
-        cancelAnimationFrame(
-            WebBktxApp.frameTimer
-        );
-
-        WebBktxApp.frameTimer =
-            null;
-    }
-
-
-    if (
-        WebBktxApp.runtime
-    ) {
-
-        WebBktxApp.runtime.stop();
-    }
-}
-
-
-/* ============================================================
-   START EMULATOR
-============================================================ */
-
-async function startEmulator() {
-
-    if (
-        !WebBktxApp.file
-    ) {
-
-        setMessage(
-            "Wybierz plik XBE.",
-            "error"
-        );
-
-        return;
-    }
-
-
-    try {
-
-        stopBoot();
-
-
-        /*
-         * Load and parse.
-         */
-
-        const loaded =
-            await loadXBE();
-
-
-        /*
-         * Show emulator immediately
-         * so user sees diagnostic.
-         */
-
-        showBootScreen();
-
-
-        drawBootScreen();
-
-
-        /*
-         * Boot XBE.
-         */
-
-        const boot =
-            WebBktxApp.runtime.bootXBE();
-
-
-        WebBktxApp.boot =
-            boot;
-
-
-        console.log(
-            "[WebBktx] BOOT RESULT:",
-            boot
-        );
-
-
-        /*
-         * Audio deliberately disabled.
-         */
-
-        console.log(
-            "[WebBktx] AUDIO: DISABLED"
-        );
-
-
-        setMessage(
-            `Booting ${loaded.status.name} at ${boot.entryPointHex}`,
-            "success"
-        );
-
-
-        drawBootScreen();
-
-
-        /*
-         * Start execution.
-         */
-
-        startBootLoop();
-
-
-    } catch (error) {
-
-        console.error(
-            "[WebBktx] XBE BOOT ERROR:",
-            error
-        );
-
-
-        setMessage(
-            `XBE BOOT ERROR: ${error.message}`,
-            "error"
-        );
-
-
-        if (
-            gameScreen &&
-            !gameScreen.classList.contains(
-                "hidden"
-            )
-        ) {
-
-            drawBootScreen();
-        }
-    }
-}
-
-
-/* ============================================================
-   CPU TEST
-============================================================ */
-
-function runCPUTest() {
-
-    showScreen(
-        cpuScreen
-    );
-
-
-    if (!cpuOutput) {
-        return;
-    }
-
-
-    try {
-
-        detectRuntime();
-
-
-        const result =
-            WebBktxApp.runtime.selfTest();
-
-
-        const lines = [];
-
-
-        lines.push(
-            "WebBktx CPU DIAGNOSTIC"
-        );
-
-        lines.push(
-            "======================"
-        );
-
-        lines.push(
-            ""
-        );
-
-
-        lines.push(
-            `Runtime: ${result.version}`
-        );
-
-
-        lines.push(
-            `CPU: ${
-                result.cpu.passed
-                    ? "AVAILABLE"
-                    : "FAILED"
-            }`
-        );
-
-
-        lines.push(
-            `Decoder: ${
-                result.decoder
-                    ? "AVAILABLE"
-                    : "FAILED"
-            }`
-        );
-
-
-        lines.push(
-            `Kernel: ${
-                result.kernel
-                    ? "READY"
-                    : "FAILED"
-            }`
-        );
-
-
-        lines.push(
-            ""
-        );
-
-
-        for (
-            const test of result.cpu.tests
-        ) {
-
-            lines.push(
-                `[${test.pass ? "PASS" : "FAIL"}] ${test.name}`
-            );
-        }
-
-
-        lines.push(
-            ""
-        );
-
-
-        lines.push(
-            `RESULT: ${
-                result.passed
-                    ? "CPU AVAILABLE"
-                    : "CPU TEST FAILED"
-            }`
-        );
-
-
-        lines.push(
-            ""
-        );
-
-
-        lines.push(
-            "Runtime status:"
-        );
-
-
-        lines.push(
-            JSON.stringify(
-                runtimeStatus(),
-                null,
-                2
-            )
-        );
-
-
-        cpuOutput.textContent =
-            lines.join("\n");
-
-
-    } catch (error) {
-
-        cpuOutput.textContent =
-            [
-                "CPU TEST ERROR",
-                "===============",
-                "",
-                error.message,
-                "",
-                error.stack || ""
-            ].join("\n");
-    }
-}
-
-
-/* ============================================================
-   ABOUT
-============================================================ */
-
-function showAbout() {
-
-    showScreen(
-        aboutScreen
-    );
-}
-
-
-/* ============================================================
-   BACK TO MAIN
-============================================================ */
-
-function backToMain() {
-
-    stopBoot();
-
-    showScreen(
-        mainScreen
-    );
-
-
-    if (
-        WebBktxApp.runtime
-    ) {
-
-        console.log(
-            "[WebBktx] Runtime status:",
-            WebBktxApp.runtime.getStatus()
-        );
-    }
-}
-
-
-/* ============================================================
-   EXIT EMULATOR
-============================================================ */
-
-function exitEmulator() {
-
-    stopBoot();
-
-
-    if (
-        WebBktxApp.runtime
-    ) {
-
-        WebBktxApp.runtime.reset();
-    }
-
-
-    WebBktxApp.boot = null;
-    WebBktxApp.xbe = null;
-
-
-    showScreen(
-        mainScreen
-    );
-
+    /* ========================================================
+       UI
+    ======================================================== */
 
     setMessage(
-        "Emulator stopped.",
-        "normal"
-    );
-}
+        message,
+        error = false
+    ) {
 
+        const element =
+            this.elements.message;
 
-/* ============================================================
-   EVENT HANDLERS
-============================================================ */
-
-if (gameFile) {
-
-    gameFile.addEventListener(
-        "change",
-        event => {
-
-            const file =
-                event.target.files &&
-                event.target.files[0];
-
-
-            handleFile(file);
-        }
-    );
-}
-
-
-if (startButton) {
-
-    startButton.addEventListener(
-        "click",
-        startEmulator
-    );
-}
-
-
-if (cpuTestButton) {
-
-    cpuTestButton.addEventListener(
-        "click",
-        runCPUTest
-    );
-}
-
-
-if (aboutButton) {
-
-    aboutButton.addEventListener(
-        "click",
-        showAbout
-    );
-}
-
-
-if (cpuBackButton) {
-
-    cpuBackButton.addEventListener(
-        "click",
-        backToMain
-    );
-}
-
-
-if (aboutBackButton) {
-
-    aboutBackButton.addEventListener(
-        "click",
-        backToMain
-    );
-}
-
-
-if (backButton) {
-
-    backButton.addEventListener(
-        "click",
-        exitEmulator
-    );
-}
-
-
-/* ============================================================
-   KEYBOARD
-============================================================ */
-
-window.addEventListener(
-    "keydown",
-    event => {
-
-        /*
-         * F1 = main menu
-         * F2 = CPU diagnostics
-         * F3 = runtime dump
-         * F4 = stop CPU
-         */
-
-        if (
-            event.key === "F1"
-        ) {
-
-            event.preventDefault();
-
-            backToMain();
+        if (!element) {
+            return;
         }
 
+        element.textContent =
+            message;
 
-        if (
-            event.key === "F2"
-        ) {
-
-            event.preventDefault();
-
-            runCPUTest();
-        }
-
-
-        if (
-            event.key === "F3"
-        ) {
-
-            event.preventDefault();
-
-            if (
-                WebBktxApp.runtime
-            ) {
-
-                console.log(
-                    "[WebBktx] FULL RUNTIME STATUS:",
-                    WebBktxApp.runtime.getStatus()
-                );
-            }
-        }
+        element.dataset.error =
+            error
+                ? "true"
+                : "false";
+    },
 
 
-        if (
-            event.key === "F4"
-        ) {
+    showFatalError(message) {
 
-            event.preventDefault();
+        this.hideAllScreens();
 
-            stopBoot();
-        }
-    }
-);
+        const main =
+            this.elements.mainScreen;
 
+        if (main) {
 
-/* ============================================================
-   INITIALIZATION
-============================================================ */
+            main.classList.remove(
+                "hidden"
+            );
 
-async function initializeApplication() {
-
-    console.log(
-        "[WebBktx] Application initialization..."
-    );
-
-
-    try {
-
-        detectRuntime();
-
-
-        console.log(
-            "[WebBktx] Runtime detected:",
-            window.WebBktx
-        );
-
-
-        if (
-            WebBktxApp.runtime
-        ) {
-
-            WebBktxApp.runtime.initialize();
-
-
-            console.log(
-                "[WebBktx] Core initialized."
+            this.setMessage(
+                `WEBBKTX CORE ERROR: ${message}`,
+                true
             );
         }
 
+        console.error(
+            "[WebBktx] FATAL:",
+            message
+        );
+    },
 
-        /*
-         * Graphics canvas is prepared only when
-         * emulator starts.
-         */
 
+    log(message) {
 
         console.log(
-            "[WebBktx] Application ready."
+            `[WebBktx] ${message}`
         );
+    },
 
 
-        await loadingSequence();
+    hex(value) {
 
-
-    } catch (error) {
-
-        console.error(
-            "[WebBktx] Application initialization failed:",
-            error
+        return (
+            "0x" +
+            (
+                Number(value) >>> 0
+            )
+                .toString(16)
+                .padStart(8, "0")
         );
+    },
 
 
-        setLoadingText(
-            "CORE ERROR"
-        );
+    formatBytes(bytes) {
 
+        bytes =
+            Number(bytes) || 0;
 
-        setMessage(
-            error.message,
-            "error"
-        );
+        if (bytes < 1024) {
+            return `${bytes} B`;
+        }
+
+        if (bytes < 1024 * 1024) {
+            return `${(
+                bytes / 1024
+            ).toFixed(1)} KB`;
+        }
+
+        return `${(
+            bytes /
+            1024 /
+            1024
+        ).toFixed(2)} MB`;
     }
-}
+};
 
 
 /* ============================================================
-   GLOBAL DEBUG API
+   GLOBAL
 ============================================================ */
 
 window.WebBktxApp =
     WebBktxApp;
 
 
-window.WebBktxStart =
-    startEmulator;
+/* ============================================================
+   START
+============================================================ */
 
-
-window.WebBktxStop =
-    stopBoot;
-
-
-window.WebBktxStatus =
+document.addEventListener(
+    "DOMContentLoaded",
     () => {
 
-        if (
-            !WebBktxApp.runtime
-        ) {
+        WebBktxApp.init();
 
-            return null;
-        }
-
-
-        return WebBktxApp.runtime.getStatus();
-    };
-
-
-window.WebBktxDiagnostic =
-    () => {
-
-        if (
-            !WebBktxApp.runtime
-        ) {
-
-            return "Runtime unavailable.";
-        }
-
-
-        return formatDiagnostic(
-            WebBktxApp.runtime.getStatus()
-        );
-    };
+    }
+);
 
 
 console.log(
     "[WebBktx] app.js loaded."
 );
-
-
-/* ============================================================
-   START
-============================================================ */
-
-if (
-    document.readyState ===
-    "loading"
-) {
-
-    document.addEventListener(
-        "DOMContentLoaded",
-        initializeApplication,
-        {
-            once: true
-        }
-    );
-
-} else {
-
-    initializeApplication();
-}
