@@ -3,23 +3,23 @@
  * WebBktx — Game Boy Cartridge
  * ============================================================
  *
- * Obsługuje:
- *   - ROM .GB
- *   - Cartridge Header
- *   - Nintendo logo
- *   - tytuł gry
- *   - typ cartridge
- *   - rozmiar ROM
- *   - rozmiar RAM
- *   - MBC1
- *   - MBC3
- *   - MBC5
- *   - ROM-only
+ * Obsługa:
+ *
+ * ROM ONLY
+ * MBC1
+ * MBC2
+ * MBC3
+ * MBC5
+ *
+ * + RAM kartridża
+ * + bankowanie ROM
+ * + bankowanie RAM
+ * + battery-backed RAM w pamięci emulatora
  *
  * ============================================================
  */
 
-export default class GameBoyCartridge {
+export default class Cartridge {
 
     constructor() {
 
@@ -27,33 +27,17 @@ export default class GameBoyCartridge {
 
         this.ram = null;
 
-        this.loaded = false;
-
-
-        /*
-         * Cartridge information
-         */
-
         this.title = "";
 
-        this.manufacturer = "";
+        this.type = 0x00;
 
-        this.cartridgeType = 0x00;
+        this.romSizeCode = 0;
 
-        this.romSizeCode = 0x00;
-
-        this.ramSizeCode = 0x00;
+        this.ramSizeCode = 0;
 
         this.romBanks = 0;
 
         this.ramBanks = 0;
-
-
-        /*
-         * MBC
-         */
-
-        this.mbc = "ROM_ONLY";
 
         this.romBank = 1;
 
@@ -61,20 +45,52 @@ export default class GameBoyCartridge {
 
         this.ramEnabled = false;
 
-        this.bankingMode = 0;
+        this.mode = 0;
+
+        this.mbc = "ROM";
 
 
         /*
-         * MBC3 RTC placeholder
+         * MBC1
+         */
+
+        this.mbc1Low5 = 1;
+
+        this.mbc1High2 = 0;
+
+
+        /*
+         * MBC3
+         */
+
+        this.rtcRegister = 0;
+
+
+        /*
+         * MBC5
+         */
+
+        this.mbc5Low8 = 1;
+
+        this.mbc5High1 = 0;
+
+
+        /*
+         * RTC placeholder.
+         *
+         * Pokémon Yellow nie potrzebuje RTC,
+         * ale MBC3 obsługujemy dla kompatybilności.
          */
 
         this.rtc = {
 
-            enabled: false,
+            seconds: 0,
+            minutes: 0,
+            hours: 0,
+            days: 0,
 
-            register: 0,
-
-            latch: 0
+            halt: false,
+            carry: false
 
         };
 
@@ -87,134 +103,175 @@ export default class GameBoyCartridge {
      * ========================================================
      */
 
-    load(data) {
+    load(buffer) {
 
-        if (!(data instanceof Uint8Array)) {
+        if (
+            buffer instanceof ArrayBuffer
+        ) {
 
-            data =
-                new Uint8Array(data);
+            this.rom =
+                new Uint8Array(
+                    buffer
+                );
 
-        }
+        } else if (
+            buffer instanceof Uint8Array
+        ) {
 
+            this.rom =
+                buffer;
 
-        if (data.length < 0x150) {
+        } else {
 
             throw new Error(
-                "ROM jest za mały, aby był prawidłowym Game Boy ROM."
+                "Cartridge: nieprawidłowy ROM."
             );
 
         }
 
 
-        this.rom = data;
+        if (
+            this.rom.length <
+            0x150
+        ) {
+
+            throw new Error(
+                "Cartridge: ROM jest za mały."
+            );
+
+        }
+
 
         this.readHeader();
 
-        this.createRAM();
+        this.allocateRAM();
 
-        this.configureMBC();
-
-        this.loaded = true;
+        this.resetMapper();
 
 
         console.log(
-            `[WebBktx] Loaded Game Boy ROM: ${this.title}`
+            "[WebBktx] Cartridge:",
+            this.title,
+            this.mbc,
+            "ROM:",
+            this.rom.length,
+            "bytes"
         );
-
-        console.log(
-            `[WebBktx] MBC: ${this.mbc}`
-        );
-
-        console.log(
-            `[WebBktx] ROM banks: ${this.romBanks}`
-        );
-
-        console.log(
-            `[WebBktx] RAM banks: ${this.ramBanks}`
-        );
-
-
-        return this.getInfo();
 
     }
 
 
     /*
      * ========================================================
-     * READ HEADER
+     * HEADER
      * ========================================================
      */
 
     readHeader() {
 
         /*
-         * Title:
-         *
-         * 0x0134 - 0x0143
+         * Title: 0x0134 - 0x0143
          */
+
+        let title = "";
+
+
+        for (
+            let i = 0x134;
+            i <= 0x143;
+            i++
+        ) {
+
+            const c =
+                this.rom[i];
+
+
+            if (
+                c === 0
+            ) {
+
+                break;
+
+            }
+
+
+            if (
+                c >= 32 &&
+                c <= 126
+            ) {
+
+                title +=
+                    String.fromCharCode(c);
+
+            }
+
+        }
+
 
         this.title =
-            this.readString(
-                0x0134,
-                16
-            );
+            title.trim();
 
 
         /*
-         * Manufacturer:
-         *
-         * 0x013F - 0x0142
+         * Cartridge type
          */
 
-        this.manufacturer =
-            this.readString(
-                0x013F,
-                4
-            );
+        this.type =
+            this.rom[0x147];
 
 
         /*
-         * Cartridge type:
-         *
-         * 0x0147
-         */
-
-        this.cartridgeType =
-            this.rom[0x0147];
-
-
-        /*
-         * ROM size:
-         *
-         * 0x0148
+         * ROM size
          */
 
         this.romSizeCode =
-            this.rom[0x0148];
+            this.rom[0x148];
 
 
         /*
-         * RAM size:
-         *
-         * 0x0149
+         * RAM size
          */
 
         this.ramSizeCode =
-            this.rom[0x0149];
+            this.rom[0x149];
+
+
+        this.romBanks =
+            this.getROMBankCount(
+                this.romSizeCode
+            );
+
+
+        this.ramBanks =
+            this.getRAMBankCount(
+                this.ramSizeCode
+            );
+
+
+        /*
+         * Detect mapper.
+         */
+
+        this.mbc =
+            this.detectMBC(
+                this.type
+            );
 
     }
 
 
     /*
      * ========================================================
-     * CONFIGURE MBC
+     * MAPPER
      * ========================================================
      */
 
-    configureMBC() {
+    detectMBC(
+        type
+    ) {
 
         switch (
-            this.cartridgeType
+            type
         ) {
 
             /*
@@ -222,15 +279,7 @@ export default class GameBoyCartridge {
              */
 
             case 0x00:
-
-            case 0x08:
-
-            case 0x09:
-
-                this.mbc =
-                    "ROM_ONLY";
-
-                break;
+                return "ROM";
 
 
             /*
@@ -238,15 +287,9 @@ export default class GameBoyCartridge {
              */
 
             case 0x01:
-
             case 0x02:
-
             case 0x03:
-
-                this.mbc =
-                    "MBC1";
-
-                break;
+                return "MBC1";
 
 
             /*
@@ -254,13 +297,8 @@ export default class GameBoyCartridge {
              */
 
             case 0x05:
-
             case 0x06:
-
-                this.mbc =
-                    "MBC2";
-
-                break;
+                return "MBC2";
 
 
             /*
@@ -268,19 +306,11 @@ export default class GameBoyCartridge {
              */
 
             case 0x0F:
-
             case 0x10:
-
             case 0x11:
-
             case 0x12:
-
             case 0x13:
-
-                this.mbc =
-                    "MBC3";
-
-                break;
+                return "MBC3";
 
 
             /*
@@ -288,33 +318,26 @@ export default class GameBoyCartridge {
              */
 
             case 0x19:
-
             case 0x1A:
-
             case 0x1B:
-
             case 0x1C:
-
             case 0x1D:
-
             case 0x1E:
-
-                this.mbc =
-                    "MBC5";
-
-                break;
+                return "MBC5";
 
 
             default:
 
-                this.mbc =
-                    "UNKNOWN";
-
                 console.warn(
-                    `[WebBktx] Unknown cartridge type: 0x${this.cartridgeType.toString(16)}`
+                    "[WebBktx] Nieznany cartridge type:",
+                    "0x" +
+                    type
+                        .toString(16)
+                        .padStart(2, "0")
                 );
 
-                break;
+
+                return "ROM";
 
         }
 
@@ -327,46 +350,48 @@ export default class GameBoyCartridge {
      * ========================================================
      */
 
-    getROMBanks() {
+    getROMBankCount(
+        code
+    ) {
 
         /*
-         * 32 KB = 2 banks
+         * Standard Game Boy ROM sizes.
          */
 
-        const sizes = {
+        if (
+            code <= 0x08
+        ) {
 
-            0x00: 2,
+            return 2 << code;
 
-            0x01: 4,
-
-            0x02: 8,
-
-            0x03: 16,
-
-            0x04: 32,
-
-            0x05: 64,
-
-            0x06: 128,
-
-            0x07: 256,
-
-            0x08: 512,
-
-            0x52: 72,
-
-            0x53: 80,
-
-            0x54: 96
-
-        };
+        }
 
 
-        return (
-            sizes[
-                this.romSizeCode
-            ] || 2
-        );
+        /*
+         * Special sizes:
+         *
+         * 0x52 = 72 banks
+         * 0x53 = 80 banks
+         * 0x54 = 96 banks
+         */
+
+        switch (
+            code
+        ) {
+
+            case 0x52:
+                return 72;
+
+            case 0x53:
+                return 80;
+
+            case 0x54:
+                return 96;
+
+            default:
+                return 2;
+
+        }
 
     }
 
@@ -377,202 +402,255 @@ export default class GameBoyCartridge {
      * ========================================================
      */
 
-    getRAMBanks() {
+    getRAMBankCount(
+        code
+    ) {
 
-        const sizes = {
+        switch (
+            code
+        ) {
 
-            0x00: 0,
+            case 0x00:
+                return 0;
 
-            0x01: 1,
+            case 0x01:
+                return 1;
 
-            0x02: 1,
+            case 0x02:
+                return 1;
 
-            0x03: 4,
+            case 0x03:
+                return 4;
 
-            0x04: 16,
+            case 0x04:
+                return 16;
 
-            0x05: 8
+            case 0x05:
+                return 8;
 
-        };
+            default:
+                return 0;
 
-
-        return (
-            sizes[
-                this.ramSizeCode
-            ] || 0
-        );
+        }
 
     }
 
 
     /*
      * ========================================================
-     * CREATE RAM
+     * RAM ALLOCATION
      * ========================================================
      */
 
-    createRAM() {
+    allocateRAM() {
 
-        this.romBanks =
-            this.getROMBanks();
-
-
-        this.ramBanks =
-            this.getRAMBanks();
+        let size = 0;
 
 
-        if (this.ramBanks === 0) {
+        switch (
+            this.ramSizeCode
+        ) {
+
+            case 0x00:
+                size = 0;
+                break;
+
+            case 0x01:
+                size = 2 * 1024;
+                break;
+
+            case 0x02:
+                size = 8 * 1024;
+                break;
+
+            case 0x03:
+                size = 32 * 1024;
+                break;
+
+            case 0x04:
+                size = 128 * 1024;
+                break;
+
+            case 0x05:
+                size = 64 * 1024;
+                break;
+
+            default:
+                size = 0;
+
+        }
+
+
+        /*
+         * MBC2 has internal 512 × 4-bit RAM.
+         */
+
+        if (
+            this.mbc === "MBC2"
+        ) {
+
+            size =
+                512;
+
+        }
+
+
+        if (
+            size > 0
+        ) {
 
             this.ram =
-                new Uint8Array(0);
+                new Uint8Array(
+                    size
+                );
 
-            return;
+        } else {
+
+            this.ram =
+                null;
 
         }
 
 
-        const size =
-            this.ramBanks *
-            0x2000;
+        /*
+         * RAM starts as FF.
+         */
 
+        if (
+            this.ram
+        ) {
 
-        this.ram =
-            new Uint8Array(
-                size
+            this.ram.fill(
+                0xFF
             );
 
+        }
+
     }
 
 
     /*
      * ========================================================
-     * ROM READ
+     * RESET
+     * ========================================================
+     */
+
+    resetMapper() {
+
+        this.romBank =
+            1;
+
+        this.ramBank =
+            0;
+
+        this.ramEnabled =
+            false;
+
+        this.mode =
+            0;
+
+
+        this.mbc1Low5 =
+            1;
+
+        this.mbc1High2 =
+            0;
+
+
+        this.mbc5Low8 =
+            1;
+
+        this.mbc5High1 =
+            0;
+
+    }
+
+
+    /*
+     * ========================================================
+     * READ
      * ========================================================
      *
-     * 0000 - 3FFF
-     *   Fixed ROM bank
+     * CPU address:
      *
-     * 4000 - 7FFF
-     *   Switchable ROM bank
+     * 0000-3FFF = fixed ROM bank
+     * 4000-7FFF = switchable ROM bank
+     * A000-BFFF = cartridge RAM
+     *
      * ========================================================
      */
 
-    readROM(address) {
-
-        address &=
-            0x7FFF;
-
-
-        /*
-         * Fixed bank.
-         */
-
-        if (address < 0x4000) {
-
-            return this.rom[
-                address %
-                this.rom.length
-            ];
-
-        }
-
-
-        /*
-         * Switchable bank.
-         */
-
-        const bank =
-            this.getCurrentROMBank();
-
-
-        const offset =
-            bank *
-            0x4000 +
-            (address - 0x4000);
-
-
-        return this.rom[
-            offset %
-            this.rom.length
-        ];
-
-    }
-
-
-    /*
-     * ========================================================
-     * CURRENT ROM BANK
-     * ========================================================
-     */
-
-    getCurrentROMBank() {
-
-        let bank =
-            this.romBank;
-
-
-        if (bank === 0) {
-
-            bank = 1;
-
-        }
-
-
-        bank %=
-            this.romBanks;
-
-
-        if (bank === 0) {
-
-            bank = 1;
-
-        }
-
-
-        return bank;
-
-    }
-
-
-    /*
-     * ========================================================
-     * CARTRIDGE READ
-     * ========================================================
-     */
-
-    read(address) {
+    read(
+        address
+    ) {
 
         address &=
             0xFFFF;
 
 
         /*
-         * ROM
+         * Fixed ROM area.
          */
 
         if (
-            address >= 0x0000 &&
-            address <= 0x7FFF
+            address < 0x4000
         ) {
 
-            return this.readROM(
-                address
-            );
+            let bank =
+                this.getFixedROMBank();
+
+
+            const offset =
+                bank *
+                0x4000 +
+                address;
+
+
+            return this.rom[offset]
+                ?? 0xFF;
 
         }
 
 
         /*
-         * External RAM
+         * Switchable ROM area.
+         */
+
+        if (
+            address < 0x8000
+        ) {
+
+            const bank =
+                this.getSwitchableROMBank();
+
+
+            const offset =
+                bank *
+                0x4000 +
+                (
+                    address -
+                    0x4000
+                );
+
+
+            return this.rom[offset]
+                ?? 0xFF;
+
+        }
+
+
+        /*
+         * External RAM.
          */
 
         if (
             address >= 0xA000 &&
-            address <= 0xBFFF
+            address < 0xC000
         ) {
 
             return this.readRAM(
-                address
+                address -
+                0xA000
             );
 
         }
@@ -585,7 +663,7 @@ export default class GameBoyCartridge {
 
     /*
      * ========================================================
-     * CARTRIDGE WRITE
+     * WRITE
      * ========================================================
      */
 
@@ -601,14 +679,58 @@ export default class GameBoyCartridge {
             0xFF;
 
 
+        /*
+         * Cartridge control area.
+         */
+
+        if (
+            address < 0x8000
+        ) {
+
+            this.writeMapper(
+                address,
+                value
+            );
+
+            return;
+
+        }
+
+
+        /*
+         * External RAM.
+         */
+
+        if (
+            address >= 0xA000 &&
+            address < 0xC000
+        ) {
+
+            this.writeRAM(
+                address -
+                0xA000,
+                value
+            );
+
+        }
+
+    }
+
+
+    /*
+     * ========================================================
+     * MAPPER WRITE
+     * ========================================================
+     */
+
+    writeMapper(
+        address,
+        value
+    ) {
+
         switch (
             this.mbc
         ) {
-
-            case "ROM_ONLY":
-
-                return;
-
 
             case "MBC1":
 
@@ -617,7 +739,7 @@ export default class GameBoyCartridge {
                     value
                 );
 
-                return;
+                break;
 
 
             case "MBC2":
@@ -627,7 +749,7 @@ export default class GameBoyCartridge {
                     value
                 );
 
-                return;
+                break;
 
 
             case "MBC3":
@@ -637,7 +759,7 @@ export default class GameBoyCartridge {
                     value
                 );
 
-                return;
+                break;
 
 
             case "MBC5":
@@ -647,7 +769,16 @@ export default class GameBoyCartridge {
                     value
                 );
 
-                return;
+                break;
+
+
+            case "ROM":
+
+                /*
+                 * ROM-only cartridges ignore writes.
+                 */
+
+                break;
 
         }
 
@@ -665,93 +796,57 @@ export default class GameBoyCartridge {
         value
     ) {
 
-        /*
-         * RAM enable
-         */
-
         if (
-            address >= 0x0000 &&
-            address <= 0x1FFF
+            address < 0x2000
         ) {
 
             this.ramEnabled =
-                (value & 0x0F) === 0x0A;
+                (
+                    value & 0x0F
+                ) === 0x0A;
 
             return;
 
         }
 
 
-        /*
-         * ROM bank lower bits
-         */
-
         if (
-            address >= 0x2000 &&
-            address <= 0x3FFF
+            address < 0x4000
         ) {
 
-            let bank =
+            this.mbc1Low5 =
                 value & 0x1F;
 
 
-            if (bank === 0) {
+            if (
+                this.mbc1Low5 === 0
+            ) {
 
-                bank = 1;
+                this.mbc1Low5 =
+                    1;
 
             }
 
 
-            this.romBank =
-                (
-                    this.romBank &
-                    0x60
-                ) |
-                bank;
-
             return;
 
         }
 
 
-        /*
-         * Upper ROM/RAM bank bits
-         */
-
         if (
-            address >= 0x4000 &&
-            address <= 0x5FFF
+            address < 0x6000
         ) {
 
-            const upper =
+            this.mbc1High2 =
                 value & 0x03;
 
-
-            this.romBank =
-                (
-                    this.romBank &
-                    0x1F
-                ) |
-                (upper << 5);
-
             return;
 
         }
 
 
-        /*
-         * Banking mode
-         */
-
-        if (
-            address >= 0x6000 &&
-            address <= 0x7FFF
-        ) {
-
-            this.bankingMode =
-                value & 1;
-
-        }
+        this.mode =
+            value & 1;
 
     }
 
@@ -768,21 +863,34 @@ export default class GameBoyCartridge {
     ) {
 
         if (
-            address >= 0x0000 &&
-            address <= 0x3FFF
+            address < 0x4000
         ) {
 
             /*
              * A8 determines operation.
              */
 
-            if (address & 0x0100) {
+            if (
+                (
+                    address &
+                    0x0100
+                ) === 0
+            ) {
+
+                this.ramEnabled =
+                    (
+                        value & 0x0F
+                    ) === 0x0A;
+
+            } else {
 
                 let bank =
                     value & 0x0F;
 
 
-                if (bank === 0) {
+                if (
+                    bank === 0
+                ) {
 
                     bank = 1;
 
@@ -791,11 +899,6 @@ export default class GameBoyCartridge {
 
                 this.romBank =
                     bank;
-
-            } else {
-
-                this.ramEnabled =
-                    (value & 0x0F) === 0x0A;
 
             }
 
@@ -816,12 +919,13 @@ export default class GameBoyCartridge {
     ) {
 
         if (
-            address >= 0x0000 &&
-            address <= 0x1FFF
+            address < 0x2000
         ) {
 
             this.ramEnabled =
-                (value & 0x0F) === 0x0A;
+                (
+                    value & 0x0F
+                ) === 0x0A;
 
             return;
 
@@ -829,15 +933,16 @@ export default class GameBoyCartridge {
 
 
         if (
-            address >= 0x2000 &&
-            address <= 0x3FFF
+            address < 0x4000
         ) {
 
             let bank =
                 value & 0x7F;
 
 
-            if (bank === 0) {
+            if (
+                bank === 0
+            ) {
 
                 bank = 1;
 
@@ -847,21 +952,19 @@ export default class GameBoyCartridge {
             this.romBank =
                 bank;
 
+
             return;
 
         }
 
 
         if (
-            address >= 0x4000 &&
-            address <= 0x5FFF
+            address < 0x6000
         ) {
 
             this.ramBank =
                 value;
 
-            this.rtc.register =
-                value;
 
             return;
 
@@ -870,15 +973,25 @@ export default class GameBoyCartridge {
 
         /*
          * RTC latch.
+         *
+         * Basic implementation.
          */
 
         if (
-            address >= 0x6000 &&
-            address <= 0x7FFF
+            address >= 0x6000
         ) {
 
-            this.rtc.latch =
-                value;
+            /*
+             * 0 -> 1 latches RTC.
+             */
+
+            if (
+                value === 1
+            ) {
+
+                this.updateRTC();
+
+            }
 
         }
 
@@ -896,13 +1009,18 @@ export default class GameBoyCartridge {
         value
     ) {
 
+        /*
+         * RAM enable
+         */
+
         if (
-            address >= 0x0000 &&
-            address <= 0x1FFF
+            address < 0x2000
         ) {
 
             this.ramEnabled =
-                (value & 0x0F) === 0x0A;
+                (
+                    value & 0x0F
+                ) === 0x0A;
 
             return;
 
@@ -914,16 +1032,13 @@ export default class GameBoyCartridge {
          */
 
         if (
-            address >= 0x2000 &&
-            address <= 0x2FFF
+            address < 0x3000
         ) {
 
-            this.romBank =
-                (
-                    this.romBank &
-                    0x100
-                ) |
+            this.mbc5Low8 =
                 value;
+
+            this.updateMBC5Bank();
 
             return;
 
@@ -935,16 +1050,13 @@ export default class GameBoyCartridge {
          */
 
         if (
-            address >= 0x3000 &&
-            address <= 0x3FFF
+            address < 0x4000
         ) {
 
-            this.romBank =
-                (
-                    this.romBank &
-                    0xFF
-                ) |
-                ((value & 1) << 8);
+            this.mbc5High1 =
+                value & 1;
+
+            this.updateMBC5Bank();
 
             return;
 
@@ -956,8 +1068,7 @@ export default class GameBoyCartridge {
          */
 
         if (
-            address >= 0x4000 &&
-            address <= 0x5FFF
+            address < 0x6000
         ) {
 
             this.ramBank =
@@ -970,66 +1081,223 @@ export default class GameBoyCartridge {
 
     /*
      * ========================================================
-     * RAM READ
+     * MBC5 BANK
      * ========================================================
      */
 
-    readRAM(address) {
+    updateMBC5Bank() {
 
-        if (!this.ramEnabled) {
+        this.romBank =
+            (
+                this.mbc5High1 << 8
+            ) |
+            this.mbc5Low8;
 
-            return 0xFF;
+
+        this.romBank %=
+            Math.max(
+                1,
+                this.romBanks
+            );
+
+    }
+
+
+    /*
+     * ========================================================
+     * FIXED ROM BANK
+     * ========================================================
+     */
+
+    getFixedROMBank() {
+
+        if (
+            this.mbc === "MBC1" &&
+            this.mode === 1
+        ) {
+
+            return (
+                this.mbc1High2 << 5
+            ) %
+            this.romBanks;
 
         }
+
+
+        return 0;
+
+    }
+
+
+    /*
+     * ========================================================
+     * SWITCHABLE ROM BANK
+     * ========================================================
+     */
+
+    getSwitchableROMBank() {
+
+        let bank =
+            this.romBank;
 
 
         if (
-            this.ram.length === 0
+            this.mbc === "MBC1"
         ) {
 
-            return 0xFF;
+            bank =
+                this.mbc1Low5;
+
+
+            if (
+                this.mode === 0
+            ) {
+
+                bank |=
+                    this.mbc1High2 << 5;
+
+            }
+
+
+            bank %=
+                this.romBanks;
+
+
+            if (
+                bank === 0
+            ) {
+
+                bank = 1;
+
+            }
 
         }
 
-
-        let bank =
-            this.ramBank;
-
-
-        /*
-         * MBC2 has internal 512 × 4-bit RAM.
-         *
-         * This implementation currently exposes
-         * a simplified RAM area.
-         */
 
         if (
             this.mbc === "MBC2"
         ) {
 
-            const offset =
-                (address - 0xA000) &
-                0x01FF;
+            bank %=
+                16;
 
+            if (
+                bank === 0
+            ) {
 
-            return this.ram[
-                offset %
-                this.ram.length
-            ] | 0xF0;
+                bank = 1;
+
+            }
 
         }
 
 
-        const offset =
+        if (
+            this.mbc === "MBC3"
+        ) {
+
+            bank %=
+                this.romBanks;
+
+            if (
+                bank === 0
+            ) {
+
+                bank = 1;
+
+            }
+
+        }
+
+
+        if (
+            this.mbc === "MBC5"
+        ) {
+
+            bank %=
+                this.romBanks;
+
+        }
+
+
+        return bank;
+
+    }
+
+
+    /*
+     * ========================================================
+     * RAM READ
+     * ========================================================
+     */
+
+    readRAM(
+        offset
+    ) {
+
+        if (
+            !this.ram ||
+            !this.ramEnabled
+        ) {
+
+            return 0xFF;
+
+        }
+
+
+        /*
+         * MBC3 RTC registers.
+         */
+
+        if (
+            this.mbc === "MBC3" &&
+            this.ramBank >= 0x08 &&
+            this.ramBank <= 0x0C
+        ) {
+
+            return this.readRTC(
+                this.ramBank
+            );
+
+        }
+
+
+        if (
+            this.mbc === "MBC2"
+        ) {
+
+            const index =
+                offset & 0x01FF;
+
+
+            return (
+                this.ram[index] |
+                0xF0
+            );
+
+        }
+
+
+        const bank =
+            this.getRAMBank();
+
+
+        const index =
             bank *
             0x2000 +
-            (address - 0xA000);
+            offset;
 
 
-        return this.ram[
-            offset %
-            this.ram.length
-        ];
+        if (
+            index >= this.ram.length
+        ) {
+
+            return 0xFF;
+
+        }
+
+
+        return this.ram[index];
 
     }
 
@@ -1041,19 +1309,13 @@ export default class GameBoyCartridge {
      */
 
     writeRAM(
-        address,
+        offset,
         value
     ) {
 
-        if (!this.ramEnabled) {
-
-            return;
-
-        }
-
-
         if (
-            this.ram.length === 0
+            !this.ram ||
+            !this.ramEnabled
         ) {
 
             return;
@@ -1061,27 +1323,36 @@ export default class GameBoyCartridge {
         }
 
 
-        value &=
-            0xFF;
+        /*
+         * MBC3 RTC.
+         */
 
+        if (
+            this.mbc === "MBC3" &&
+            this.ramBank >= 0x08 &&
+            this.ramBank <= 0x0C
+        ) {
+
+            this.writeRTC(
+                this.ramBank,
+                value
+            );
+
+            return;
+
+        }
+
+
+        /*
+         * MBC2 = only lower 4 bits.
+         */
 
         if (
             this.mbc === "MBC2"
         ) {
 
-            const offset =
-                (address - 0xA000) &
-                0x01FF;
-
-
-            /*
-             * MBC2 RAM stores only
-             * lower 4 bits.
-             */
-
             this.ram[
-                offset %
-                this.ram.length
+                offset & 0x01FF
             ] =
                 value & 0x0F;
 
@@ -1090,16 +1361,26 @@ export default class GameBoyCartridge {
         }
 
 
-        const offset =
-            this.ramBank *
+        const bank =
+            this.getRAMBank();
+
+
+        const index =
+            bank *
             0x2000 +
-            (address - 0xA000);
+            offset;
 
 
-        this.ram[
-            offset %
-            this.ram.length
-        ] =
+        if (
+            index >= this.ram.length
+        ) {
+
+            return;
+
+        }
+
+
+        this.ram[index] =
             value;
 
     }
@@ -1107,15 +1388,242 @@ export default class GameBoyCartridge {
 
     /*
      * ========================================================
-     * SAVE RAM
+     * RAM BANK
      * ========================================================
      */
 
-    getSaveData() {
+    getRAMBank() {
 
         if (
-            !this.ram ||
-            this.ram.length === 0
+            this.mbc === "MBC1"
+        ) {
+
+            if (
+                this.mode === 1
+            ) {
+
+                return (
+                    this.mbc1High2
+                ) %
+                Math.max(
+                    1,
+                    this.ramBanks
+                );
+
+            }
+
+
+            return 0;
+
+        }
+
+
+        if (
+            this.mbc === "MBC2"
+        ) {
+
+            return 0;
+
+        }
+
+
+        if (
+            this.mbc === "MBC3"
+        ) {
+
+            return (
+                this.ramBank
+            ) %
+            Math.max(
+                1,
+                this.ramBanks
+            );
+
+        }
+
+
+        if (
+            this.mbc === "MBC5"
+        ) {
+
+            return (
+                this.ramBank
+            ) %
+            Math.max(
+                1,
+                this.ramBanks
+            );
+
+        }
+
+
+        return 0;
+
+    }
+
+
+    /*
+     * ========================================================
+     * RTC
+     * ========================================================
+     */
+
+    updateRTC() {
+
+        /*
+         * Minimal RTC implementation.
+         *
+         * Full RTC persistence can be added later.
+         */
+
+        const now =
+            new Date();
+
+
+        this.rtc.seconds =
+            now.getUTCSeconds();
+
+
+        this.rtc.minutes =
+            now.getUTCMinutes();
+
+
+        this.rtc.hours =
+            now.getUTCHours();
+
+
+        this.rtc.days =
+            Math.floor(
+                Date.now() /
+                86400000
+            );
+
+    }
+
+
+    readRTC(
+        register
+    ) {
+
+        switch (
+            register
+        ) {
+
+            case 0x08:
+                return this.rtc.seconds;
+
+            case 0x09:
+                return this.rtc.minutes;
+
+            case 0x0A:
+                return this.rtc.hours;
+
+            case 0x0B:
+                return this.rtc.days & 0xFF;
+
+            case 0x0C:
+
+                return (
+                    (
+                        this.rtc.days >>
+                        8
+                    ) & 1
+                ) |
+                (
+                    this.rtc.halt
+                        ? 0x40
+                        : 0
+                ) |
+                (
+                    this.rtc.carry
+                        ? 0x80
+                        : 0
+                );
+
+        }
+
+
+        return 0xFF;
+
+    }
+
+
+    writeRTC(
+        register,
+        value
+    ) {
+
+        switch (
+            register
+        ) {
+
+            case 0x08:
+                this.rtc.seconds =
+                    value % 60;
+                break;
+
+            case 0x09:
+                this.rtc.minutes =
+                    value % 60;
+                break;
+
+            case 0x0A:
+                this.rtc.hours =
+                    value % 24;
+                break;
+
+            case 0x0B:
+
+                this.rtc.days =
+                    (
+                        this.rtc.days &
+                        0x100
+                    ) |
+                    value;
+
+                break;
+
+            case 0x0C:
+
+                this.rtc.days =
+                    (
+                        this.rtc.days &
+                        0xFF
+                    ) |
+                    (
+                        (value & 1)
+                        << 8
+                    );
+
+
+                this.rtc.halt =
+                    Boolean(
+                        value & 0x40
+                    );
+
+
+                this.rtc.carry =
+                    Boolean(
+                        value & 0x80
+                    );
+
+                break;
+
+        }
+
+    }
+
+
+    /*
+     * ========================================================
+     * BATTERY SAVE
+     * ========================================================
+     */
+
+    exportRAM() {
+
+        if (
+            !this.ram
         ) {
 
             return null;
@@ -1130,116 +1638,39 @@ export default class GameBoyCartridge {
     }
 
 
-    /*
-     * ========================================================
-     * LOAD SAVE
-     * ========================================================
-     */
-
-    loadSave(data) {
-
-        if (!data) {
-
-            return false;
-
-        }
-
-
-        if (
-            !(data instanceof Uint8Array)
-        ) {
-
-            data =
-                new Uint8Array(data);
-
-        }
-
+    importRAM(
+        data
+    ) {
 
         if (
             !this.ram ||
-            this.ram.length === 0
+            !data
         ) {
 
-            return false;
+            return;
 
         }
 
 
+        const source =
+            data instanceof Uint8Array
+                ? data
+                : new Uint8Array(data);
+
+
         this.ram.set(
-            data.subarray(
+            source.subarray(
                 0,
                 this.ram.length
             )
         );
 
-
-        return true;
-
     }
 
 
     /*
      * ========================================================
-     * STRING
-     * ========================================================
-     */
-
-    readString(
-        start,
-        length
-    ) {
-
-        let result = "";
-
-
-        for (
-            let i = 0;
-            i < length;
-            i++
-        ) {
-
-            const value =
-                this.rom[
-                    start + i
-                ];
-
-
-            if (
-                value === 0x00
-            ) {
-
-                break;
-
-            }
-
-
-            /*
-             * Printable ASCII only.
-             */
-
-            if (
-                value >= 32 &&
-                value <= 126
-            ) {
-
-                result +=
-                    String.fromCharCode(
-                        value
-                    );
-
-            }
-
-        }
-
-
-        return result.trim();
-
-    }
-
-
-    /*
-     * ========================================================
-     * INFO
+     * INFORMATION
      * ========================================================
      */
 
@@ -1250,13 +1681,8 @@ export default class GameBoyCartridge {
             title:
                 this.title,
 
-            manufacturer:
-                this.manufacturer,
-
-            cartridgeType:
-                `0x${this.cartridgeType
-                    .toString(16)
-                    .padStart(2, "0")}`,
+            type:
+                this.type,
 
             mbc:
                 this.mbc,
@@ -1268,10 +1694,21 @@ export default class GameBoyCartridge {
                 this.romBanks,
 
             ramSize:
-                this.ram.length,
+                this.ram
+                    ? this.ram.length
+                    : 0,
 
             ramBanks:
-                this.ramBanks
+                this.ramBanks,
+
+            romBank:
+                this.getSwitchableROMBank(),
+
+            ramBank:
+                this.getRAMBank(),
+
+            ramEnabled:
+                this.ramEnabled
 
         };
 
