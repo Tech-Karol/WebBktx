@@ -1,0 +1,1780 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <meta
+        name="application-name"
+        content="WebBktx"
+    >
+
+    <meta
+        name="description"
+        content="WebBktx Nintendo Game Boy Emulator"
+    >
+
+    <meta
+        name="webbktx-schema"
+        content="webbktx.emulator.v1"
+    >
+
+    <meta
+        name="webbktx-system"
+        content="gameboy"
+    >
+
+    <title>Game Boy — WebBktx</title>
+
+    <style>
+
+        /* =====================================================
+           WEBBKTX GAME BOY
+           Modern Retro Emulator UI
+           ===================================================== */
+
+        :root {
+            --bg: #080a0f;
+            --panel: #11151d;
+            --panel-2: #151a22;
+
+            --border: #282f3a;
+
+            --text: #f4f5f7;
+            --muted: #8f99a8;
+
+            --accent: #7c6cff;
+            --accent-hover: #8d80ff;
+
+            --gb-dark: #26342b;
+            --gb-body: #a9ada3;
+
+            --screen-dark: #0f380f;
+            --screen-mid: #306230;
+            --screen-light: #8bac0f;
+
+            --radius: 16px;
+        }
+
+
+        * {
+            box-sizing: border-box;
+        }
+
+
+        html,
+        body {
+            margin: 0;
+            min-height: 100%;
+
+            font-family:
+                Inter,
+                system-ui,
+                -apple-system,
+                BlinkMacSystemFont,
+                "Segoe UI",
+                sans-serif;
+
+            background: var(--bg);
+            color: var(--text);
+
+            -webkit-font-smoothing: antialiased;
+        }
+
+
+        body {
+            min-height: 100vh;
+
+            background:
+                radial-gradient(
+                    circle at 50% 0%,
+                    rgba(124,108,255,0.09),
+                    transparent 35%
+                ),
+                var(--bg);
+        }
+
+
+        /* =====================================================
+           HEADER
+           ===================================================== */
+
+        header {
+            position: sticky;
+            top: 0;
+
+            z-index: 20;
+
+            border-bottom:
+                1px solid rgba(255,255,255,0.06);
+
+            background:
+                rgba(8,10,15,0.86);
+
+            backdrop-filter:
+                blur(18px);
+        }
+
+
+        .header-inner {
+            max-width: 1100px;
+
+            min-height: 68px;
+
+            margin: auto;
+
+            padding:
+                0 24px;
+
+            display: flex;
+
+            align-items: center;
+
+            justify-content: space-between;
+
+            gap: 20px;
+        }
+
+
+        .brand {
+            display: flex;
+
+            align-items: center;
+
+            gap: 11px;
+        }
+
+
+        .logo {
+            width: 38px;
+            height: 38px;
+
+            display: grid;
+
+            place-items: center;
+
+            border-radius: 10px;
+
+            border:
+                1px solid rgba(124,108,255,0.4);
+
+            background:
+                #19162d;
+
+            font-size: 18px;
+        }
+
+
+        .brand-title {
+            font-weight: 800;
+
+            font-size: 17px;
+        }
+
+
+        .breadcrumb {
+            color: var(--muted);
+
+            font-size: 12px;
+        }
+
+
+        .header-actions {
+            display: flex;
+
+            align-items: center;
+
+            gap: 8px;
+        }
+
+
+        .header-button {
+            height: 36px;
+
+            padding:
+                0 12px;
+
+            border:
+                1px solid var(--border);
+
+            border-radius: 9px;
+
+            background:
+                var(--panel);
+
+            color: var(--muted);
+
+            cursor: pointer;
+
+            font-size: 12px;
+
+            transition:
+                background 0.15s,
+                color 0.15s,
+                border-color 0.15s;
+        }
+
+
+        .header-button:hover {
+            background: var(--panel-2);
+
+            color: var(--text);
+
+            border-color:
+                #3a4350;
+        }
+
+
+        /* =====================================================
+           MAIN
+           ===================================================== */
+
+        main {
+            max-width: 1100px;
+
+            margin: auto;
+
+            padding:
+                38px 24px 70px;
+        }
+
+
+        .emulator-layout {
+            display: grid;
+
+            grid-template-columns:
+                minmax(0, 1fr)
+                300px;
+
+            gap: 22px;
+
+            align-items: start;
+        }
+
+
+        /* =====================================================
+           EMULATOR PANEL
+           ===================================================== */
+
+        .emulator-panel {
+            overflow: hidden;
+
+            border:
+                1px solid var(--border);
+
+            border-radius: var(--radius);
+
+            background:
+                linear-gradient(
+                    145deg,
+                    #121720,
+                    #0e1117
+                );
+
+            box-shadow:
+                0 25px 70px
+                rgba(0,0,0,0.3);
+        }
+
+
+        .panel-header {
+            min-height: 58px;
+
+            padding:
+                0 18px;
+
+            display: flex;
+
+            align-items: center;
+
+            justify-content: space-between;
+
+            border-bottom:
+                1px solid var(--border);
+        }
+
+
+        .system-name {
+            display: flex;
+
+            align-items: center;
+
+            gap: 9px;
+        }
+
+
+        .system-icon {
+            font-size: 18px;
+        }
+
+
+        .system-name strong {
+            font-size: 14px;
+        }
+
+
+        .system-status {
+            display: flex;
+
+            align-items: center;
+
+            gap: 7px;
+
+            color: var(--muted);
+
+            font-size: 11px;
+        }
+
+
+        .status-dot {
+            width: 7px;
+            height: 7px;
+
+            border-radius: 50%;
+
+            background: #626c7a;
+        }
+
+
+        .status-dot.ready {
+            background: #54d69a;
+
+            box-shadow:
+                0 0 10px
+                rgba(84,214,154,0.5);
+        }
+
+
+        /* =====================================================
+           SCREEN
+           ===================================================== */
+
+        .screen-area {
+            padding: 32px;
+
+            display: flex;
+
+            align-items: center;
+
+            justify-content: center;
+
+            background:
+                radial-gradient(
+                    circle,
+                    rgba(124,108,255,0.06),
+                    transparent 65%
+                );
+        }
+
+
+        .screen-frame {
+            position: relative;
+
+            width: min(
+                100%,
+                640px
+            );
+
+            aspect-ratio: 160 / 144;
+
+            padding: 14px;
+
+            border-radius: 12px;
+
+            background:
+                #080b0d;
+
+            border:
+                1px solid #313844;
+
+            box-shadow:
+                inset 0 0 30px
+                rgba(0,0,0,0.65),
+
+                0 15px 40px
+                rgba(0,0,0,0.4);
+        }
+
+
+        /*
+         * Actual Game Boy resolution:
+         * 160 × 144
+         */
+
+        #screen {
+            display: block;
+
+            width: 100%;
+            height: 100%;
+
+            image-rendering:
+                pixelated;
+
+            image-rendering:
+                crisp-edges;
+
+            background:
+                var(--screen-dark);
+
+            border-radius: 3px;
+        }
+
+
+        .screen-overlay {
+            position: absolute;
+
+            inset: 14px;
+
+            pointer-events: none;
+
+            border-radius: 3px;
+
+            box-shadow:
+                inset 0 0 18px
+                rgba(0,0,0,0.22);
+        }
+
+
+        /* =====================================================
+           CONTROLS
+           ===================================================== */
+
+        .controls {
+            padding:
+                24px 28px 30px;
+
+            border-top:
+                1px solid var(--border);
+        }
+
+
+        .controls-title {
+            margin-bottom: 20px;
+
+            color: var(--muted);
+
+            font-size: 10px;
+
+            font-weight: 700;
+
+            letter-spacing: 1px;
+
+            text-transform: uppercase;
+        }
+
+
+        .gameboy-controls {
+            display: flex;
+
+            align-items: center;
+
+            justify-content: space-between;
+
+            gap: 30px;
+
+            max-width: 600px;
+
+            margin: auto;
+        }
+
+
+        /* D-PAD */
+
+        .dpad {
+            position: relative;
+
+            width: 120px;
+            height: 120px;
+        }
+
+
+        .dpad button {
+            position: absolute;
+
+            width: 40px;
+            height: 40px;
+
+            padding: 0;
+
+            border: 0;
+
+            border-radius: 7px;
+
+            background:
+                #292f39;
+
+            color: #d9dde4;
+
+            font-size: 18px;
+
+            cursor: pointer;
+
+            box-shadow:
+                0 4px 0 #171b21;
+
+            touch-action: none;
+
+            transition:
+                transform 0.06s,
+                background 0.06s;
+        }
+
+
+        .dpad button:active,
+        .dpad button.active {
+            transform:
+                translateY(3px);
+
+            background:
+                #3b4350;
+
+            box-shadow:
+                0 1px 0 #171b21;
+        }
+
+
+        .dpad-up {
+            left: 40px;
+            top: 0;
+        }
+
+
+        .dpad-down {
+            left: 40px;
+            bottom: 0;
+        }
+
+
+        .dpad-left {
+            left: 0;
+            top: 40px;
+        }
+
+
+        .dpad-right {
+            right: 0;
+            top: 40px;
+        }
+
+
+        /* ACTION BUTTONS */
+
+        .action-buttons {
+            display: flex;
+
+            align-items: center;
+
+            gap: 14px;
+
+            transform:
+                rotate(-12deg);
+        }
+
+
+        .action-button {
+            width: 56px;
+            height: 56px;
+
+            border: 0;
+
+            border-radius: 50%;
+
+            background:
+                #313845;
+
+            color: #f1f3f5;
+
+            font-weight: 800;
+
+            cursor: pointer;
+
+            box-shadow:
+                0 5px 0 #171b21;
+
+            touch-action: none;
+
+            transition:
+                transform 0.06s,
+                background 0.06s;
+        }
+
+
+        .action-button:active,
+        .action-button.active {
+            transform:
+                translateY(4px);
+
+            background:
+                #454e5c;
+
+            box-shadow:
+                0 1px 0 #171b21;
+        }
+
+
+        /* START / SELECT */
+
+        .small-buttons {
+            display: flex;
+
+            align-items: center;
+
+            justify-content: center;
+
+            gap: 15px;
+
+            margin-top: 25px;
+        }
+
+
+        .small-button {
+            width: 68px;
+            height: 22px;
+
+            border: 0;
+
+            border-radius: 12px;
+
+            background:
+                #303742;
+
+            color: #8d97a5;
+
+            font-size: 9px;
+
+            font-weight: 800;
+
+            letter-spacing: 0.5px;
+
+            cursor: pointer;
+
+            box-shadow:
+                0 3px 0 #171b21;
+
+            transform:
+                rotate(-8deg);
+        }
+
+
+        .small-button:active,
+        .small-button.active {
+            transform:
+                rotate(-8deg)
+                translateY(3px);
+
+            box-shadow:
+                0 0 0 #171b21;
+        }
+
+
+        /* =====================================================
+           SIDE PANEL
+           ===================================================== */
+
+        .side {
+            display: flex;
+
+            flex-direction: column;
+
+            gap: 14px;
+        }
+
+
+        .side-card {
+            padding: 18px;
+
+            border:
+                1px solid var(--border);
+
+            border-radius: var(--radius);
+
+            background:
+                var(--panel);
+        }
+
+
+        .side-title {
+            margin: 0 0 14px;
+
+            font-size: 13px;
+        }
+
+
+        .side-description {
+            margin: 0;
+
+            color: var(--muted);
+
+            font-size: 12px;
+
+            line-height: 1.6;
+        }
+
+
+        /* =====================================================
+           FILE INPUT
+           ===================================================== */
+
+        .file-input {
+            display: none;
+        }
+
+
+        .load-button {
+            width: 100%;
+
+            height: 42px;
+
+            border: 0;
+
+            border-radius: 10px;
+
+            background:
+                linear-gradient(
+                    135deg,
+                    #8172ff,
+                    #6556df
+                );
+
+            color: white;
+
+            font-size: 12px;
+
+            font-weight: 750;
+
+            cursor: pointer;
+
+            transition:
+                filter 0.15s,
+                transform 0.1s;
+        }
+
+
+        .load-button:hover {
+            filter:
+                brightness(1.08);
+        }
+
+
+        .load-button:active {
+            transform:
+                scale(0.98);
+        }
+
+
+        /* =====================================================
+           INFO
+           ===================================================== */
+
+        .info-row {
+            display: flex;
+
+            justify-content: space-between;
+
+            gap: 15px;
+
+            padding:
+                9px 0;
+
+            border-bottom:
+                1px solid rgba(255,255,255,0.05);
+
+            font-size: 11px;
+        }
+
+
+        .info-row:last-child {
+            border-bottom: 0;
+        }
+
+
+        .info-label {
+            color: var(--muted);
+        }
+
+
+        .info-value {
+            color: var(--text);
+
+            text-align: right;
+        }
+
+
+        /* =====================================================
+           FILE NAME
+           ===================================================== */
+
+        #romName {
+            margin-top: 10px;
+
+            overflow: hidden;
+
+            color: var(--muted);
+
+            font-size: 11px;
+
+            text-overflow: ellipsis;
+
+            white-space: nowrap;
+        }
+
+
+        /* =====================================================
+           FOOTER
+           ===================================================== */
+
+        footer {
+            max-width: 1100px;
+
+            margin: auto;
+
+            padding:
+                0 24px 30px;
+
+            color: #626c7a;
+
+            font-size: 10px;
+
+            text-align: center;
+        }
+
+
+        /* =====================================================
+           MOBILE
+           ===================================================== */
+
+        @media (max-width: 850px) {
+
+            .emulator-layout {
+                grid-template-columns: 1fr;
+            }
+
+
+            .side {
+                display: grid;
+
+                grid-template-columns:
+                    repeat(
+                        auto-fit,
+                        minmax(220px, 1fr)
+                    );
+            }
+
+        }
+
+
+        @media (max-width: 600px) {
+
+            .header-inner {
+                padding:
+                    0 16px;
+            }
+
+
+            .breadcrumb {
+                display: none;
+            }
+
+
+            main {
+                padding:
+                    22px 12px 50px;
+            }
+
+
+            .screen-area {
+                padding:
+                    18px;
+            }
+
+
+            .controls {
+                padding:
+                    20px 15px 25px;
+            }
+
+
+            .gameboy-controls {
+                gap: 12px;
+            }
+
+
+            .dpad {
+                transform:
+                    scale(0.85);
+            }
+
+
+            .action-buttons {
+                transform:
+                    rotate(-12deg)
+                    scale(0.85);
+            }
+
+        }
+
+    </style>
+</head>
+
+
+<body>
+
+
+<!-- =========================================================
+     HEADER
+     ========================================================= -->
+
+<header>
+
+    <div class="header-inner">
+
+        <div class="brand">
+
+            <div class="logo">
+                🎮
+            </div>
+
+            <div>
+
+                <div class="brand-title">
+                    WebBktx
+                </div>
+
+                <div class="breadcrumb">
+                    / Game Boy
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <div class="header-actions">
+
+            <button
+                class="header-button"
+                id="fullscreenButton"
+                type="button"
+            >
+                ⛶ Pełny ekran
+            </button>
+
+            <button
+                class="header-button"
+                id="backButton"
+                type="button"
+            >
+                ← Menu
+            </button>
+
+        </div>
+
+    </div>
+
+</header>
+
+
+<!-- =========================================================
+     MAIN
+     ========================================================= -->
+
+<main>
+
+
+    <div class="emulator-layout">
+
+
+        <!-- =================================================
+             EMULATOR
+             ================================================= -->
+
+        <section
+            class="emulator-panel"
+            id="emulatorPanel"
+        >
+
+
+            <div class="panel-header">
+
+                <div class="system-name">
+
+                    <span class="system-icon">
+                        🎮
+                    </span>
+
+                    <strong>
+                        Nintendo Game Boy
+                    </strong>
+
+                </div>
+
+
+                <div class="system-status">
+
+                    <span
+                        class="status-dot"
+                        id="statusDot"
+                    ></span>
+
+                    <span id="statusText">
+                        Gotowy
+                    </span>
+
+                </div>
+
+            </div>
+
+
+            <!-- SCREEN -->
+
+            <div class="screen-area">
+
+                <div class="screen-frame">
+
+                    <canvas
+                        id="screen"
+                        width="160"
+                        height="144"
+                        aria-label="Ekran Nintendo Game Boy"
+                    ></canvas>
+
+                    <div
+                        class="screen-overlay"
+                    ></div>
+
+                </div>
+
+            </div>
+
+
+            <!-- CONTROLS -->
+
+            <div class="controls">
+
+                <div class="controls-title">
+                    Sterowanie
+                </div>
+
+
+                <div class="gameboy-controls">
+
+
+                    <!-- D-PAD -->
+
+                    <div class="dpad">
+
+                        <button
+                            class="dpad-up"
+                            data-key="ArrowUp"
+                            aria-label="Góra"
+                        >
+                            ▲
+                        </button>
+
+                        <button
+                            class="dpad-left"
+                            data-key="ArrowLeft"
+                            aria-label="Lewo"
+                        >
+                            ◀
+                        </button>
+
+                        <button
+                            class="dpad-right"
+                            data-key="ArrowRight"
+                            aria-label="Prawo"
+                        >
+                            ▶
+                        </button>
+
+                        <button
+                            class="dpad-down"
+                            data-key="ArrowDown"
+                            aria-label="Dół"
+                        >
+                            ▼
+                        </button>
+
+                    </div>
+
+
+                    <!-- A / B -->
+
+                    <div class="action-buttons">
+
+                        <button
+                            class="action-button"
+                            data-key="x"
+                            aria-label="Przycisk B"
+                        >
+                            B
+                        </button>
+
+                        <button
+                            class="action-button"
+                            data-key="z"
+                            aria-label="Przycisk A"
+                        >
+                            A
+                        </button>
+
+                    </div>
+
+                </div>
+
+
+                <!-- SELECT / START -->
+
+                <div class="small-buttons">
+
+                    <button
+                        class="small-button"
+                        data-key="Shift"
+                    >
+                        SELECT
+                    </button>
+
+                    <button
+                        class="small-button"
+                        data-key="Enter"
+                    >
+                        START
+                    </button>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- =================================================
+             SIDE PANEL
+             ================================================= -->
+
+        <aside class="side">
+
+
+            <!-- ROM -->
+
+            <section class="side-card">
+
+                <h2 class="side-title">
+                    ROM
+                </h2>
+
+                <p class="side-description">
+                    Wczytaj legalnie posiadany plik
+                    Game Boy z urządzenia.
+                </p>
+
+
+                <br>
+
+
+                <label
+                    for="romInput"
+                    class="load-button"
+                    style="
+                        display:grid;
+                        place-items:center;
+                    "
+                >
+                    Wczytaj ROM
+                </label>
+
+
+                <input
+                    id="romInput"
+                    class="file-input"
+                    type="file"
+                    accept=".gb"
+                >
+
+
+                <div id="romName">
+                    Nie wybrano ROM-u
+                </div>
+
+            </section>
+
+
+            <!-- SYSTEM INFO -->
+
+            <section class="side-card">
+
+                <h2 class="side-title">
+                    System
+                </h2>
+
+
+                <div class="info-row">
+
+                    <span class="info-label">
+                        CPU
+                    </span>
+
+                    <span class="info-value">
+                        LR35902
+                    </span>
+
+                </div>
+
+
+                <div class="info-row">
+
+                    <span class="info-label">
+                        Rozdzielczość
+                    </span>
+
+                    <span class="info-value">
+                        160 × 144
+                    </span>
+
+                </div>
+
+
+                <div class="info-row">
+
+                    <span class="info-label">
+                        Kolor
+                    </span>
+
+                    <span class="info-value">
+                        Monochrome
+                    </span>
+
+                </div>
+
+
+                <div class="info-row">
+
+                    <span class="info-label">
+                        WebGPU
+                    </span>
+
+                    <span class="info-value">
+                        Nie wymagany
+                    </span>
+
+                </div>
+
+            </section>
+
+
+            <!-- EMULATOR INFO -->
+
+            <section class="side-card">
+
+                <h2 class="side-title">
+                    WebBktx Emulator
+                </h2>
+
+                <div class="info-row">
+
+                    <span class="info-label">
+                        Version
+                    </span>
+
+                    <span class="info-value">
+                        0.1.0
+                    </span>
+
+                </div>
+
+
+                <div class="info-row">
+
+                    <span class="info-label">
+                        Engine
+                    </span>
+
+                    <span class="info-value">
+                        JavaScript
+                    </span>
+
+                </div>
+
+
+                <div class="info-row">
+
+                    <span class="info-label">
+                        Platform
+                    </span>
+
+                    <span class="info-value">
+                        Web
+                    </span>
+
+                </div>
+
+            </section>
+
+        </aside>
+
+    </div>
+
+</main>
+
+
+<footer>
+
+    WebBktx Game Boy Emulator
+    •
+    Browser-based emulation
+
+</footer>
+
+
+<!-- =========================================================
+     JAVASCRIPT
+     ========================================================= -->
+
+<script>
+
+    /*
+     * =========================================================
+     * WebBktx Game Boy Frontend
+     * =========================================================
+     *
+     * Emulator core will later be loaded from:
+     *
+     * ./emulator.js
+     *
+     * CPU:
+     * ./cpu.js
+     *
+     * Memory:
+     * ./memory.js
+     *
+     * PPU:
+     * ./ppu.js
+     *
+     * Input:
+     * ./input.js
+     *
+     * =========================================================
+     */
+
+
+    const canvas =
+        document.getElementById(
+            "screen"
+        );
+
+
+    const ctx =
+        canvas.getContext(
+            "2d"
+        );
+
+
+    const romInput =
+        document.getElementById(
+            "romInput"
+        );
+
+
+    const romName =
+        document.getElementById(
+            "romName"
+        );
+
+
+    const statusText =
+        document.getElementById(
+            "statusText"
+        );
+
+
+    const statusDot =
+        document.getElementById(
+            "statusDot"
+        );
+
+
+    const fullscreenButton =
+        document.getElementById(
+            "fullscreenButton"
+        );
+
+
+    const backButton =
+        document.getElementById(
+            "backButton"
+        );
+
+
+    /*
+     * =========================================================
+     * GAME BOY SCREEN
+     * =========================================================
+     *
+     * Temporary test screen.
+     *
+     * This will later be replaced by the PPU.
+     * =========================================================
+     */
+
+    function drawBootScreen() {
+
+        ctx.imageSmoothingEnabled =
+            false;
+
+
+        ctx.fillStyle =
+            "#0f380f";
+
+        ctx.fillRect(
+            0,
+            0,
+            160,
+            144
+        );
+
+
+        ctx.fillStyle =
+            "#306230";
+
+        ctx.fillRect(
+            12,
+            12,
+            136,
+            120
+        );
+
+
+        ctx.fillStyle =
+            "#8bac0f";
+
+
+        ctx.font =
+            "bold 16px monospace";
+
+
+        ctx.textAlign =
+            "center";
+
+
+        ctx.textBaseline =
+            "middle";
+
+
+        ctx.fillText(
+            "WEBBKTX",
+            80,
+            58
+        );
+
+
+        ctx.font =
+            "8px monospace";
+
+
+        ctx.fillText(
+            "GAME BOY",
+            80,
+            78
+        );
+
+
+        ctx.fillText(
+            "INSERT ROM",
+            80,
+            104
+        );
+
+    }
+
+
+    drawBootScreen();
+
+
+    /*
+     * =========================================================
+     * ROM LOADING
+     * =========================================================
+     */
+
+    romInput.addEventListener(
+        "change",
+        async event => {
+
+            const file =
+                event.target.files?.[0];
+
+
+            if (!file) {
+                return;
+            }
+
+
+            romName.textContent =
+                file.name;
+
+
+            statusText.textContent =
+                "ROM załadowany";
+
+
+            statusDot.classList.add(
+                "ready"
+            );
+
+
+            console.log(
+                "WebBktx ROM:",
+                file.name
+            );
+
+
+            const buffer =
+                await file.arrayBuffer();
+
+
+            console.log(
+                "ROM size:",
+                buffer.byteLength,
+                "bytes"
+            );
+
+
+            /*
+             * TODO:
+             *
+             * emulator.loadROM(buffer)
+             *
+             * emulator.reset()
+             *
+             * emulator.start()
+             */
+
+        }
+    );
+
+
+    /*
+     * =========================================================
+     * KEYBOARD INPUT
+     * =========================================================
+     */
+
+    const keyButtons =
+        document.querySelectorAll(
+            "[data-key]"
+        );
+
+
+    document.addEventListener(
+        "keydown",
+        event => {
+
+            const button =
+                document.querySelector(
+                    `[data-key="${CSS.escape(event.key)}"]`
+                );
+
+
+            if (button) {
+
+                button.classList.add(
+                    "active"
+                );
+
+                event.preventDefault();
+
+            }
+
+        }
+    );
+
+
+    document.addEventListener(
+        "keyup",
+        event => {
+
+            const button =
+                document.querySelector(
+                    `[data-key="${CSS.escape(event.key)}"]`
+                );
+
+
+            if (button) {
+
+                button.classList.remove(
+                    "active"
+                );
+
+            }
+
+        }
+    );
+
+
+    /*
+     * =========================================================
+     * TOUCH / MOUSE BUTTONS
+     * =========================================================
+     */
+
+    keyButtons.forEach(
+        button => {
+
+            const key =
+                button.dataset.key;
+
+
+            button.addEventListener(
+                "pointerdown",
+                event => {
+
+                    event.preventDefault();
+
+                    button.classList.add(
+                        "active"
+                    );
+
+                    button.setPointerCapture(
+                        event.pointerId
+                    );
+
+                    console.log(
+                        "GB key down:",
+                        key
+                    );
+
+                }
+            );
+
+
+            button.addEventListener(
+                "pointerup",
+                event => {
+
+                    event.preventDefault();
+
+                    button.classList.remove(
+                        "active"
+                    );
+
+                    console.log(
+                        "GB key up:",
+                        key
+                    );
+
+                }
+            );
+
+
+            button.addEventListener(
+                "pointercancel",
+                () => {
+
+                    button.classList.remove(
+                        "active"
+                    );
+
+                }
+            );
+
+        }
+    );
+
+
+    /*
+     * =========================================================
+     * FULLSCREEN
+     * =========================================================
+     */
+
+    fullscreenButton.addEventListener(
+        "click",
+        async () => {
+
+            const panel =
+                document.getElementById(
+                    "emulatorPanel"
+                );
+
+
+            try {
+
+                if (
+                    !document.fullscreenElement
+                ) {
+
+                    await panel.requestFullscreen();
+
+                } else {
+
+                    await document.exitFullscreen();
+
+                }
+
+            } catch (error) {
+
+                console.error(
+                    "Fullscreen:",
+                    error
+                );
+
+            }
+
+        }
+    );
+
+
+    /*
+     * =========================================================
+     * BACK TO MENU
+     * =========================================================
+     */
+
+    backButton.addEventListener(
+        "click",
+        () => {
+
+            window.location.href =
+                "../../index.html";
+
+        }
+    );
+
+
+    /*
+     * =========================================================
+     * GLOBAL DEBUG API
+     * =========================================================
+     *
+     * Useful during emulator development.
+     * =========================================================
+     */
+
+    window.WebBktxGameBoy = {
+
+        canvas,
+
+        ctx,
+
+        getStatus() {
+
+            return {
+                system: "gameboy",
+                rom:
+                    romInput.files?.[0]?.name
+                    ?? null
+            };
+
+        }
+
+    };
+
+</script>
+
+
+</body>
+</html>
