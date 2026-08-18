@@ -5,364 +5,371 @@
 
     <meta
         name="viewport"
-        content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+        content="width=device-width, initial-scale=1.0"
     >
 
+    <!-- WebBktx metadata -->
+    <meta name="application-name" content="WebBktx">
     <meta
         name="description"
-        content="webbktx - wirtualny komputer działający w przeglądarce"
+        content="WebBktx — platforma emulatorów działających bezpośrednio w przeglądarce."
     >
+    <meta name="generator" content="WebBktx">
+    <meta name="webbktx-schema" content="webbktx.console.v1">
 
-    <title>webbktx — Web Virtual Machine</title>
+    <title>WebBktx</title>
 
     <style>
         * {
             box-sizing: border-box;
         }
 
-        html,
-        body {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            min-height: 100%;
-            background: #080b10;
-            color: #e8edf3;
+        :root {
             font-family:
+                Inter,
                 system-ui,
                 -apple-system,
                 BlinkMacSystemFont,
                 "Segoe UI",
                 sans-serif;
+
+            color-scheme: dark;
+
+            --background: #090b0f;
+            --surface: #11151b;
+            --surface-hover: #181e26;
+            --border: #252c36;
+            --text: #ffffff;
+            --muted: #9ca6b5;
+            --accent: #5865f2;
         }
 
         body {
+            margin: 0;
             min-height: 100vh;
-        }
-
-        button,
-        input {
-            font: inherit;
-        }
-
-        button {
-            cursor: pointer;
-        }
-
-        .app {
-            width: 100%;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
+            background: var(--background);
+            color: var(--text);
         }
 
         /* HEADER */
 
-        .header {
-            min-height: 64px;
-            padding: 12px 18px;
+        header {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+
+            padding: 18px 28px;
+
+            background: rgba(9, 11, 15, 0.9);
+            backdrop-filter: blur(14px);
+
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header-content {
+            max-width: 1200px;
+            margin: auto;
+
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 15px;
-            border-bottom: 1px solid #202733;
-            background: #0d1118;
+
+            gap: 20px;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
         }
 
         .logo {
+            width: 42px;
+            height: 42px;
+
+            display: grid;
+            place-items: center;
+
+            border-radius: 12px;
+
+            background: var(--accent);
+
+            font-size: 22px;
+        }
+
+        .brand-name {
             font-size: 21px;
             font-weight: 800;
-            letter-spacing: 0.5px;
         }
 
-        .logo span {
-            color: #6ea8fe;
-        }
+        .brand-version {
+            margin-left: 6px;
 
-        .status {
-            padding: 7px 12px;
-            border-radius: 8px;
-            background: #171d26;
-            color: #9da9b8;
-            font-size: 13px;
-            white-space: nowrap;
-        }
-
-        .status[data-state="running"] {
-            color: #8ee28e;
-        }
-
-        .status[data-state="paused"] {
-            color: #ffd166;
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 500;
         }
 
         /* MAIN */
 
-        .main {
-            width: 100%;
-            max-width: 1500px;
-            margin: 0 auto;
-            padding: 20px;
-            display: grid;
-            grid-template-columns: 330px minmax(0, 1fr);
-            gap: 20px;
-            flex: 1;
+        main {
+            max-width: 1200px;
+            margin: auto;
+            padding: 55px 28px;
         }
 
-        /* SIDEBAR */
+        .hero {
+            margin-bottom: 45px;
+        }
 
-        .sidebar {
+        .hero h1 {
+            margin: 0 0 12px;
+
+            font-size: clamp(36px, 6vw, 64px);
+            line-height: 1;
+
+            letter-spacing: -2px;
+        }
+
+        .hero p {
+            max-width: 650px;
+
+            margin: 0;
+
+            color: var(--muted);
+
+            font-size: 17px;
+            line-height: 1.6;
+        }
+
+        /* SEARCH */
+
+        .toolbar {
             display: flex;
-            flex-direction: column;
-            gap: 15px;
+            gap: 12px;
+
+            margin-bottom: 28px;
         }
 
-        .panel {
-            background: #0d1118;
-            border: 1px solid #202733;
+        #search {
+            width: 100%;
+
+            padding: 14px 16px;
+
+            border: 1px solid var(--border);
             border-radius: 12px;
-            padding: 16px;
-        }
 
-        .panel h2 {
-            margin: 0 0 13px;
+            outline: none;
+
+            background: var(--surface);
+            color: var(--text);
+
             font-size: 15px;
         }
 
-        .panel h3 {
-            margin: 0 0 8px;
-            font-size: 13px;
-            color: #9da9b8;
-            font-weight: 600;
+        #search:focus {
+            border-color: var(--accent);
         }
 
-        .iso-picker {
-            width: 100%;
-            padding: 11px;
-            border: 1px dashed #3b4656;
-            border-radius: 9px;
-            background: #111722;
-            color: #dce3eb;
-        }
+        /* GRID */
 
-        .iso-info {
-            margin-top: 10px;
-            padding: 10px;
-            border-radius: 8px;
-            background: #080b10;
-            color: #8f9bab;
-            font-size: 12px;
-            word-break: break-word;
-        }
-
-        .buttons {
+        #consoleGrid {
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 9px;
-            margin-top: 13px;
+
+            grid-template-columns:
+                repeat(auto-fill, minmax(250px, 1fr));
+
+            gap: 18px;
         }
 
-        .button {
-            min-height: 42px;
-            border: 1px solid #303a49;
-            border-radius: 8px;
-            background: #171e28;
-            color: #e8edf3;
+        /* CONSOLE CARD */
+
+        .console-card {
+            overflow: hidden;
+
+            display: flex;
+            flex-direction: column;
+
+            min-height: 260px;
+
+            background: var(--surface);
+
+            border: 1px solid var(--border);
+            border-radius: 16px;
+
             transition:
-                background 0.15s,
-                border-color 0.15s,
-                transform 0.1s;
+                transform 0.15s ease,
+                border-color 0.15s ease,
+                background 0.15s ease;
         }
 
-        .button:hover {
-            background: #202a38;
-            border-color: #4b5b70;
+        .console-card:hover {
+            transform: translateY(-4px);
+
+            background: var(--surface-hover);
+
+            border-color: #3a4350;
         }
 
-        .button:active {
+        .console-icon {
+            display: grid;
+            place-items: center;
+
+            height: 120px;
+
+            background:
+                linear-gradient(
+                    135deg,
+                    #151a22,
+                    #0d1015
+                );
+
+            font-size: 54px;
+        }
+
+        .console-content {
+            display: flex;
+            flex-direction: column;
+
+            flex: 1;
+
+            padding: 18px;
+        }
+
+        .console-name {
+            margin: 0 0 6px;
+
+            font-size: 19px;
+        }
+
+        .console-manufacturer {
+            color: var(--muted);
+
+            font-size: 13px;
+        }
+
+        .console-description {
+            margin: 14px 0;
+
+            color: var(--muted);
+
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .console-meta {
+            display: flex;
+            flex-wrap: wrap;
+
+            gap: 6px;
+
+            margin-top: auto;
+            margin-bottom: 14px;
+        }
+
+        .tag {
+            padding: 5px 8px;
+
+            border-radius: 7px;
+
+            background: #1b212a;
+
+            color: #aeb7c4;
+
+            font-size: 11px;
+        }
+
+        /* BUTTON */
+
+        .launch-button {
+            width: 100%;
+
+            padding: 11px 14px;
+
+            border: 0;
+            border-radius: 10px;
+
+            background: var(--accent);
+            color: white;
+
+            font-weight: 700;
+
+            cursor: pointer;
+
+            transition:
+                opacity 0.15s ease,
+                transform 0.15s ease;
+        }
+
+        .launch-button:hover {
+            opacity: 0.9;
+        }
+
+        .launch-button:active {
             transform: scale(0.98);
         }
 
-        .button.primary {
-            background: #245ca8;
-            border-color: #3575cf;
+        .launch-button.disabled {
+            background: #252b34;
+
+            color: #707987;
+
+            cursor: not-allowed;
         }
 
-        .button.primary:hover {
-            background: #2d6bc0;
+        /* STATUS */
+
+        #status {
+            margin-bottom: 18px;
+
+            color: var(--muted);
+
+            font-size: 14px;
         }
 
-        .button.full {
-            grid-column: 1 / -1;
-        }
+        .error {
+            padding: 15px;
 
-        /* INFO */
-
-        .info {
-            display: grid;
-            gap: 8px;
-        }
-
-        .info-row {
-            display: flex;
-            justify-content: space-between;
-            gap: 10px;
-            font-size: 13px;
-        }
-
-        .info-row span:first-child {
-            color: #8491a1;
-        }
-
-        .info-row span:last-child {
-            color: #d9e1ea;
-            text-align: right;
-        }
-
-        /* VM */
-
-        #vmContainer {
-            min-width: 0;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-
-        .screen-panel {
-            flex: 1;
-            min-height: 500px;
-            padding: 12px;
-            background: #05070a;
-            border: 1px solid #202733;
+            border: 1px solid #542b2b;
             border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
 
-        #vmScreen {
-            display: block;
-            width: 100%;
-            max-width: 1280px;
-            height: auto;
-            aspect-ratio: 16 / 10;
-            background: #000;
-            border-radius: 5px;
-            image-rendering: pixelated;
-            box-shadow: 0 0 30px rgba(0, 0, 0, 0.55);
-        }
+            background: #1d1111;
 
-        /* LOG */
-
-        .log-panel {
-            height: 180px;
-            display: flex;
-            flex-direction: column;
-        }
-
-        #vmLog {
-            flex: 1;
-            overflow-y: auto;
-            padding: 10px;
-            background: #070a0f;
-            border-radius: 8px;
-            font-family:
-                "Cascadia Code",
-                "Consolas",
-                monospace;
-            font-size: 12px;
-            line-height: 1.6;
-            color: #9da9b8;
-        }
-
-        #vmLog div[data-type="error"] {
-            color: #ff7b7b;
+            color: #ff8c8c;
         }
 
         /* FOOTER */
 
-        .footer {
-            padding: 12px 20px;
-            border-top: 1px solid #202733;
-            color: #657181;
-            font-size: 12px;
-            text-align: center;
+        footer {
+            max-width: 1200px;
+
+            margin: 40px auto 0;
+            padding: 25px 28px;
+
+            border-top: 1px solid var(--border);
+
+            color: var(--muted);
+
+            font-size: 13px;
         }
 
         /* MOBILE */
 
-        @media (max-width: 850px) {
-            .header {
-                padding: 10px 13px;
+        @media (max-width: 600px) {
+            header {
+                padding: 14px 18px;
             }
 
-            .main {
+            main {
+                padding: 40px 18px;
+            }
+
+            .hero h1 {
+                letter-spacing: -1px;
+            }
+
+            #consoleGrid {
                 grid-template-columns: 1fr;
-                padding: 12px;
-                gap: 12px;
-            }
-
-            .sidebar {
-                order: 2;
-            }
-
-            #vmContainer {
-                order: 1;
-            }
-
-            .screen-panel {
-                min-height: 0;
-                padding: 7px;
-            }
-
-            #vmScreen {
-                width: 100%;
-            }
-
-            .panel {
-                padding: 13px;
-            }
-
-            .footer {
-                padding: 10px;
-            }
-        }
-
-        /* TELEFON */
-
-        @media (max-width: 500px) {
-            .logo {
-                font-size: 18px;
-            }
-
-            .status {
-                font-size: 11px;
-                padding: 6px 8px;
-            }
-
-            .main {
-                padding: 8px;
-            }
-
-            .buttons {
-                grid-template-columns: 1fr;
-            }
-
-            .button.full {
-                grid-column: auto;
-            }
-
-            .screen-panel {
-                padding: 3px;
-                border-radius: 7px;
-            }
-
-            #vmScreen {
-                border-radius: 3px;
-            }
-
-            .log-panel {
-                height: 150px;
             }
         }
     </style>
@@ -370,214 +377,565 @@
 
 <body>
 
-<div class="app">
+<header>
 
-    <!-- HEADER -->
+    <div class="header-content">
 
-    <header class="header">
+        <div class="brand">
 
-        <div class="logo">
-            <span>webbktx</span>
-            Web Virtual Machine
-        </div>
-
-        <div
-            id="vmStatus"
-            class="status"
-            data-state="stopped"
-        >
-            Gotowa
-        </div>
-
-    </header>
-
-
-    <!-- MAIN -->
-
-    <main class="main">
-
-        <!-- SIDEBAR -->
-
-        <aside class="sidebar">
-
-            <!-- ISO -->
-
-            <section class="panel">
-
-                <h2>💿 Wirtualny dysk</h2>
-
-                <h3>Obraz ISO</h3>
-
-                <input
-                    id="isoInput"
-                    class="iso-picker"
-                    type="file"
-                    accept=".iso,application/octet-stream"
-                >
-
-                <div
-                    id="isoInfo"
-                    class="iso-info"
-                >
-                    Nie wybrano ISO
-                </div>
-
-                <div class="buttons">
-
-                    <button
-                        id="startButton"
-                        class="button primary"
-                        type="button"
-                    >
-                        ▶ Start
-                    </button>
-
-                    <button
-                        id="pauseButton"
-                        class="button"
-                        type="button"
-                    >
-                        ⏸ Pauza
-                    </button>
-
-                    <button
-                        id="resetButton"
-                        class="button"
-                        type="button"
-                    >
-                        ↻ Reset
-                    </button>
-
-                    <button
-                        id="fullscreenButton"
-                        class="button"
-                        type="button"
-                    >
-                        ⛶ Pełny ekran
-                    </button>
-
-                </div>
-
-            </section>
-
-
-            <!-- KONFIGURACJA -->
-
-            <section class="panel">
-
-                <h2>⚙️ Konfiguracja VM</h2>
-
-                <div class="info">
-
-                    <div class="info-row">
-                        <span>RAM</span>
-                        <span id="vmRam">Auto</span>
-                    </div>
-
-                    <div class="info-row">
-                        <span>CPU</span>
-                        <span id="vmCpu">Auto</span>
-                    </div>
-
-                    <div class="info-row">
-                        <span>Cache</span>
-                        <span id="vmCache">Auto</span>
-                    </div>
-
-                    <div class="info-row">
-                        <span>Urządzenie</span>
-                        <span id="vmDevice">Auto</span>
-                    </div>
-
-                    <div class="info-row">
-                        <span>Czas pracy</span>
-                        <span id="vmRuntime">00:00</span>
-                    </div>
-
-                </div>
-
-            </section>
-
-
-            <!-- INFORMACJE -->
-
-            <section class="panel">
-
-                <h2>🖥️ Virtual PC</h2>
-
-                <div class="info">
-
-                    <div class="info-row">
-                        <span>BIOS</span>
-                        <span>Virtual BIOS</span>
-                    </div>
-
-                    <div class="info-row">
-                        <span>VGA</span>
-                        <span>Virtual VGA</span>
-                    </div>
-
-                    <div class="info-row">
-                        <span>CD/DVD</span>
-                        <span>ISO</span>
-                    </div>
-
-                    <div class="info-row">
-                        <span>Tryb</span>
-                        <span>Browser</span>
-                    </div>
-
-                </div>
-
-            </section>
-
-        </aside>
-
-
-        <!-- VM -->
-
-        <section id="vmContainer">
-
-            <div class="screen-panel">
-
-                <canvas
-                    id="vmScreen"
-                    width="800"
-                    height="500"
-                >
-                    Twoja przeglądarka nie obsługuje Canvas.
-                </canvas>
-
+            <div class="logo">
+                🎮
             </div>
 
+            <div>
+                <span class="brand-name">
+                    WebBktx
+                </span>
 
-            <!-- LOG -->
+                <span class="brand-version">
+                    v1
+                </span>
+            </div>
 
-            <section class="panel log-panel">
+        </div>
 
-                <h2>📋 Konsola VM</h2>
+    </div>
 
-                <div id="vmLog"></div>
-
-            </section>
-
-        </section>
-
-    </main>
-
-
-    <!-- FOOTER -->
-
-    <footer class="footer">
-        webbktx • Web Virtual Machine
-    </footer>
-
-</div>
+</header>
 
 
-<!-- GŁÓWNY JAVASCRIPT -->
+<main>
 
-<script src="app.js"></script>
+    <section class="hero">
+
+        <h1>
+            WebBktx
+        </h1>
+
+        <p>
+            Platforma emulatorów działających
+            bezpośrednio w przeglądarce.
+            Wybierz konsolę i uruchom emulator.
+        </p>
+
+    </section>
+
+
+    <section>
+
+        <div class="toolbar">
+
+            <input
+                id="search"
+                type="search"
+                placeholder="Szukaj konsoli..."
+                autocomplete="off"
+            >
+
+        </div>
+
+
+        <div id="status">
+            Ładowanie konsol...
+        </div>
+
+
+        <div id="consoleGrid"></div>
+
+    </section>
+
+</main>
+
+
+<footer>
+
+    WebBktx • Web Emulation Platform
+
+</footer>
+
+
+<script>
+
+    /*
+     * ============================================================
+     * WebBktx Console Loader
+     * Schema: webbktx.console.v1
+     * ============================================================
+     */
+
+    const CONSOLE_DATABASE = "./consoles.json";
+
+    const grid =
+        document.getElementById("consoleGrid");
+
+    const status =
+        document.getElementById("status");
+
+    const search =
+        document.getElementById("search");
+
+
+    let consoles = [];
+
+
+    /*
+     * ------------------------------------------------------------
+     * LOAD DATABASE
+     * ------------------------------------------------------------
+     */
+
+    async function loadConsoleDatabase() {
+
+        try {
+
+            const response =
+                await fetch(CONSOLE_DATABASE);
+
+            if (!response.ok) {
+
+                throw new Error(
+                    `HTTP ${response.status}`
+                );
+
+            }
+
+
+            const database =
+                await response.json();
+
+
+            /*
+             * Validate WebBktx schema
+             */
+
+            if (
+                database.schema !==
+                "webbktx.console.v1"
+            ) {
+
+                throw new Error(
+                    "Nieobsługiwany schemat consoles.json"
+                );
+
+            }
+
+
+            if (
+                !Array.isArray(
+                    database.consoles
+                )
+            ) {
+
+                throw new Error(
+                    "Pole 'consoles' musi być tablicą"
+                );
+
+            }
+
+
+            consoles =
+                database.consoles;
+
+
+            renderConsoles(consoles);
+
+
+        } catch (error) {
+
+            console.error(
+                "WebBktx:",
+                error
+            );
+
+
+            status.innerHTML = `
+                <div class="error">
+                    Nie można załadować bazy konsol.
+                    <br>
+                    <small>
+                        ${escapeHTML(error.message)}
+                    </small>
+                </div>
+            `;
+
+        }
+
+    }
+
+
+    /*
+     * ------------------------------------------------------------
+     * RENDER CONSOLES
+     * ------------------------------------------------------------
+     */
+
+    function renderConsoles(list) {
+
+        grid.innerHTML = "";
+
+
+        if (list.length === 0) {
+
+            status.textContent =
+                "Nie znaleziono konsol.";
+
+            return;
+
+        }
+
+
+        status.textContent =
+            `${list.length} konsol`;
+
+
+        for (
+            const consoleInfo of list
+        ) {
+
+            grid.appendChild(
+                createConsoleCard(
+                    consoleInfo
+                )
+            );
+
+        }
+
+    }
+
+
+    /*
+     * ------------------------------------------------------------
+     * CREATE CARD
+     * ------------------------------------------------------------
+     */
+
+    function createConsoleCard(
+        consoleInfo
+    ) {
+
+        const card =
+            document.createElement("article");
+
+        card.className =
+            "console-card";
+
+
+        /*
+         * Icon
+         */
+
+        const icon =
+            document.createElement("div");
+
+        icon.className =
+            "console-icon";
+
+        icon.textContent =
+            consoleInfo.ui?.icon ??
+            "🎮";
+
+
+        /*
+         * Content
+         */
+
+        const content =
+            document.createElement("div");
+
+        content.className =
+            "console-content";
+
+
+        /*
+         * Name
+         */
+
+        const name =
+            document.createElement("h2");
+
+        name.className =
+            "console-name";
+
+        name.textContent =
+            consoleInfo.name ??
+            "Unknown Console";
+
+
+        /*
+         * Manufacturer
+         */
+
+        const manufacturer =
+            document.createElement("div");
+
+        manufacturer.className =
+            "console-manufacturer";
+
+        manufacturer.textContent =
+            consoleInfo.manufacturer ??
+            "Unknown manufacturer";
+
+
+        /*
+         * Description
+         */
+
+        const description =
+            document.createElement("p");
+
+        description.className =
+            "console-description";
+
+        description.textContent =
+            consoleInfo.ui?.description ??
+            "Brak opisu.";
+
+
+        /*
+         * Metadata tags
+         */
+
+        const meta =
+            document.createElement("div");
+
+        meta.className =
+            "console-meta";
+
+
+        addTag(
+            meta,
+            consoleInfo.category
+        );
+
+        addTag(
+            meta,
+            consoleInfo.releaseYear
+        );
+
+        addTag(
+            meta,
+            consoleInfo.status
+        );
+
+
+        /*
+         * Launch button
+         */
+
+        const button =
+            document.createElement("button");
+
+        button.className =
+            "launch-button";
+
+
+        const ready =
+            consoleInfo.status ===
+            "ready";
+
+
+        button.textContent =
+            ready
+                ? "Uruchom emulator"
+                : "W przygotowaniu";
+
+
+        if (!ready) {
+
+            button.classList.add(
+                "disabled"
+            );
+
+            button.disabled = true;
+
+        } else {
+
+            button.addEventListener(
+                "click",
+                () => launchConsole(
+                    consoleInfo
+                )
+            );
+
+        }
+
+
+        content.appendChild(name);
+        content.appendChild(manufacturer);
+        content.appendChild(description);
+        content.appendChild(meta);
+        content.appendChild(button);
+
+        card.appendChild(icon);
+        card.appendChild(content);
+
+
+        return card;
+
+    }
+
+
+    /*
+     * ------------------------------------------------------------
+     * TAG
+     * ------------------------------------------------------------
+     */
+
+    function addTag(
+        parent,
+        value
+    ) {
+
+        if (
+            value === undefined ||
+            value === null
+        ) {
+            return;
+        }
+
+
+        const tag =
+            document.createElement("span");
+
+        tag.className =
+            "tag";
+
+        tag.textContent =
+            value;
+
+        parent.appendChild(tag);
+
+    }
+
+
+    /*
+     * ------------------------------------------------------------
+     * LAUNCH EMULATOR
+     * ------------------------------------------------------------
+     */
+
+    function launchConsole(
+        consoleInfo
+    ) {
+
+        const entry =
+            consoleInfo.emulator?.entry;
+
+
+        if (!entry) {
+
+            console.error(
+                "Brak emulator.entry:",
+                consoleInfo
+            );
+
+            return;
+
+        }
+
+
+        window.location.href =
+            entry;
+
+    }
+
+
+    /*
+     * ------------------------------------------------------------
+     * SEARCH
+     * ------------------------------------------------------------
+     */
+
+    search.addEventListener(
+        "input",
+        () => {
+
+            const query =
+                search.value
+                    .trim()
+                    .toLowerCase();
+
+
+            if (!query) {
+
+                renderConsoles(
+                    consoles
+                );
+
+                return;
+
+            }
+
+
+            const filtered =
+                consoles.filter(
+                    consoleInfo => {
+
+                        const text = [
+
+                            consoleInfo.id,
+
+                            consoleInfo.name,
+
+                            consoleInfo.manufacturer,
+
+                            consoleInfo.category,
+
+                            consoleInfo.ui?.description,
+
+                            consoleInfo.hardware?.cpu
+
+                        ]
+                        .filter(Boolean)
+                        .join(" ")
+                        .toLowerCase();
+
+
+                        return text.includes(
+                            query
+                        );
+
+                    }
+                );
+
+
+            renderConsoles(
+                filtered
+            );
+
+        }
+    );
+
+
+    /*
+     * ------------------------------------------------------------
+     * BASIC HTML ESCAPE
+     * ------------------------------------------------------------
+     */
+
+    function escapeHTML(
+        value
+    ) {
+
+        return String(value)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#039;");
+
+    }
+
+
+    /*
+     * ------------------------------------------------------------
+     * START
+     * ------------------------------------------------------------
+     */
+
+    loadConsoleDatabase();
+
+</script>
 
 </body>
 </html>
