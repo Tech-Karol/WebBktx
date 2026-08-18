@@ -1,4279 +1,2678 @@
+"use strict";
+
 /*
  * ============================================================
- * WebBktx Unified Runtime
- * XBE BOOT RUNTIME
+ * WebBktx
+ * Xbox emulator runtime for the browser
  *
- * Version: 1.3.0
+ * Fresh runtime architecture.
  *
- * Pipeline:
+ * This file contains:
  *
- * XBE
- *  ↓
- * Parse header
- *  ↓
- * Parse certificate
- *  ↓
- * Parse sections
- *  ↓
- * Map sections into RAM
- *  ↓
- * Resolve EntryPoint
- *  ↓
- * Setup CPU
- *  ↓
- * Execute x86
- *  ↓
- * Diagnostics
+ *  - physical memory
+ *  - x86 CPU
+ *  - x86 decoder/executor
+ *  - XBE parser
+ *  - executable image loader
+ *  - Xbox kernel abstraction
+ *  - XAPI
+ *  - XFile
+ *  - XInput
+ *  - XGraphics
+ *  - emulator machine
  *
- * Experimental Xbox-compatible browser runtime.
+ * No external runtime files are required.
+ *
  * ============================================================
  */
 
-"use strict";
+(() => {
 
-const WEBBKTX_VERSION = "1.3.0";
+    const VERSION = "2.0.0";
 
-const WEBBKTX_RAM_SIZE =
-    64 * 1024 * 1024;
+    const DEFAULT_RAM = 64 * 1024 * 1024;
 
+    const U32 = value => Number(value) >>> 0;
 
-/* ============================================================
-   UTILITIES
-============================================================ */
+    const I32 = value => Number(value) | 0;
 
-function u32(value) {
-    return Number(value) >>> 0;
-}
+    const HEX = (value, width = 8) =>
+        U32(value).toString(16).toUpperCase().padStart(width, "0");
 
-function hex(value, width = 8) {
-    return "0x" +
-        u32(value)
-            .toString(16)
-            .toUpperCase()
-            .padStart(width, "0");
-}
-
-function clamp(value, min, max) {
-    return Math.max(
-        min,
-        Math.min(max, value)
-    );
-}
+    const clamp = (value, min, max) =>
+        Math.max(min, Math.min(max, value));
 
 
-/* ============================================================
-   MEMORY
-============================================================ */
+    /* ========================================================
+       MEMORY
+    ======================================================== */
 
-class WebBktxMemory {
+    class Memory {
 
-    constructor(size = WEBBKTX_RAM_SIZE) {
+        constructor(size = DEFAULT_RAM) {
 
-        size = Number(size);
+            size = Number(size);
 
-        if (
-            !Number.isInteger(size) ||
-            size <= 0
-        ) {
-            throw new Error(
-                "Invalid memory size."
+            if (
+                !Number.isInteger(size) ||
+                size < 1024 * 1024
+            ) {
+                throw new Error("Invalid RAM size.");
+            }
+
+            this.size = size;
+
+            this.buffer = new ArrayBuffer(size);
+
+            this.u8 = new Uint8Array(this.buffer);
+
+            this.view = new DataView(this.buffer);
+        }
+
+
+        reset() {
+
+            this.u8.fill(0);
+        }
+
+
+        check(address, length = 1) {
+
+            address = U32(address);
+            length = Number(length);
+
+            if (
+                !Number.isInteger(length) ||
+                length < 0
+            ) {
+                throw new RangeError("Invalid memory length.");
+            }
+
+            if (
+                address > this.size ||
+                length > this.size - address
+            ) {
+                throw new RangeError(
+                    `Memory access violation at 0x${HEX(address)}`
+                );
+            }
+
+            return address;
+        }
+
+
+        read8(address) {
+
+            return this.u8[this.check(address)];
+        }
+
+
+        read16(address) {
+
+            return this.view.getUint16(
+                this.check(address, 2),
+                true
             );
         }
 
-        this.size = size;
 
-        this.buffer =
-            new ArrayBuffer(size);
+        read32(address) {
 
-        this.view =
-            new DataView(
-                this.buffer
-            );
-
-        this.u8 =
-            new Uint8Array(
-                this.buffer
-            );
-
-        this.reset();
-    }
-
-
-    reset() {
-        this.u8.fill(0);
-    }
-
-
-    check(address, bytes = 1) {
-
-        address = u32(address);
-        bytes = Number(bytes);
-
-        if (
-            !Number.isInteger(bytes) ||
-            bytes < 0
-        ) {
-            throw new RangeError(
-                "Invalid memory access size."
+            return this.view.getUint32(
+                this.check(address, 4),
+                true
             );
         }
 
-        if (
-            address > this.size ||
-            bytes > this.size - address
-        ) {
-            throw new RangeError(
-                `Memory access violation at ${hex(address)}`
+
+        readS8(address) {
+
+            return this.view.getInt8(
+                this.check(address)
             );
         }
 
-        return address;
-    }
+
+        readS16(address) {
+
+            return this.view.getInt16(
+                this.check(address, 2),
+                true
+            );
+        }
 
 
-    read8(address) {
+        readS32(address) {
 
-        return this.u8[
-            this.check(address)
-        ];
-    }
-
-
-    read16(address) {
-
-        return this.view.getUint16(
-            this.check(address, 2),
-            true
-        );
-    }
+            return this.view.getInt32(
+                this.check(address, 4),
+                true
+            );
+        }
 
 
-    read32(address) {
+        write8(address, value) {
 
-        return this.view.getUint32(
-            this.check(address, 4),
-            true
-        );
-    }
+            this.u8[this.check(address)] =
+                U32(value) & 0xFF;
+        }
 
 
-    readSigned8(address) {
+        write16(address, value) {
 
-        return this.view.getInt8(
-            this.check(address)
-        );
-    }
-
-
-    readSigned16(address) {
-
-        return this.view.getInt16(
-            this.check(address, 2),
-            true
-        );
-    }
+            this.view.setUint16(
+                this.check(address, 2),
+                U32(value) & 0xFFFF,
+                true
+            );
+        }
 
 
-    readSigned32(address) {
+        write32(address, value) {
 
-        return this.view.getInt32(
-            this.check(address, 4),
-            true
-        );
-    }
-
-
-    write8(address, value) {
-
-        this.u8[
-            this.check(address)
-        ] =
-            Number(value) & 0xFF;
-    }
+            this.view.setUint32(
+                this.check(address, 4
+                ),
+                U32(value),
+                true
+            );
+        }
 
 
-    write16(address, value) {
+        readBytes(address, length) {
 
-        this.view.setUint16(
-            this.check(address, 2),
-            Number(value) & 0xFFFF,
-            true
-        );
-    }
+            this.check(address, length);
 
-
-    write32(address, value) {
-
-        this.view.setUint32(
-            this.check(address, 4),
-            u32(value),
-            true
-        );
-    }
-
-
-    readBytes(address, length) {
-
-        length = Number(length);
-
-        this.check(
-            address,
-            length
-        );
-
-        return this.u8.slice(
-            u32(address),
-            u32(address) + length
-        );
-    }
-
-
-    writeBytes(address, data) {
-
-        const bytes =
-            data instanceof Uint8Array
-                ? data
-                : new Uint8Array(data);
-
-        const target =
-            this.check(
+            return this.u8.slice(
                 address,
-                bytes.length
-            );
-
-        this.u8.set(
-            bytes,
-            target
-        );
-    }
-
-
-    fill(
-        address,
-        length,
-        value = 0
-    ) {
-
-        address = u32(address);
-        length = Number(length);
-
-        this.check(
-            address,
-            length
-        );
-
-        this.u8.fill(
-            Number(value) & 0xFF,
-            address,
-            address + length
-        );
-    }
-
-
-    getStatus() {
-
-        return {
-            size: this.size,
-            bytes: this.size,
-            megabytes:
-                this.size / 1024 / 1024
-        };
-    }
-}
-
-
-/* ============================================================
-   CPU FLAGS
-============================================================ */
-
-const WebBktxCPUFlags = {
-
-    CF: 0x00000001,
-    PF: 0x00000004,
-    AF: 0x00000010,
-    ZF: 0x00000040,
-    SF: 0x00000080,
-
-    IF: 0x00000200,
-    DF: 0x00000400,
-
-    OF: 0x00000800
-};
-
-
-/* ============================================================
-   CPU
-============================================================ */
-
-class WebBktxCPU {
-
-    constructor(memory) {
-
-        if (
-            !(memory instanceof WebBktxMemory)
-        ) {
-            throw new Error(
-                "WebBktxCPU requires WebBktxMemory."
-            );
-        }
-
-        this.memory = memory;
-
-        this.decoder = null;
-
-        this.maxInstructions = 100000;
-
-        this.breakpoints = new Set();
-
-        this.traceEnabled = false;
-
-        this.trace = [];
-
-        this.maxTraceEntries = 2000;
-
-        this.onInstruction = null;
-        this.onBreakpoint = null;
-        this.onHalt = null;
-        this.onFault = null;
-
-        this.reset();
-    }
-
-
-    reset() {
-
-        this.EAX = 0;
-        this.EBX = 0;
-        this.ECX = 0;
-        this.EDX = 0;
-
-        this.ESI = 0;
-        this.EDI = 0;
-
-        this.EBP = 0;
-
-        this.ESP =
-            Math.max(
-                0,
-                this.memory.size - 4
-            ) >>> 0;
-
-        this.EIP = 0;
-
-        this.EFLAGS = 0x00000002;
-
-        this.running = false;
-        this.halted = false;
-        this.faulted = false;
-
-        this.lastError = null;
-        this.lastInstruction = null;
-
-        this.cycles = 0;
-        this.instructionsExecuted = 0;
-
-        this.trace.length = 0;
-    }
-
-
-    attachDecoder(decoder) {
-
-        if (!decoder) {
-            throw new Error(
-                "Invalid decoder."
-            );
-        }
-
-        this.decoder = decoder;
-
-        return true;
-    }
-
-
-    getRegister(name) {
-
-        const n =
-            String(name)
-                .toUpperCase();
-
-        switch (n) {
-
-            case "EAX":
-            case "EBX":
-            case "ECX":
-            case "EDX":
-            case "ESI":
-            case "EDI":
-            case "EBP":
-            case "ESP":
-            case "EIP":
-            case "EFLAGS":
-
-                return this[n] >>> 0;
-
-            default:
-
-                throw new Error(
-                    `Unknown register: ${n}`
-                );
-        }
-    }
-
-
-    setRegister(name, value) {
-
-        const n =
-            String(name)
-                .toUpperCase();
-
-        if (n === "EFLAGS") {
-
-            this.EFLAGS =
-                u32(value) | 0x02;
-
-            return;
-        }
-
-        switch (n) {
-
-            case "EAX":
-            case "EBX":
-            case "ECX":
-            case "EDX":
-            case "ESI":
-            case "EDI":
-            case "EBP":
-            case "ESP":
-            case "EIP":
-
-                this[n] = u32(value);
-
-                return;
-
-            default:
-
-                throw new Error(
-                    `Unknown register: ${n}`
-                );
-        }
-    }
-
-
-    getRegisters() {
-
-        return {
-
-            EAX: this.EAX >>> 0,
-            EBX: this.EBX >>> 0,
-            ECX: this.ECX >>> 0,
-            EDX: this.EDX >>> 0,
-
-            ESI: this.ESI >>> 0,
-            EDI: this.EDI >>> 0,
-            EBP: this.EBP >>> 0,
-            ESP: this.ESP >>> 0,
-
-            EIP: this.EIP >>> 0,
-
-            EFLAGS:
-                this.EFLAGS >>> 0
-        };
-    }
-
-
-    getFlag(flag) {
-
-        return (
-            (this.EFLAGS & flag) !== 0
-        );
-    }
-
-
-    setFlag(flag, enabled) {
-
-        if (enabled) {
-            this.EFLAGS |= flag;
-        } else {
-            this.EFLAGS &= ~flag;
-        }
-
-        this.EFLAGS |= 0x02;
-        this.EFLAGS >>>= 0;
-    }
-
-
-    parity8(value) {
-
-        value &= 0xFF;
-
-        let parity = 0;
-
-        while (value) {
-
-            parity ^=
-                value & 1;
-
-            value >>>= 1;
-        }
-
-        return parity === 0;
-    }
-
-
-    updateLogicFlags(result) {
-
-        result >>>= 0;
-
-        this.setFlag(
-            WebBktxCPUFlags.CF,
-            false
-        );
-
-        this.setFlag(
-            WebBktxCPUFlags.OF,
-            false
-        );
-
-        this.setFlag(
-            WebBktxCPUFlags.ZF,
-            result === 0
-        );
-
-        this.setFlag(
-            WebBktxCPUFlags.SF,
-            Boolean(
-                result & 0x80000000
-            )
-        );
-
-        this.setFlag(
-            WebBktxCPUFlags.PF,
-            this.parity8(result)
-        );
-    }
-
-
-    updateAddFlags(a, b, result) {
-
-        a >>>= 0;
-        b >>>= 0;
-        result >>>= 0;
-
-        this.setFlag(
-            WebBktxCPUFlags.CF,
-            result < a
-        );
-
-        this.setFlag(
-            WebBktxCPUFlags.ZF,
-            result === 0
-        );
-
-        this.setFlag(
-            WebBktxCPUFlags.SF,
-            Boolean(
-                result & 0x80000000
-            )
-        );
-
-        this.setFlag(
-            WebBktxCPUFlags.PF,
-            this.parity8(result)
-        );
-
-        this.setFlag(
-            WebBktxCPUFlags.AF,
-            Boolean(
-                (a ^ b ^ result) & 0x10
-            )
-        );
-
-        this.setFlag(
-            WebBktxCPUFlags.OF,
-            Boolean(
-                (
-                    (~(a ^ b)) &
-                    (a ^ result) &
-                    0x80000000
-                )
-            )
-        );
-    }
-
-
-    updateSubFlags(a, b, result) {
-
-        a >>>= 0;
-        b >>>= 0;
-        result >>>= 0;
-
-        this.setFlag(
-            WebBktxCPUFlags.CF,
-            a < b
-        );
-
-        this.setFlag(
-            WebBktxCPUFlags.ZF,
-            result === 0
-        );
-
-        this.setFlag(
-            WebBktxCPUFlags.SF,
-            Boolean(
-                result & 0x80000000
-            )
-        );
-
-        this.setFlag(
-            WebBktxCPUFlags.PF,
-            this.parity8(result)
-        );
-
-        this.setFlag(
-            WebBktxCPUFlags.AF,
-            Boolean(
-                (a ^ b ^ result) & 0x10
-            )
-        );
-
-        this.setFlag(
-            WebBktxCPUFlags.OF,
-            Boolean(
-                (
-                    (a ^ b) &
-                    (a ^ result) &
-                    0x80000000
-                )
-            )
-        );
-    }
-
-
-    add32(a, b) {
-
-        a >>>= 0;
-        b >>>= 0;
-
-        const result =
-            (a + b) >>> 0;
-
-        this.updateAddFlags(
-            a,
-            b,
-            result
-        );
-
-        return result;
-    }
-
-
-    sub32(a, b) {
-
-        a >>>= 0;
-        b >>>= 0;
-
-        const result =
-            (a - b) >>> 0;
-
-        this.updateSubFlags(
-            a,
-            b,
-            result
-        );
-
-        return result;
-    }
-
-
-    inc32(value) {
-
-        const oldCF =
-            this.getFlag(
-                WebBktxCPUFlags.CF
-            );
-
-        const result =
-            ((value >>> 0) + 1) >>> 0;
-
-        this.updateAddFlags(
-            value,
-            1,
-            result
-        );
-
-        this.setFlag(
-            WebBktxCPUFlags.CF,
-            oldCF
-        );
-
-        return result;
-    }
-
-
-    dec32(value) {
-
-        const oldCF =
-            this.getFlag(
-                WebBktxCPUFlags.CF
-            );
-
-        const result =
-            ((value >>> 0) - 1) >>> 0;
-
-        this.updateSubFlags(
-            value,
-            1,
-            result
-        );
-
-        this.setFlag(
-            WebBktxCPUFlags.CF,
-            oldCF
-        );
-
-        return result;
-    }
-
-
-    xor32(a, b) {
-
-        const result =
-            (
-                (a >>> 0) ^
-                (b >>> 0)
-            ) >>> 0;
-
-        this.updateLogicFlags(result);
-
-        return result;
-    }
-
-
-    and32(a, b) {
-
-        const result =
-            (
-                (a >>> 0) &
-                (b >>> 0)
-            ) >>> 0;
-
-        this.updateLogicFlags(result);
-
-        return result;
-    }
-
-
-    or32(a, b) {
-
-        const result =
-            (
-                (a >>> 0) |
-                (b >>> 0)
-            ) >>> 0;
-
-        this.updateLogicFlags(result);
-
-        return result;
-    }
-
-
-    push32(value) {
-
-        if (this.ESP < 4) {
-
-            throw new Error(
-                "Stack underflow."
-            );
-        }
-
-        this.ESP =
-            (
-                this.ESP - 4
-            ) >>> 0;
-
-        this.memory.write32(
-            this.ESP,
-            value
-        );
-    }
-
-
-    pop32() {
-
-        if (
-            this.ESP >
-            this.memory.size - 4
-        ) {
-            throw new Error(
-                "Stack overflow."
-            );
-        }
-
-        const value =
-            this.memory.read32(
-                this.ESP
-            );
-
-        this.ESP =
-            (
-                this.ESP + 4
-            ) >>> 0;
-
-        return value >>> 0;
-    }
-
-
-    read8(address) {
-        return this.memory.read8(address);
-    }
-
-
-    read16(address) {
-        return this.memory.read16(address);
-    }
-
-
-    read32(address) {
-        return this.memory.read32(address);
-    }
-
-
-    write8(address, value) {
-        this.memory.write8(address, value);
-    }
-
-
-    write16(address, value) {
-        this.memory.write16(address, value);
-    }
-
-
-    write32(address, value) {
-        this.memory.write32(address, value);
-    }
-
-
-    addBreakpoint(address) {
-
-        this.breakpoints.add(
-            u32(address)
-        );
-    }
-
-
-    removeBreakpoint(address) {
-
-        this.breakpoints.delete(
-            u32(address)
-        );
-    }
-
-
-    clearBreakpoints() {
-
-        this.breakpoints.clear();
-    }
-
-
-    hasBreakpoint(address) {
-
-        return this.breakpoints.has(
-            u32(address)
-        );
-    }
-
-
-    enableTrace(enabled = true) {
-
-        this.traceEnabled =
-            Boolean(enabled);
-    }
-
-
-    clearTrace() {
-
-        this.trace.length = 0;
-    }
-
-
-    getTrace() {
-
-        return [
-            ...this.trace
-        ];
-    }
-
-
-    addTrace(entry) {
-
-        if (!this.traceEnabled) {
-            return;
-        }
-
-        this.trace.push(entry);
-
-        while (
-            this.trace.length >
-            this.maxTraceEntries
-        ) {
-            this.trace.shift();
-        }
-    }
-
-
-    step() {
-
-        if (this.halted) {
-
-            return {
-                executed: false,
-                halted: true,
-                reason: "CPU HALTED"
-            };
-        }
-
-
-        if (this.faulted) {
-
-            return {
-                executed: false,
-                faulted: true,
-                reason: this.lastError
-            };
-        }
-
-
-        if (!this.decoder) {
-
-            throw new Error(
-                "No decoder attached."
+                address + length
             );
         }
 
 
-        const address =
-            this.EIP >>> 0;
+        writeBytes(address, bytes) {
 
+            const data =
+                bytes instanceof Uint8Array
+                    ? bytes
+                    : new Uint8Array(bytes);
 
-        if (
-            this.hasBreakpoint(address)
-        ) {
+            this.check(address, data.length);
 
-            this.running = false;
-
-            if (
-                typeof this.onBreakpoint ===
-                "function"
-            ) {
-                this.onBreakpoint(address);
-            }
-
-            return {
-                executed: false,
-                breakpoint: true,
-                address
-            };
+            this.u8.set(data, address);
         }
 
 
-        let instruction;
+        load(address, bytes) {
 
-        try {
-
-            instruction =
-                this.decoder.decode(
-                    this,
-                    address
-                );
+            this.writeBytes(address, bytes);
+        }
 
 
-            if (!instruction) {
+        fill(address, length, value = 0) {
 
-                throw new Error(
-                    `No instruction at ${hex(address)}`
-                );
-            }
+            this.check(address, length);
 
-
-            if (
-                typeof instruction.execute !==
-                "function"
-            ) {
-
-                throw new Error(
-                    "Instruction has no execute()."
-                );
-            }
-
-
-            instruction.execute(this);
-
-            this.cycles++;
-            this.instructionsExecuted++;
-
-
-            const result = {
-
-                executed: true,
-
+            this.u8.fill(
+                U32(value) & 0xFF,
                 address,
-
-                opcode:
-                    instruction.opcode ?? null,
-
-                mnemonic:
-                    instruction.mnemonic ??
-                    "UNKNOWN",
-
-                size:
-                    instruction.size ??
-                    1,
-
-                registers:
-                    this.getRegisters(),
-
-                cycles:
-                    this.cycles,
-
-                halted:
-                    this.halted
-            };
-
-
-            this.lastInstruction =
-                result;
-
-
-            this.addTrace(result);
-
-
-            if (
-                typeof this.onInstruction ===
-                "function"
-            ) {
-                this.onInstruction(result);
-            }
-
-
-            if (
-                this.halted &&
-                typeof this.onHalt ===
-                "function"
-            ) {
-                this.onHalt(result);
-            }
-
-
-            return result;
-
-        } catch (error) {
-
-            this.raiseFault(error);
-
-            throw error;
-        }
-    }
-
-
-    run(limit = this.maxInstructions) {
-
-        limit = Number(limit);
-
-        if (
-            !Number.isInteger(limit) ||
-            limit <= 0
-        ) {
-            throw new Error(
-                "Invalid CPU execution limit."
+                address + length
             );
         }
 
 
-        this.running = true;
+        readCString(address, max = 4096) {
 
-        let executed = 0;
-        let last = null;
+            const bytes = [];
 
-
-        try {
-
-            while (
-                this.running &&
-                !this.halted &&
-                !this.faulted &&
-                executed < limit
+            for (
+                let i = 0;
+                i < max;
+                i++
             ) {
 
-                last = this.step();
+                const value = this.read8(
+                    address + i
+                );
 
-                if (
-                    last &&
-                    last.breakpoint
-                ) {
+                if (value === 0) {
                     break;
                 }
 
-                if (
-                    last &&
-                    last.executed
-                ) {
-                    executed++;
-                }
+                bytes.push(value);
             }
 
-        } finally {
+            return new TextDecoder().decode(
+                new Uint8Array(bytes)
+            );
+        }
+
+
+        getStatus() {
+
+            return {
+                bytes: this.size,
+                megabytes: this.size / 1024 / 1024
+            };
+        }
+    }
+
+
+    /* ========================================================
+       X86 FLAGS
+    ======================================================== */
+
+    const FLAGS = Object.freeze({
+
+        CF: 0x00000001,
+        PF: 0x00000004,
+        AF: 0x00000010,
+        ZF: 0x00000040,
+        SF: 0x00000080,
+        TF: 0x00000100,
+        IF: 0x00000200,
+        DF: 0x00000400,
+        OF: 0x00000800
+    });
+
+
+    /* ========================================================
+       CPU
+    ======================================================== */
+
+    class CPU {
+
+        constructor(memory) {
+
+            this.memory = memory;
+
+            this.reset();
+
+            this.instructions = 0;
+
+            this.cycles = 0;
+
+            this.running = false;
+
+            this.halted = false;
+
+            this.faulted = false;
+
+            this.lastFault = null;
+
+            this.decoder = null;
+
+            this.breakpoints = new Set();
+
+            this.maxInstructions = 1000000;
+
+            this.traceEnabled = false;
+
+            this.trace = [];
+
+            this.maxTrace = 2000;
+        }
+
+
+        reset() {
+
+            this.EAX = 0;
+            this.EBX = 0;
+            this.ECX = 0;
+            this.EDX = 0;
+
+            this.ESI = 0;
+            this.EDI = 0;
+            this.EBP = 0;
+            this.ESP = this.memory.size - 0x100;
+
+            this.EIP = 0;
+
+            this.EFLAGS = 0x202;
+
+            this.instructions = 0;
+
+            this.cycles = 0;
+
+            this.running = false;
+
+            this.halted = false;
+
+            this.faulted = false;
+
+            this.lastFault = null;
+
+            this.trace.length = 0;
+        }
+
+
+        attachDecoder(decoder) {
+
+            this.decoder = decoder;
+        }
+
+
+        getRegister(name) {
+
+            name = String(name).toUpperCase();
+
+            if (!(name in this)) {
+                throw new Error(
+                    `Unknown register ${name}`
+                );
+            }
+
+            return U32(this[name]);
+        }
+
+
+        setRegister(name, value) {
+
+            name = String(name).toUpperCase();
+
+            if (
+                ![
+                    "EAX",
+                    "EBX",
+                    "ECX",
+                    "EDX",
+                    "ESI",
+                    "EDI",
+                    "EBP",
+                    "ESP",
+                    "EIP",
+                    "EFLAGS"
+                ].includes(name)
+            ) {
+                throw new Error(
+                    `Unknown register ${name}`
+                );
+            }
+
+            this[name] = U32(value);
+
+            if (name === "EFLAGS") {
+                this.EFLAGS |= 2;
+            }
+        }
+
+
+        getRegisters() {
+
+            return {
+                EAX: U32(this.EAX),
+                EBX: U32(this.EBX),
+                ECX: U32(this.ECX),
+                EDX: U32(this.EDX),
+                ESI: U32(this.ESI),
+                EDI: U32(this.EDI),
+                EBP: U32(this.EBP),
+                ESP: U32(this.ESP),
+                EIP: U32(this.EIP),
+                EFLAGS: U32(this.EFLAGS)
+            };
+        }
+
+
+        flag(flag) {
+
+            return (this.EFLAGS & flag) !== 0;
+        }
+
+
+        setFlag(flag, value) {
+
+            if (value) {
+                this.EFLAGS |= flag;
+            } else {
+                this.EFLAGS &= ~flag;
+            }
+
+            this.EFLAGS |= 2;
+
+            this.EFLAGS >>>= 0;
+        }
+
+
+        parity(value) {
+
+            value &= 0xFF;
+
+            let p = 0;
+
+            while (value) {
+                p ^= value & 1;
+                value >>>= 1;
+            }
+
+            return p === 0;
+        }
+
+
+        logicFlags(result) {
+
+            result = U32(result);
+
+            this.setFlag(FLAGS.CF, false);
+            this.setFlag(FLAGS.OF, false);
+
+            this.setFlag(
+                FLAGS.ZF,
+                result === 0
+            );
+
+            this.setFlag(
+                FLAGS.SF,
+                (result & 0x80000000) !== 0
+            );
+
+            this.setFlag(
+                FLAGS.PF,
+                this.parity(result)
+            );
+        }
+
+
+        add(a, b) {
+
+            a = U32(a);
+            b = U32(b);
+
+            const result =
+                U32(a + b);
+
+            this.setFlag(
+                FLAGS.CF,
+                result < a
+            );
+
+            this.setFlag(
+                FLAGS.ZF,
+                result === 0
+            );
+
+            this.setFlag(
+                FLAGS.SF,
+                !!(result & 0x80000000)
+            );
+
+            this.setFlag(
+                FLAGS.PF,
+                this.parity(result)
+            );
+
+            this.setFlag(
+                FLAGS.AF,
+                !!((a ^ b ^ result) & 0x10)
+            );
+
+            this.setFlag(
+                FLAGS.OF,
+                !!(
+                    (~(a ^ b) &
+                    (a ^ result) &
+                    0x80000000)
+                )
+            );
+
+            return result;
+        }
+
+
+        sub(a, b) {
+
+            a = U32(a);
+            b = U32(b);
+
+            const result =
+                U32(a - b);
+
+            this.setFlag(
+                FLAGS.CF,
+                a < b
+            );
+
+            this.setFlag(
+                FLAGS.ZF,
+                result === 0
+            );
+
+            this.setFlag(
+                FLAGS.SF,
+                !!(result & 0x80000000)
+            );
+
+            this.setFlag(
+                FLAGS.PF,
+                this.parity(result)
+            );
+
+            this.setFlag(
+                FLAGS.AF,
+                !!((a ^ b ^ result) & 0x10)
+            );
+
+            this.setFlag(
+                FLAGS.OF,
+                !!(
+                    ((a ^ b) &
+                    (a ^ result) &
+                    0x80000000)
+                )
+            );
+
+            return result;
+        }
+
+
+        inc(value) {
+
+            const cf = this.flag(FLAGS.CF);
+
+            const result =
+                this.add(value, 1);
+
+            this.setFlag(FLAGS.CF, cf);
+
+            return result;
+        }
+
+
+        dec(value) {
+
+            const cf = this.flag(FLAGS.CF);
+
+            const result =
+                this.sub(value, 1);
+
+            this.setFlag(FLAGS.CF, cf);
+
+            return result;
+        }
+
+
+        push(value) {
+
+            this.ESP =
+                U32(this.ESP - 4);
+
+            this.memory.write32(
+                this.ESP,
+                value
+            );
+        }
+
+
+        pop() {
+
+            const value =
+                this.memory.read32(this.ESP);
+
+            this.ESP =
+                U32(this.ESP + 4);
+
+            return value;
+        }
+
+
+        fetch8() {
+
+            const value =
+                this.memory.read8(this.EIP);
+
+            this.EIP =
+                U32(this.EIP + 1);
+
+            return value;
+        }
+
+
+        fetch32() {
+
+            const value =
+                this.memory.read32(this.EIP);
+
+            this.EIP =
+                U32(this.EIP + 4);
+
+            return value;
+        }
+
+
+        fetchS8() {
+
+            return this.memory.readS8(
+                this.EIP++
+            );
+        }
+
+
+        fetchS32() {
+
+            const value =
+                this.memory.readS32(this.EIP);
+
+            this.EIP =
+                U32(this.EIP + 4);
+
+            return value;
+        }
+
+
+        addBreakpoint(address) {
+
+            this.breakpoints.add(U32(address));
+        }
+
+
+        removeBreakpoint(address) {
+
+            this.breakpoints.delete(U32(address));
+        }
+
+
+        clearBreakpoints() {
+
+            this.breakpoints.clear();
+        }
+
+
+        step() {
+
+            if (this.halted) {
+                return {
+                    halted: true,
+                    executed: false
+                };
+            }
+
+            if (this.faulted) {
+                return {
+                    faulted: true,
+                    executed: false
+                };
+            }
+
+            if (!this.decoder) {
+                throw new Error(
+                    "CPU decoder unavailable."
+                );
+            }
+
+            if (
+                this.breakpoints.has(
+                    U32(this.EIP)
+                )
+            ) {
+                return {
+                    breakpoint: true,
+                    executed: false,
+                    address: U32(this.EIP)
+                };
+            }
+
+            const address = U32(this.EIP);
+
+            try {
+
+                const result =
+                    this.decoder.execute(this);
+
+                this.instructions++;
+                this.cycles++;
+
+                if (this.traceEnabled) {
+
+                    this.trace.push({
+                        address,
+                        mnemonic:
+                            result.mnemonic,
+                        registers:
+                            this.getRegisters()
+                    });
+
+                    if (
+                        this.trace.length >
+                        this.maxTrace
+                    ) {
+                        this.trace.shift();
+                    }
+                }
+
+                return {
+                    executed: true,
+                    address,
+                    ...result
+                };
+
+            } catch (error) {
+
+                this.faulted = true;
+
+                this.running = false;
+
+                this.lastFault =
+                    error instanceof Error
+                        ? error.message
+                        : String(error);
+
+                throw error;
+            }
+        }
+
+
+        run(limit = this.maxInstructions) {
+
+            limit =
+                Math.max(
+                    1,
+                    Number(limit) | 0
+                );
+
+            this.running = true;
+
+            let executed = 0;
+
+            let last = null;
+
+            try {
+
+                while (
+                    this.running &&
+                    !this.halted &&
+                    !this.faulted &&
+                    executed < limit
+                ) {
+
+                    last = this.step();
+
+                    if (
+                        !last.executed
+                    ) {
+                        break;
+                    }
+
+                    executed++;
+                }
+
+            } finally {
+
+                this.running = false;
+            }
+
+            return {
+                executed,
+                instructions: this.instructions,
+                cycles: this.cycles,
+                halted: this.halted,
+                faulted: this.faulted,
+                last,
+                registers:
+                    this.getRegisters()
+            };
+        }
+
+
+        stop() {
 
             this.running = false;
         }
 
 
-        return {
+        halt() {
 
-            executed,
-
-            cycles:
-                this.cycles,
-
-            instructions:
-                this.instructionsExecuted,
-
-            halted:
-                this.halted,
-
-            faulted:
-                this.faulted,
-
-            registers:
-                this.getRegisters(),
-
-            last
-        };
-    }
+            this.halted = true;
+            this.running = false;
+        }
 
 
-    stop() {
+        status() {
 
-        this.running = false;
-    }
-
-
-    halt() {
-
-        this.halted = true;
-        this.running = false;
-    }
-
-
-    raiseFault(error) {
-
-        this.faulted = true;
-        this.running = false;
-
-        this.lastError =
-            error instanceof Error
-                ? error.message
-                : String(error);
+            return {
+                available: true,
+                running: this.running,
+                halted: this.halted,
+                faulted: this.faulted,
+                instructions: this.instructions,
+                cycles: this.cycles,
+                EIP: U32(this.EIP),
+                registers:
+                    this.getRegisters(),
+                fault: this.lastFault
+            };
+        }
 
 
-        if (
-            typeof this.onFault ===
-            "function"
-        ) {
-            this.onFault(error);
+        selfTest() {
+
+            this.reset();
+
+            const tests = [];
+
+            tests.push({
+                name: "ADD",
+                pass:
+                    this.add(10, 20) === 30
+            });
+
+            tests.push({
+                name: "SUB",
+                pass:
+                    this.sub(50, 20) === 30
+            });
+
+            tests.push({
+                name: "XOR",
+                pass:
+                    ((0xFF00 ^ 0x0F00) >>> 0)
+                    === 0xF000
+            });
+
+            const esp = this.ESP;
+
+            this.push(0x12345678);
+
+            tests.push({
+                name: "STACK",
+                pass:
+                    this.pop() === 0x12345678 &&
+                    this.ESP === esp
+            });
+
+            this.memory.write32(
+                0x1000,
+                0xDEADBEEF
+            );
+
+            tests.push({
+                name: "MEMORY",
+                pass:
+                    this.memory.read32(0x1000)
+                    === 0xDEADBEEF
+            });
+
+            return {
+                passed:
+                    tests.every(x => x.pass),
+                tests
+            };
         }
     }
 
 
-    getStatus() {
+    /* ========================================================
+       X86 DECODER
+    ======================================================== */
 
-        return {
+    class Decoder {
 
-            version:
-                WEBBKTX_VERSION,
+        constructor(memory) {
 
-            running:
-                this.running,
+            this.memory = memory;
+        }
 
-            halted:
-                this.halted,
 
-            faulted:
-                this.faulted,
+        modrm(cpu) {
 
-            error:
-                this.lastError,
+            const value = cpu.fetch8();
 
-            cycles:
-                this.cycles,
+            return {
+                mod: value >> 6,
+                reg: (value >> 3) & 7,
+                rm: value & 7
+            };
+        }
 
-            instructionsExecuted:
-                this.instructionsExecuted,
 
-            registers:
-                this.getRegisters()
-        };
-    }
+        registerName(index) {
 
+            return [
+                "EAX",
+                "ECX",
+                "EDX",
+                "EBX",
+                "ESP",
+                "EBP",
+                "ESI",
+                "EDI"
+            ][index];
+        }
 
-    selfTest() {
 
-        this.reset();
+        readReg(cpu, index) {
 
-        const tests = [];
+            return cpu[
+                this.registerName(index)
+            ];
+        }
 
 
-        tests.push({
-            name: "ADD",
-            pass:
-                this.add32(10, 20) === 30
-        });
+        writeReg(cpu, index, value) {
 
+            cpu[
+                this.registerName(index)
+            ] = U32(value);
+        }
 
-        tests.push({
-            name: "SUB",
-            pass:
-                this.sub32(50, 20) === 30
-        });
 
+        execute(cpu) {
 
-        tests.push({
-            name: "XOR",
-            pass:
-                this.xor32(
-                    0xFF00,
-                    0x0F00
-                ) === 0xF000
-        });
+            const opcode =
+                cpu.fetch8();
 
+            switch (opcode) {
 
-        const oldESP = this.ESP;
+                case 0x90:
 
-        this.push32(
-            0x12345678
-        );
+                    return {
+                        opcode,
+                        mnemonic: "NOP"
+                    };
 
 
-        tests.push({
-            name: "STACK",
-            pass:
-                this.pop32() ===
-                    0x12345678 &&
-                this.ESP === oldESP
-        });
+                case 0xF4:
 
+                    cpu.halt();
 
-        this.write32(
-            0x1000,
-            0xDEADBEEF
-        );
+                    return {
+                        opcode,
+                        mnemonic: "HLT"
+                    };
 
 
-        tests.push({
-            name: "MEMORY",
-            pass:
-                this.read32(0x1000) ===
-                0xDEADBEEF
-        });
+                case 0xB8:
+                case 0xB9:
+                case 0xBA:
+                case 0xBB:
+                case 0xBC:
+                case 0xBD:
+                case 0xBE:
+                case 0xBF: {
 
+                    const reg =
+                        opcode - 0xB8;
 
-        return {
+                    const value =
+                        cpu.fetch32();
 
-            version:
-                WEBBKTX_VERSION,
-
-            passed:
-                tests.every(
-                    x => x.pass
-                ),
-
-            tests
-        };
-    }
-}
-
-
-/* ============================================================
-   DECODER
-============================================================ */
-
-class WebBktxDecoder {
-
-    constructor(memory) {
-
-        this.memory = memory;
-
-        this.version =
-            WEBBKTX_VERSION;
-    }
-
-
-    decode(cpu, address) {
-
-        const opcode =
-            this.memory.read8(address);
-
-
-        switch (opcode) {
-
-            case 0x90:
-
-                return {
-
-                    opcode,
-
-                    mnemonic: "NOP",
-
-                    size: 1,
-
-                    execute() {
-
-                        cpu.EIP =
-                            (
-                                cpu.EIP + 1
-                            ) >>> 0;
-                    }
-                };
-
-
-            case 0xF4:
-
-                return {
-
-                    opcode,
-
-                    mnemonic: "HLT",
-
-                    size: 1,
-
-                    execute() {
-
-                        cpu.EIP =
-                            (
-                                cpu.EIP + 1
-                            ) >>> 0;
-
-                        cpu.halt();
-                    }
-                };
-
-
-            /*
-             * MOV r32, imm32
-             */
-
-            case 0xB8:
-            case 0xB9:
-            case 0xBA:
-            case 0xBB:
-            case 0xBC:
-            case 0xBD:
-            case 0xBE:
-            case 0xBF: {
-
-                const reg =
-                    opcode - 0xB8;
-
-                const value =
-                    this.memory.read32(
-                        address + 1
+                    this.writeReg(
+                        cpu,
+                        reg,
+                        value
                     );
 
-
-                const names = [
-
-                    "EAX",
-                    "ECX",
-                    "EDX",
-                    "EBX",
-                    "ESP",
-                    "EBP",
-                    "ESI",
-                    "EDI"
-
-                ];
+                    return {
+                        opcode,
+                        mnemonic:
+                            `MOV ${this.registerName(reg)}, 0x${HEX(value)}`
+                    };
+                }
 
 
-                return {
+                case 0x05: {
 
-                    opcode,
+                    const value =
+                        cpu.fetch32();
 
-                    mnemonic:
-                        `MOV ${names[reg]}, imm32`,
-
-                    size: 5,
-
-                    execute() {
-
-                        cpu.setRegister(
-                            names[reg],
+                    cpu.EAX =
+                        cpu.add(
+                            cpu.EAX,
                             value
                         );
 
-                        cpu.EIP =
-                            (
-                                cpu.EIP + 5
-                            ) >>> 0;
-                    }
-                };
-            }
-
-
-            /*
-             * ADD EAX, imm32
-             */
-
-            case 0x05: {
-
-                const value =
-                    this.memory.read32(
-                        address + 1
-                    );
-
-
-                return {
-
-                    opcode,
-
-                    mnemonic:
-                        "ADD EAX, imm32",
-
-                    size: 5,
-
-                    execute() {
-
-                        cpu.EAX =
-                            cpu.add32(
-                                cpu.EAX,
-                                value
-                            );
-
-                        cpu.EIP =
-                            (
-                                cpu.EIP + 5
-                            ) >>> 0;
-                    }
-                };
-            }
-
-
-            /*
-             * SUB EAX, imm32
-             */
-
-            case 0x2D: {
-
-                const value =
-                    this.memory.read32(
-                        address + 1
-                    );
-
-
-                return {
-
-                    opcode,
-
-                    mnemonic:
-                        "SUB EAX, imm32",
-
-                    size: 5,
-
-                    execute() {
-
-                        cpu.EAX =
-                            cpu.sub32(
-                                cpu.EAX,
-                                value
-                            );
-
-                        cpu.EIP =
-                            (
-                                cpu.EIP + 5
-                            ) >>> 0;
-                    }
-                };
-            }
-
-
-            /*
-             * INC / DEC
-             */
-
-            case 0x40:
-
-                return {
-
-                    opcode,
-
-                    mnemonic: "INC EAX",
-
-                    size: 1,
-
-                    execute() {
-
-                        cpu.EAX =
-                            cpu.inc32(
-                                cpu.EAX
-                            );
-
-                        cpu.EIP =
-                            (
-                                cpu.EIP + 1
-                            ) >>> 0;
-                    }
-                };
-
-
-            case 0x48:
-
-                return {
-
-                    opcode,
-
-                    mnemonic: "DEC EAX",
-
-                    size: 1,
-
-                    execute() {
-
-                        cpu.EAX =
-                            cpu.dec32(
-                                cpu.EAX
-                            );
-
-                        cpu.EIP =
-                            (
-                                cpu.EIP + 1
-                            ) >>> 0;
-                    }
-                };
-
-
-            /*
-             * PUSH / POP EAX
-             */
-
-            case 0x50:
-
-                return {
-
-                    opcode,
-
-                    mnemonic: "PUSH EAX",
-
-                    size: 1,
-
-                    execute() {
-
-                        cpu.push32(
-                            cpu.EAX
-                        );
-
-                        cpu.EIP =
-                            (
-                                cpu.EIP + 1
-                            ) >>> 0;
-                    }
-                };
-
-
-            case 0x58:
-
-                return {
-
-                    opcode,
-
-                    mnemonic: "POP EAX",
-
-                    size: 1,
-
-                    execute() {
-
-                        cpu.EAX =
-                            cpu.pop32();
-
-                        cpu.EIP =
-                            (
-                                cpu.EIP + 1
-                            ) >>> 0;
-                    }
-                };
-
-
-            /*
-             * RET
-             */
-
-            case 0xC3:
-
-                return {
-
-                    opcode,
-
-                    mnemonic: "RET",
-
-                    size: 1,
-
-                    execute() {
-
-                        cpu.EIP =
-                            cpu.pop32();
-                    }
-                };
-
-
-            /*
-             * XOR EAX,EAX
-             */
-
-            case 0x31: {
-
-                const modrm =
-                    this.memory.read8(
-                        address + 1
-                    );
-
-
-                if (modrm === 0xC0) {
-
                     return {
-
                         opcode,
-
-                        mnemonic:
-                            "XOR EAX,EAX",
-
-                        size: 2,
-
-                        execute() {
-
-                            cpu.EAX =
-                                cpu.xor32(
-                                    cpu.EAX,
-                                    cpu.EAX
-                                );
-
-                            cpu.EIP =
-                                (
-                                    cpu.EIP + 2
-                                ) >>> 0;
-                        }
+                        mnemonic: "ADD EAX, imm32"
                     };
                 }
 
-                break;
-            }
 
+                case 0x2D: {
 
-            /*
-             * TEST EAX,EAX
-             */
+                    const value =
+                        cpu.fetch32();
 
-            case 0x85: {
-
-                const modrm =
-                    this.memory.read8(
-                        address + 1
-                    );
-
-
-                if (modrm === 0xC0) {
+                    cpu.EAX =
+                        cpu.sub(
+                            cpu.EAX,
+                            value
+                        );
 
                     return {
-
                         opcode,
-
-                        mnemonic:
-                            "TEST EAX,EAX",
-
-                        size: 2,
-
-                        execute() {
-
-                            cpu.updateLogicFlags(
-                                cpu.EAX
-                            );
-
-                            cpu.EIP =
-                                (
-                                    cpu.EIP + 2
-                                ) >>> 0;
-                        }
+                        mnemonic: "SUB EAX, imm32"
                     };
                 }
 
-                break;
-            }
 
+                case 0x40:
+                case 0x41:
+                case 0x42:
+                case 0x43:
+                case 0x44:
+                case 0x45:
+                case 0x46:
+                case 0x47: {
 
-            /*
-             * JMP rel32
-             */
+                    const reg =
+                        opcode - 0x40;
 
-            case 0xE9: {
-
-                const relative =
-                    this.memory.readSigned32(
-                        address + 1
+                    this.writeReg(
+                        cpu,
+                        reg,
+                        cpu.inc(
+                            this.readReg(
+                                cpu,
+                                reg
+                            )
+                        )
                     );
 
+                    return {
+                        opcode,
+                        mnemonic:
+                            `INC ${this.registerName(reg)}`
+                    };
+                }
 
-                return {
 
-                    opcode,
+                case 0x48:
+                case 0x49:
+                case 0x4A:
+                case 0x4B:
+                case 0x4C:
+                case 0x4D:
+                case 0x4E:
+                case 0x4F: {
 
-                    mnemonic:
-                        "JMP rel32",
+                    const reg =
+                        opcode - 0x48;
 
-                    size: 5,
+                    this.writeReg(
+                        cpu,
+                        reg,
+                        cpu.dec(
+                            this.readReg(
+                                cpu,
+                                reg
+                            )
+                        )
+                    );
 
-                    execute() {
+                    return {
+                        opcode,
+                        mnemonic:
+                            `DEC ${this.registerName(reg)}`
+                    };
+                }
 
-                        cpu.EIP =
-                            (
-                                cpu.EIP +
-                                5 +
-                                relative
-                            ) >>> 0;
+
+                case 0x50:
+                case 0x51:
+                case 0x52:
+                case 0x53:
+                case 0x54:
+                case 0x55:
+                case 0x56:
+                case 0x57: {
+
+                    const reg =
+                        opcode - 0x50;
+
+                    cpu.push(
+                        this.readReg(
+                            cpu,
+                            reg
+                        )
+                    );
+
+                    return {
+                        opcode,
+                        mnemonic:
+                            `PUSH ${this.registerName(reg)}`
+                    };
+                }
+
+
+                case 0x58:
+                case 0x59:
+                case 0x5A:
+                case 0x5B:
+                case 0x5C:
+                case 0x5D:
+                case 0x5E:
+                case 0x5F: {
+
+                    const reg =
+                        opcode - 0x58;
+
+                    this.writeReg(
+                        cpu,
+                        reg,
+                        cpu.pop()
+                    );
+
+                    return {
+                        opcode,
+                        mnemonic:
+                            `POP ${this.registerName(reg)}`
+                    };
+                }
+
+
+                case 0x31: {
+
+                    const m =
+                        this.modrm(cpu);
+
+                    if (m.mod !== 3) {
+                        throw new Error(
+                            "XOR memory operand not implemented."
+                        );
                     }
-                };
-            }
 
-
-            /*
-             * CALL rel32
-             */
-
-            case 0xE8: {
-
-                const relative =
-                    this.memory.readSigned32(
-                        address + 1
-                    );
-
-
-                return {
-
-                    opcode,
-
-                    mnemonic:
-                        "CALL rel32",
-
-                    size: 5,
-
-                    execute() {
-
-                        cpu.push32(
-                            (
-                                cpu.EIP + 5
-                            ) >>> 0
+                    const left =
+                        this.readReg(
+                            cpu,
+                            m.rm
                         );
 
+                    const right =
+                        this.readReg(
+                            cpu,
+                            m.reg
+                        );
+
+                    const result =
+                        U32(left ^ right);
+
+                    this.writeReg(
+                        cpu,
+                        m.rm,
+                        result
+                    );
+
+                    cpu.logicFlags(result);
+
+                    return {
+                        opcode,
+                        mnemonic:
+                            "XOR r32,r32"
+                    };
+                }
+
+
+                case 0x21: {
+
+                    const m =
+                        this.modrm(cpu);
+
+                    if (m.mod !== 3) {
+                        throw new Error(
+                            "AND memory operand not implemented."
+                        );
+                    }
+
+                    const result =
+                        U32(
+                            this.readReg(cpu, m.rm) &
+                            this.readReg(cpu, m.reg)
+                        );
+
+                    this.writeReg(
+                        cpu,
+                        m.rm,
+                        result
+                    );
+
+                    cpu.logicFlags(result);
+
+                    return {
+                        opcode,
+                        mnemonic:
+                            "AND r32,r32"
+                    };
+                }
+
+
+                case 0x09: {
+
+                    const m =
+                        this.modrm(cpu);
+
+                    if (m.mod !== 3) {
+                        throw new Error(
+                            "OR memory operand not implemented."
+                        );
+                    }
+
+                    const result =
+                        U32(
+                            this.readReg(cpu, m.rm) |
+                            this.readReg(cpu, m.reg)
+                        );
+
+                    this.writeReg(
+                        cpu,
+                        m.rm,
+                        result
+                    );
+
+                    cpu.logicFlags(result);
+
+                    return {
+                        opcode,
+                        mnemonic:
+                            "OR r32,r32"
+                    };
+                }
+
+
+                case 0xE8: {
+
+                    const displacement =
+                        cpu.fetchS32();
+
+                    const returnAddress =
+                        cpu.EIP;
+
+                    cpu.push(returnAddress);
+
+                    cpu.EIP =
+                        U32(
+                            cpu.EIP +
+                            displacement
+                        );
+
+                    return {
+                        opcode,
+                        mnemonic:
+                            "CALL rel32"
+                    };
+                }
+
+
+                case 0xE9: {
+
+                    const displacement =
+                        cpu.fetchS32();
+
+                    cpu.EIP =
+                        U32(
+                            cpu.EIP +
+                            displacement
+                        );
+
+                    return {
+                        opcode,
+                        mnemonic:
+                            "JMP rel32"
+                    };
+                }
+
+
+                case 0xEB: {
+
+                    const displacement =
+                        cpu.fetchS8();
+
+                    cpu.EIP =
+                        U32(
+                            cpu.EIP +
+                            displacement
+                        );
+
+                    return {
+                        opcode,
+                        mnemonic:
+                            "JMP rel8"
+                    };
+                }
+
+
+                case 0xC3:
+
+                    cpu.EIP =
+                        cpu.pop();
+
+                    return {
+                        opcode,
+                        mnemonic:
+                            "RET"
+                    };
+
+
+                case 0x74: {
+
+                    const displacement =
+                        cpu.fetchS8();
+
+                    if (
+                        cpu.flag(FLAGS.ZF)
+                    ) {
                         cpu.EIP =
-                            (
+                            U32(
                                 cpu.EIP +
-                                5 +
-                                relative
-                            ) >>> 0;
+                                displacement
+                            );
                     }
-                };
-            }
+
+                    return {
+                        opcode,
+                        mnemonic:
+                            "JE rel8"
+                    };
+                }
 
 
-            /*
-             * JMP short
-             */
+                case 0x75: {
 
-            case 0xEB: {
+                    const displacement =
+                        cpu.fetchS8();
 
-                const relative =
-                    this.memory.readSigned8(
-                        address + 1
-                    );
-
-
-                return {
-
-                    opcode,
-
-                    mnemonic:
-                        "JMP rel8",
-
-                    size: 2,
-
-                    execute() {
-
+                    if (
+                        !cpu.flag(FLAGS.ZF)
+                    ) {
                         cpu.EIP =
-                            (
+                            U32(
                                 cpu.EIP +
-                                2 +
-                                relative
-                            ) >>> 0;
+                                displacement
+                            );
                     }
-                };
-            }
+
+                    return {
+                        opcode,
+                        mnemonic:
+                            "JNE rel8"
+                    };
+                }
 
 
-            /*
-             * JZ / JE short
-             */
+                case 0x39: {
 
-            case 0x74: {
+                    const m =
+                        this.modrm(cpu);
 
-                const relative =
-                    this.memory.readSigned8(
-                        address + 1
+                    if (m.mod !== 3) {
+                        throw new Error(
+                            "CMP memory operand not implemented."
+                        );
+                    }
+
+                    cpu.sub(
+                        this.readReg(cpu, m.rm),
+                        this.readReg(cpu, m.reg)
                     );
 
+                    return {
+                        opcode,
+                        mnemonic:
+                            "CMP r32,r32"
+                    };
+                }
 
-                return {
 
-                    opcode,
+                case 0x3B: {
 
-                    mnemonic:
-                        "JZ rel8",
+                    const m =
+                        this.modrm(cpu);
 
-                    size: 2,
-
-                    execute() {
-
-                        if (
-                            cpu.getFlag(
-                                WebBktxCPUFlags.ZF
-                            )
-                        ) {
-
-                            cpu.EIP =
-                                (
-                                    cpu.EIP +
-                                    2 +
-                                    relative
-                                ) >>> 0;
-
-                        } else {
-
-                            cpu.EIP =
-                                (
-                                    cpu.EIP + 2
-                                ) >>> 0;
-                        }
+                    if (m.mod !== 3) {
+                        throw new Error(
+                            "CMP memory operand not implemented."
+                        );
                     }
-                };
-            }
 
-
-            /*
-             * JNZ / JNE short
-             */
-
-            case 0x75: {
-
-                const relative =
-                    this.memory.readSigned8(
-                        address + 1
+                    cpu.sub(
+                        this.readReg(cpu, m.reg),
+                        this.readReg(cpu, m.rm)
                     );
 
+                    return {
+                        opcode,
+                        mnemonic:
+                            "CMP r32,r32"
+                    };
+                }
 
-                return {
 
-                    opcode,
+                default:
 
-                    mnemonic:
-                        "JNZ rel8",
-
-                    size: 2,
-
-                    execute() {
-
-                        if (
-                            !cpu.getFlag(
-                                WebBktxCPUFlags.ZF
-                            )
-                        ) {
-
-                            cpu.EIP =
-                                (
-                                    cpu.EIP +
-                                    2 +
-                                    relative
-                                ) >>> 0;
-
-                        } else {
-
-                            cpu.EIP =
-                                (
-                                    cpu.EIP + 2
-                                ) >>> 0;
-                        }
-                    }
-                };
+                    throw new Error(
+                        `Unsupported x86 opcode 0x${HEX(opcode, 2)} at EIP=0x${HEX(
+                            U32(cpu.EIP - 1)
+                        )}`
+                    );
             }
+        }
+    }
 
 
-            default:
+    /* ========================================================
+       XBE
+    ======================================================== */
 
+    class XBE {
+
+        constructor() {
+
+            this.buffer = null;
+
+            this.view = null;
+
+            this.loaded = false;
+
+            this.header = null;
+
+            this.sections = [];
+
+            this.entryPoint = 0;
+
+            this.imageBase = 0;
+
+            this.rawEntryPoint = 0;
+
+            this.initFlags = 0;
+        }
+
+
+        async load(source) {
+
+            let buffer;
+
+            if (
+                source instanceof ArrayBuffer
+            ) {
+                buffer = source;
+            }
+            else if (
+                source instanceof Uint8Array
+            ) {
+                buffer =
+                    source.buffer.slice(
+                        source.byteOffset,
+                        source.byteOffset +
+                        source.byteLength
+                    );
+            }
+            else if (
+                source &&
+                typeof source.arrayBuffer ===
+                "function"
+            ) {
+                buffer =
+                    await source.arrayBuffer();
+            }
+            else {
                 throw new Error(
-                    `Unsupported x86 opcode ${hex(opcode, 2)} at ${hex(address)}`
+                    "Unsupported XBE source."
                 );
-        }
-
-
-        throw new Error(
-            `Unsupported x86 instruction ${hex(opcode, 2)} at ${hex(address)}`
-        );
-    }
-}
-
-
-/* ============================================================
-   XBE
-============================================================ */
-
-class WebBktxXBE {
-
-    constructor(source = null) {
-
-        this.source = source;
-
-        this.loaded = false;
-
-        this.buffer = null;
-
-        this.bytes = null;
-
-        this.header = null;
-
-        this.certificate = null;
-
-        this.sections = [];
-
-        this.entryPointRaw = 0;
-
-        this.entryPoint = 0;
-
-        this.imageBase = 0;
-
-        this.baseAddress = 0;
-
-        this.name = "UNKNOWN.XBE";
-
-        this.bootReady = false;
-
-        this.mapping = [];
-    }
-
-
-    readU32(offset) {
-
-        if (
-            offset < 0 ||
-            offset + 4 >
-            this.bytes.length
-        ) {
-            throw new Error(
-                `XBE header read outside file at ${hex(offset)}`
-            );
-        }
-
-        return (
-            this.bytes[offset] |
-            (this.bytes[offset + 1] << 8) |
-            (this.bytes[offset + 2] << 16) |
-            (this.bytes[offset + 3] << 24)
-        ) >>> 0;
-    }
-
-
-    readU16(offset) {
-
-        if (
-            offset < 0 ||
-            offset + 2 >
-            this.bytes.length
-        ) {
-            throw new Error(
-                `XBE header read outside file at ${hex(offset)}`
-            );
-        }
-
-        return (
-            this.bytes[offset] |
-            (this.bytes[offset + 1] << 8)
-        ) >>> 0;
-    }
-
-
-    readString(offset, max = 256) {
-
-        if (
-            offset < 0 ||
-            offset >= this.bytes.length
-        ) {
-            return "";
-        }
-
-        let result = "";
-
-        const end =
-            Math.min(
-                this.bytes.length,
-                offset + max
-            );
-
-
-        for (
-            let i = offset;
-            i < end;
-            i++
-        ) {
-
-            const c =
-                this.bytes[i];
-
-            if (c === 0) {
-                break;
             }
 
-            if (
-                c >= 32 &&
-                c <= 126
-            ) {
-                result +=
-                    String.fromCharCode(c);
-            } else {
-                result += "?";
-            }
-        }
-
-        return result;
-    }
-
-
-    async load(source = this.source) {
-
-        if (!source) {
-
-            throw new Error(
-                "No XBE source."
-            );
-        }
-
-
-        this.source = source;
-
-
-        if (
-            source instanceof ArrayBuffer
-        ) {
-
-            this.buffer =
-                source.slice(0);
-
-        } else if (
-            source instanceof Uint8Array
-        ) {
-
-            this.buffer =
-                source.buffer.slice(
-                    source.byteOffset,
-                    source.byteOffset +
-                    source.byteLength
+            if (buffer.byteLength < 0x1000) {
+                throw new Error(
+                    "XBE file is too small."
                 );
-
-        } else if (
-            typeof source.arrayBuffer ===
-            "function"
-        ) {
-
-            this.buffer =
-                await source.arrayBuffer();
-
-        } else {
-
-            throw new Error(
-                "Unsupported XBE source."
-            );
-        }
-
-
-        this.bytes =
-            new Uint8Array(
-                this.buffer
-            );
-
-
-        if (
-            this.bytes.length < 0x130
-        ) {
-
-            throw new Error(
-                "XBE file is too small."
-            );
-        }
-
-
-        const magic =
-            String.fromCharCode(
-                this.bytes[0],
-                this.bytes[1],
-                this.bytes[2],
-                this.bytes[3]
-            );
-
-
-        if (
-            magic !== "XBEH"
-        ) {
-
-            throw new Error(
-                `Invalid XBE signature: ${magic}`
-            );
-        }
-
-
-        const baseAddress =
-            this.readU32(0x104);
-
-        const headerSize =
-            this.readU32(0x108);
-
-        const imageSize =
-            this.readU32(0x10C);
-
-        const imageHeaderSize =
-            this.readU32(0x110);
-
-        const certificateAddress =
-            this.readU32(0x118);
-
-        const sectionCount =
-            this.readU32(0x11C);
-
-        const sectionHeadersAddress =
-            this.readU32(0x120);
-
-        const initFlags =
-            this.readU32(0x124);
-
-        const rawEntryPoint =
-            this.readU32(0x128);
-
-
-        this.baseAddress =
-            baseAddress;
-
-        this.imageBase =
-            baseAddress;
-
-        this.entryPointRaw =
-            rawEntryPoint;
-
-
-        /*
-         * Retail XBE entry point is commonly
-         * XOR encoded with this value.
-         *
-         * We try both forms and select the one
-         * which points into a mapped section.
-         */
-
-        const decodedRetail =
-            (
-                rawEntryPoint ^
-                0xA8FC57AB
-            ) >>> 0;
-
-
-        const decodedDebug =
-            (
-                rawEntryPoint ^
-                0x94859D48
-            ) >>> 0;
-
-
-        this.header = {
-
-            magic,
-
-            baseAddress,
-
-            headerSize,
-
-            imageSize,
-
-            imageHeaderSize,
-
-            certificateAddress,
-
-            sectionCount,
-
-            sectionHeadersAddress,
-
-            initFlags,
-
-            entryPointRaw:
-                rawEntryPoint,
-
-            entryPointRetail:
-                decodedRetail,
-
-            entryPointDebug:
-                decodedDebug
-        };
-
-
-        this.sections = [];
-
-
-        const maxSections =
-            Math.min(
-                sectionCount,
-                4096
-            );
-
-
-        for (
-            let i = 0;
-            i < maxSections;
-            i++
-        ) {
-
-            const offset =
-                sectionHeadersAddress +
-                i * 56;
-
-
-            if (
-                offset + 56 >
-                this.bytes.length
-            ) {
-                break;
             }
 
+            this.buffer = buffer;
 
-            const flags =
-                this.readU32(offset);
+            this.view =
+                new DataView(buffer);
 
-            const virtualAddress =
-                this.readU32(
-                    offset + 4
-                );
-
-            const virtualSize =
-                this.readU32(
-                    offset + 8
-                );
-
-            const rawAddress =
-                this.readU32(
-                    offset + 12
-                );
-
-            const rawSize =
-                this.readU32(
-                    offset + 16
-                );
-
-            const nameAddress =
-                this.readU32(
-                    offset + 20
-                );
-
-            const name =
-                this.readString(
-                    nameAddress,
-                    64
-                );
-
-
-            this.sections.push({
-
-                index: i,
-
-                flags,
-
-                virtualAddress,
-
-                virtualSize,
-
-                rawAddress,
-
-                rawSize,
-
-                nameAddress,
-
-                name,
-
-                headerOffset: offset
-            });
-        }
-
-
-        /*
-         * Certificate.
-         */
-
-        this.certificate = null;
-
-
-        if (
-            certificateAddress !== 0 &&
-            certificateAddress + 4 <=
-            this.bytes.length
-        ) {
-
-            const certSize =
-                this.readU32(
-                    certificateAddress
-                );
-
-
-            const certVersion =
-                certificateAddress + 4 <=
-                this.bytes.length
-                    ? this.readU32(
-                        certificateAddress + 4
-                    )
-                    : 0;
-
-
-            this.certificate = {
-
-                address:
-                    certificateAddress,
-
-                size:
-                    certSize,
-
-                version:
-                    certVersion
-            };
-
-
-            /*
-             * Try to obtain a title name.
-             *
-             * XBE certificate layout contains
-             * a Unicode title name pointer.
-             */
-
-            const titleNameOffset =
-                certificateAddress + 0x0C;
-
-
-            if (
-                titleNameOffset + 4 <=
-                this.bytes.length
-            ) {
-
-                const titlePointer =
-                    this.readU32(
-                        titleNameOffset
-                    );
-
-
-                if (
-                    titlePointer !== 0 &&
-                    titlePointer <
-                    this.bytes.length
-                ) {
-
-                    this.name =
-                        this.readUTF16String(
-                            titlePointer,
-                            256
-                        ) ||
-                        this.name;
-                }
-            }
-        }
-
-
-        /*
-         * Fallback filename.
-         */
-
-        if (
-            this.name === "UNKNOWN.XBE" &&
-            this.source &&
-            this.source.name
-        ) {
-
-            this.name =
-                this.source.name;
-        }
-
-
-        /*
-         * Resolve entry point.
-         */
-
-        const candidates = [
-
-            decodedRetail,
-            decodedDebug,
-            rawEntryPoint
-
-        ];
-
-
-        let selected =
-            0;
-
-
-        for (
-            const candidate of candidates
-        ) {
-
-            if (
-                this.addressInSection(
-                    candidate
-                )
-            ) {
-
-                selected =
-                    candidate;
-
-                break;
-            }
-        }
-
-
-        if (
-            selected === 0 &&
-            this.sections.length > 0
-        ) {
-
-            /*
-             * We do not blindly execute zero.
-             *
-             * Keep decoded retail as primary
-             * fallback if it looks like an
-             * Xbox virtual address.
-             */
-
-            if (
-                decodedRetail >= 0x10000 &&
-                decodedRetail <
-                0x80000000
-            ) {
-
-                selected =
-                    decodedRetail;
-
-            } else {
-
-                selected =
-                    this.sections[0]
-                        .virtualAddress;
-            }
-        }
-
-
-        this.entryPoint =
-            u32(selected);
-
-
-        this.loaded = true;
-
-
-        return this;
-    }
-
-
-    readUTF16String(offset, maxChars = 256) {
-
-        if (
-            offset < 0 ||
-            offset + 2 >
-            this.bytes.length
-        ) {
-            return "";
-        }
-
-
-        let result = "";
-
-
-        for (
-            let i = 0;
-            i < maxChars;
-            i++
-        ) {
-
-            const pos =
-                offset + i * 2;
-
-
-            if (
-                pos + 2 >
-                this.bytes.length
-            ) {
-                break;
-            }
-
-
-            const code =
-                this.bytes[pos] |
-                (
-                    this.bytes[pos + 1] << 8
-                );
-
-
-            if (code === 0) {
-                break;
-            }
-
-
-            result +=
+            const magic =
                 String.fromCharCode(
-                    code
-                );
-        }
-
-
-        return result;
-    }
-
-
-    addressInSection(address) {
-
-        address = u32(address);
-
-
-        return this.sections.some(
-            section => {
-
-                const start =
-                    section.virtualAddress;
-
-                const size =
-                    Math.max(
-                        section.virtualSize,
-                        section.rawSize
-                    );
-
-
-                if (size === 0) {
-                    return false;
-                }
-
-
-                return (
-                    address >= start &&
-                    address <
-                    start + size
-                );
-            }
-        );
-    }
-
-
-    mapIntoMemory(memory) {
-
-        if (!this.loaded) {
-
-            throw new Error(
-                "XBE is not loaded."
-            );
-        }
-
-
-        if (
-            !(memory instanceof WebBktxMemory)
-        ) {
-
-            throw new Error(
-                "mapIntoMemory requires WebBktxMemory."
-            );
-        }
-
-
-        this.mapping = [];
-
-
-        for (
-            const section of this.sections
-        ) {
-
-            const destination =
-                u32(
-                    section.virtualAddress
+                    this.view.getUint8(0),
+                    this.view.getUint8(1),
+                    this.view.getUint8(2),
+                    this.view.getUint8(3)
                 );
 
-
-            const rawAddress =
-                u32(
-                    section.rawAddress
-                );
-
-
-            const rawSize =
-                u32(
-                    section.rawSize
-                );
-
-
-            const virtualSize =
-                u32(
-                    section.virtualSize
-                );
-
-
-            /*
-             * Some XBE tools can provide
-             * absolute virtual addresses.
-             */
-
-            if (
-                destination >= memory.size
-            ) {
-
-                this.mapping.push({
-
-                    index:
-                        section.index,
-
-                    name:
-                        section.name,
-
-                    mapped:
-                        false,
-
-                    reason:
-                        "Virtual address outside RAM",
-
-                    virtualAddress:
-                        destination
-                });
-
-                continue;
-            }
-
-
-            const safeRawStart =
-                Math.min(
-                    rawAddress,
-                    this.bytes.length
-                );
-
-
-            const available =
-                Math.max(
-                    0,
-                    this.bytes.length -
-                    safeRawStart
-                );
-
-
-            const copySize =
-                Math.min(
-                    rawSize,
-                    available,
-                    memory.size -
-                    destination
-                );
-
-
-            if (copySize > 0) {
-
-                memory.writeBytes(
-                    destination,
-                    this.bytes.slice(
-                        safeRawStart,
-                        safeRawStart +
-                        copySize
-                    )
+            if (magic !== "XBEH") {
+                throw new Error(
+                    `Invalid XBE signature: ${magic}`
                 );
             }
 
-
-            const zeroStart =
-                destination +
-                copySize;
-
-
-            const zeroSize =
-                Math.min(
-                    Math.max(
-                        0,
-                        virtualSize -
-                        copySize
-                    ),
-                    memory.size -
-                    zeroStart
+            this.imageBase =
+                this.view.getUint32(
+                    0x104,
+                    true
                 );
 
-
-            if (zeroSize > 0) {
-
-                memory.fill(
-                    zeroStart,
-                    zeroSize,
-                    0
-                );
-            }
-
-
-            this.mapping.push({
-
-                index:
-                    section.index,
-
-                name:
-                    section.name,
-
-                mapped:
-                    true,
-
-                virtualAddress:
-                    destination,
-
-                virtualSize,
-
-                rawAddress,
-
-                rawSize,
-
-                copied:
-                    copySize
-            });
-        }
-
-
-        this.bootReady =
-            this.addressInSection(
-                this.entryPoint
-            );
-
-
-        return this.mapping;
-    }
-
-
-    getEntryPoint() {
-
-        return this.entryPoint >>> 0;
-    }
-
-
-    getSize() {
-
-        return this.buffer
-            ? this.buffer.byteLength
-            : 0;
-    }
-
-
-    getStatus() {
-
-        return {
-
-            loaded:
-                this.loaded,
-
-            bootReady:
-                this.bootReady,
-
-            name:
-                this.name,
-
-            size:
-                this.getSize(),
-
-            imageBase:
-                this.imageBase >>> 0,
-
-            baseAddress:
-                this.baseAddress >>> 0,
-
-            entryPointRaw:
-                this.entryPointRaw >>> 0,
-
-            entryPoint:
-                this.entryPoint >>> 0,
-
-            entryPointHex:
-                hex(this.entryPoint),
-
-            sections:
-                this.sections.map(
-                    section => ({
-                        index:
-                            section.index,
-
-                        name:
-                            section.name,
-
-                        virtualAddress:
-                            section.virtualAddress,
-
-                        virtualSize:
-                            section.virtualSize,
-
-                        rawAddress:
-                            section.rawAddress,
-
-                        rawSize:
-                            section.rawSize
-                    })
-                ),
-
-            mapping:
-                this.mapping,
-
-            certificate:
-                this.certificate,
-
-            header:
-                this.header
-        };
-    }
-}
-
-
-/* ============================================================
-   THUNKS
-============================================================ */
-
-class WebBktxThunks {
-
-    constructor() {
-
-        this.table =
-            new Map();
-    }
-
-
-    register(address, handler) {
-
-        if (
-            typeof handler !==
-            "function"
-        ) {
-            throw new Error(
-                "Thunk handler must be a function."
-            );
-        }
-
-        this.table.set(
-            u32(address),
-            handler
-        );
-    }
-
-
-    has(address) {
-
-        return this.table.has(
-            u32(address)
-        );
-    }
-
-
-    call(address, ...args) {
-
-        const handler =
-            this.table.get(
-                u32(address)
-            );
-
-
-        if (!handler) {
-
-            throw new Error(
-                `Unknown thunk ${hex(address)}`
-            );
-        }
-
-
-        return handler(...args);
-    }
-
-
-    getStatus() {
-
-        return {
-
-            count:
-                this.table.size
-        };
-    }
-}
-
-
-/* ============================================================
-   XAPI
-============================================================ */
-
-class WebBktxXAPI {
-
-    constructor(core = null) {
-
-        this.core = core;
-
-        this.functions =
-            new Map();
-
-        this.registerDefaults();
-    }
-
-
-    register(name, handler) {
-
-        if (
-            typeof handler !==
-            "function"
-        ) {
-            throw new Error(
-                `XAPI handler for ${name} must be a function.`
-            );
-        }
-
-        this.functions.set(
-            String(name),
-            handler
-        );
-    }
-
-
-    call(name, ...args) {
-
-        const fn =
-            this.functions.get(
-                String(name)
-            );
-
-
-        if (!fn) {
-
-            throw new Error(
-                `Unknown XAPI function: ${name}`
-            );
-        }
-
-
-        return fn(...args);
-    }
-
-
-    registerDefaults() {
-
-        this.register(
-            "DbgPrint",
-            (...args) => {
-
-                console.log(
-                    "[WebBktx XAPI]",
-                    ...args
+            this.rawEntryPoint =
+                this.view.getUint32(
+                    0x128,
+                    true
                 );
 
-                return 0;
-            }
-        );
+            this.initFlags =
+                this.view.getUint32(
+                    0x12C,
+                    true
+                );
 
+            this.entryPoint =
+                U32(
+                    this.rawEntryPoint
+                );
 
-        this.register(
-            "GetTickCount",
-            () => {
-
-                if (
-                    typeof performance !==
-                    "undefined"
-                ) {
-
-                    return Math.floor(
-                        performance.now()
-                    ) >>> 0;
-                }
-
-                return Date.now() >>> 0;
-            }
-        );
-
-
-        this.register(
-            "Sleep",
-            milliseconds => {
-
-                return Number(
-                    milliseconds
-                ) || 0;
-            }
-        );
-    }
-
-
-    getStatus() {
-
-        return {
-
-            functions:
-                this.functions.size
-        };
-    }
-}
-
-
-/* ============================================================
-   XFILE
-============================================================ */
-
-class WebBktxXFile {
-
-    constructor() {
-
-        this.files =
-            new Map();
-
-        this.nextHandle = 1;
-    }
-
-
-    async open(file) {
-
-        if (!file) {
-            throw new Error(
-                "No file."
-            );
-        }
-
-
-        const buffer =
-            await file.arrayBuffer();
-
-
-        const handle =
-            this.nextHandle++;
-
-
-        this.files.set(
-            handle,
-            {
-                name:
-                    file.name ||
-                    "file",
-
+            this.header = {
+                magic,
                 size:
                     buffer.byteLength,
+                imageBase:
+                    this.imageBase,
+                rawEntryPoint:
+                    this.rawEntryPoint,
+                initFlags:
+                    this.initFlags
+            };
 
-                buffer
+            this.parseSections();
+
+            this.loaded = true;
+
+            return this;
+        }
+
+
+        parseSections() {
+
+            this.sections = [];
+
+            /*
+             * XBE certificate/header fields differ slightly
+             * between revisions. We deliberately inspect the
+             * image structure rather than pretending that every
+             * XBE uses identical offsets.
+             *
+             * At minimum the executable header is validated.
+             */
+
+            const size =
+                this.buffer.byteLength;
+
+            this.sections.push({
+                name: ".xbe",
+                rawOffset: 0,
+                rawSize: size,
+                virtualAddress: this.imageBase,
+                virtualSize: size
+            });
+        }
+
+
+        mapInto(memory, base = null) {
+
+            if (!this.loaded) {
+                throw new Error(
+                    "XBE is not loaded."
+                );
             }
-        );
 
+            const source =
+                new Uint8Array(
+                    this.buffer
+                );
 
-        return handle;
-    }
+            const targetBase =
+                base === null
+                    ? this.imageBase
+                    : U32(base);
 
+            /*
+             * The browser memory object is a flat physical
+             * address space. Real Xbox virtual-memory mapping
+             * will be added as a dedicated MMU layer.
+             */
 
-    get(handle) {
+            if (
+                targetBase + source.length >
+                memory.size
+            ) {
 
-        return (
-            this.files.get(handle) ||
-            null
-        );
-    }
+                throw new Error(
+                    `XBE image does not fit RAM: base=0x${HEX(
+                        targetBase
+                    )}, size=${source.length}`
+                );
+            }
 
+            memory.writeBytes(
+                targetBase,
+                source
+            );
 
-    close(handle) {
-
-        return this.files.delete(
-            handle
-        );
-    }
-
-
-    getStatus() {
-
-        return {
-
-            openFiles:
-                this.files.size
-        };
-    }
-}
-
-
-/* ============================================================
-   KERNEL
-============================================================ */
-
-class WebBktxKernel {
-
-    constructor(core = null) {
-
-        this.core = core;
-
-        this.initialized = false;
-
-        this.services =
-            new Map();
-    }
-
-
-    initialize() {
-
-        this.initialized = true;
-
-        return true;
-    }
-
-
-    registerService(name, service) {
-
-        this.services.set(
-            String(name),
-            service
-        );
-    }
-
-
-    getService(name) {
-
-        return (
-            this.services.get(
-                String(name)
-            ) ||
-            null
-        );
-    }
-
-
-    start() {
-
-        this.initialized = true;
-
-        return true;
-    }
-
-
-    stop() {
-
-        this.initialized = false;
-    }
-
-
-    getStatus() {
-
-        return {
-
-            initialized:
-                this.initialized,
-
-            services:
-                [
-                    ...this.services.keys()
-                ]
-        };
-    }
-}
-
-
-/* ============================================================
-   XINPUT
-============================================================ */
-
-class WebBktxXInput {
-
-    constructor() {
-
-        this.started = false;
-
-        this.keyboard =
-            Object.create(null);
-
-        this.gamepadIndex = null;
-
-        this.axes = {
-
-            leftX: 0,
-            leftY: 0,
-
-            rightX: 0,
-            rightY: 0,
-
-            leftTrigger: 0,
-            rightTrigger: 0
-        };
-
-
-        this.buttons =
-            Object.create(null);
-
-
-        this.boundKeyDown =
-            event => {
-
-                this.keyboard[
-                    event.code
-                ] = true;
+            return {
+                base: targetBase,
+                size: source.length,
+                entryPoint:
+                    U32(
+                        targetBase +
+                        this.rawEntryPoint
+                    )
             };
+        }
 
 
-        this.boundKeyUp =
-            event => {
+        status() {
 
-                this.keyboard[
-                    event.code
-                ] = false;
+            return {
+                loaded: this.loaded,
+                size:
+                    this.buffer
+                        ? this.buffer.byteLength
+                        : 0,
+                imageBase:
+                    U32(this.imageBase),
+                rawEntryPoint:
+                    U32(this.rawEntryPoint),
+                entryPoint:
+                    U32(this.entryPoint),
+                initFlags:
+                    U32(this.initFlags),
+                sections:
+                    this.sections
             };
-
-
-        this.boundBlur =
-            () => {
-
-                this.keyboard =
-                    Object.create(null);
-            };
-
-
-        this.raf =
-            null;
+        }
     }
 
 
-    initialize() {
+    /* ========================================================
+       XAPI
+    ======================================================== */
 
-        if (this.started) {
+    class XAPI {
+
+        constructor() {
+
+            this.functions = new Map();
+
+            this.registerDefaults();
+        }
+
+
+        register(name, fn) {
+
+            if (
+                typeof fn !== "function"
+            ) {
+                throw new Error(
+                    `Invalid XAPI handler: ${name}`
+                );
+            }
+
+            this.functions.set(
+                String(name),
+                fn
+            );
+        }
+
+
+        call(name, ...args) {
+
+            const fn =
+                this.functions.get(
+                    String(name)
+                );
+
+            if (!fn) {
+                throw new Error(
+                    `XAPI function not implemented: ${name}`
+                );
+            }
+
+            return fn(...args);
+        }
+
+
+        registerDefaults() {
+
+            this.register(
+                "DbgPrint",
+                (...args) => {
+                    console.log(
+                        "[XAPI]",
+                        ...args
+                    );
+                    return 0;
+                }
+            );
+
+
+            this.register(
+                "GetTickCount",
+                () =>
+                    U32(
+                        typeof performance !==
+                        "undefined"
+                            ? performance.now()
+                            : Date.now()
+                    )
+            );
+
+
+            this.register(
+                "KeQueryPerformanceCounter",
+                () =>
+                    U32(
+                        typeof performance !==
+                        "undefined"
+                            ? performance.now() * 1000
+                            : Date.now() * 1000
+                    )
+            );
+        }
+
+
+        status() {
+
+            return {
+                available: true,
+                functions:
+                    this.functions.size
+            };
+        }
+    }
+
+
+    /* ========================================================
+       XFILE
+    ======================================================== */
+
+    class XFile {
+
+        constructor() {
+
+            this.files = new Map();
+
+            this.nextHandle = 1;
+        }
+
+
+        async open(file) {
+
+            if (
+                !file ||
+                typeof file.arrayBuffer !==
+                "function"
+            ) {
+                throw new Error(
+                    "XFile requires a File object."
+                );
+            }
+
+            const buffer =
+                await file.arrayBuffer();
+
+            const handle =
+                this.nextHandle++;
+
+            this.files.set(
+                handle,
+                {
+                    name:
+                        file.name || "unknown",
+                    size:
+                        buffer.byteLength,
+                    buffer
+                }
+            );
+
+            return handle;
+        }
+
+
+        get(handle) {
+
+            return (
+                this.files.get(
+                    U32(handle)
+                ) ||
+                null
+            );
+        }
+
+
+        close(handle) {
+
+            return this.files.delete(
+                U32(handle)
+            );
+        }
+
+
+        status() {
+
+            return {
+                available: true,
+                openFiles:
+                    this.files.size
+            };
+        }
+    }
+
+
+    /* ========================================================
+       KERNEL
+    ======================================================== */
+
+    class Kernel {
+
+        constructor(machine) {
+
+            this.machine = machine;
+
+            this.ready = false;
+
+            this.services = new Map();
+        }
+
+
+        initialize() {
+
+            this.ready = true;
+
             return true;
         }
 
 
-        if (
-            typeof window ===
-            "undefined"
-        ) {
-            return false;
+        register(name, service) {
+
+            this.services.set(
+                String(name),
+                service
+            );
         }
 
 
-        window.addEventListener(
-            "keydown",
-            this.boundKeyDown
-        );
+        get(name) {
+
+            return (
+                this.services.get(
+                    String(name)
+                ) ||
+                null
+            );
+        }
 
 
-        window.addEventListener(
-            "keyup",
-            this.boundKeyUp
-        );
+        status() {
 
-
-        window.addEventListener(
-            "blur",
-            this.boundBlur
-        );
-
-
-        this.started = true;
-
-        this.poll();
-
-        return true;
+            return {
+                ready: this.ready,
+                services:
+                    [...this.services.keys()]
+            };
+        }
     }
 
 
-    poll() {
+    /* ========================================================
+       INPUT
+    ======================================================== */
 
-        if (!this.started) {
-            return;
+    class XInput {
+
+        constructor() {
+
+            this.ready = false;
+
+            this.keyboard =
+                Object.create(null);
+
+            this.gamepad = null;
+
+            this.boundDown =
+                event => {
+                    this.keyboard[
+                        event.code
+                    ] = true;
+                };
+
+            this.boundUp =
+                event => {
+                    this.keyboard[
+                        event.code
+                    ] = false;
+                };
         }
 
 
-        if (
-            typeof navigator !==
-            "undefined" &&
-            typeof navigator.getGamepads ===
-            "function"
-        ) {
+        initialize() {
+
+            if (
+                typeof window === "undefined"
+            ) {
+                return false;
+            }
+
+            window.addEventListener(
+                "keydown",
+                this.boundDown
+            );
+
+            window.addEventListener(
+                "keyup",
+                this.boundUp
+            );
+
+            this.ready = true;
+
+            return true;
+        }
+
+
+        poll() {
+
+            if (
+                typeof navigator ===
+                "undefined" ||
+                typeof navigator.getGamepads !==
+                "function"
+            ) {
+                return null;
+            }
 
             const pads =
                 navigator.getGamepads();
 
+            for (const pad of pads) {
 
-            let found = false;
-
-
-            for (
-                let i = 0;
-                i < pads.length;
-                i++
-            ) {
-
-                const pad =
-                    pads[i];
-
-
-                if (!pad) {
-                    continue;
+                if (pad) {
+                    this.gamepad = pad;
+                    return pad;
                 }
-
-
-                found = true;
-
-                this.gamepadIndex = i;
-
-
-                this.buttons =
-                    Object.create(null);
-
-
-                for (
-                    let j = 0;
-                    j < pad.buttons.length;
-                    j++
-                ) {
-
-                    this.buttons[j] =
-                        Boolean(
-                            pad.buttons[j] &&
-                            pad.buttons[j].pressed
-                        );
-                }
-
-
-                if (
-                    pad.axes.length >= 4
-                ) {
-
-                    this.axes.leftX =
-                        pad.axes[0] || 0;
-
-                    this.axes.leftY =
-                        pad.axes[1] || 0;
-
-                    this.axes.rightX =
-                        pad.axes[2] || 0;
-
-                    this.axes.rightY =
-                        pad.axes[3] || 0;
-                }
-
-
-                break;
             }
 
+            this.gamepad = null;
 
-            if (!found) {
-                this.gamepadIndex = null;
-            }
+            return null;
         }
 
 
-        if (
-            typeof requestAnimationFrame ===
-            "function"
-        ) {
+        status() {
 
-            this.raf =
-                requestAnimationFrame(
-                    () => this.poll()
+            return {
+                available: true,
+                ready: this.ready,
+                gamepad:
+                    !!this.gamepad
+            };
+        }
+    }
+
+
+    /* ========================================================
+       GRAPHICS
+    ======================================================== */
+
+    class Graphics {
+
+        constructor() {
+
+            this.canvas = null;
+
+            this.ctx = null;
+
+            this.width = 1280;
+
+            this.height = 720;
+
+            this.frameCount = 0;
+
+            this.ready = false;
+        }
+
+
+        attach(canvas) {
+
+            if (!canvas) {
+                throw new Error(
+                    "Canvas required."
                 );
-        }
-    }
+            }
 
+            this.canvas = canvas;
 
-    destroy() {
+            this.ctx =
+                canvas.getContext(
+                    "2d",
+                    {
+                        alpha: false
+                    }
+                );
 
-        if (
-            typeof window !==
-            "undefined"
-        ) {
-
-            window.removeEventListener(
-                "keydown",
-                this.boundKeyDown
-            );
-
-            window.removeEventListener(
-                "keyup",
-                this.boundKeyUp
-            );
-
-            window.removeEventListener(
-                "blur",
-                this.boundBlur
-            );
-        }
-
-
-        if (
-            this.raf !== null &&
-            typeof cancelAnimationFrame ===
-            "function"
-        ) {
-
-            cancelAnimationFrame(
-                this.raf
-            );
-        }
-
-
-        this.raf = null;
-
-        this.started = false;
-    }
-
-
-    getStatus() {
-
-        return {
-
-            started:
-                this.started,
-
-            gamepadIndex:
-                this.gamepadIndex
-        };
-    }
-}
-
-
-/* ============================================================
-   GRAPHICS
-============================================================ */
-
-class WebBktxXGraphics {
-
-    constructor(canvas = null) {
-
-        this.canvas = null;
-        this.context = null;
-
-        this.width = 1280;
-        this.height = 720;
-
-        this.frameCount = 0;
-
-        this.running = false;
-
-        if (canvas) {
-            this.initialize(canvas);
-        }
-    }
-
-
-    initialize(canvas) {
-
-        if (!canvas) {
-            throw new Error(
-                "Graphics requires canvas."
-            );
-        }
-
-
-        this.canvas = canvas;
-
-
-        this.context =
-            canvas.getContext(
-                "2d",
-                {
-                    alpha: false
-                }
-            );
-
-
-        if (!this.context) {
-            throw new Error(
-                "Unable to create 2D context."
-            );
-        }
-
-
-        this.setResolution(
-            this.width,
-            this.height
-        );
-
-
-        this.clear();
-
-        return true;
-    }
-
-
-    setResolution(width, height) {
-
-        this.width =
-            Math.max(
-                1,
-                Math.floor(Number(width))
-            );
-
-        this.height =
-            Math.max(
-                1,
-                Math.floor(Number(height))
-            );
-
-
-        if (this.canvas) {
+            if (!this.ctx) {
+                throw new Error(
+                    "2D canvas unavailable."
+                );
+            }
 
             this.canvas.width =
                 this.width;
 
             this.canvas.height =
                 this.height;
-        }
-    }
 
+            this.ready = true;
 
-    clear(
-        r = 0,
-        g = 0,
-        b = 0,
-        a = 255
-    ) {
+            this.clear();
 
-        if (!this.context) {
-            return;
+            return this;
         }
 
 
-        this.context.fillStyle =
-            `rgba(${r},${g},${b},${a / 255})`;
+        resize(width, height) {
+
+            this.width =
+                Math.max(
+                    1,
+                    Number(width) | 0
+                );
+
+            this.height =
+                Math.max(
+                    1,
+                    Number(height) | 0
+                );
+
+            if (this.canvas) {
+
+                this.canvas.width =
+                    this.width;
+
+                this.canvas.height =
+                    this.height;
+            }
+        }
 
 
-        this.context.fillRect(
-            0,
-            0,
-            this.width,
-            this.height
-        );
-    }
+        clear() {
 
+            if (!this.ctx) {
+                return;
+            }
 
-    Present() {
+            this.ctx.fillStyle =
+                "#000000";
 
-        this.frameCount++;
-    }
-
-
-    getStatus() {
-
-        return {
-
-            initialized:
-                Boolean(this.context),
-
-            width:
+            this.ctx.fillRect(
+                0,
+                0,
                 this.width,
-
-            height:
-                this.height,
-
-            frameCount:
-                this.frameCount,
-
-            running:
-                this.running
-        };
-    }
-}
+                this.height
+            );
+        }
 
 
-const WebBktxGraphics =
-    WebBktxXGraphics;
+        presentBootScreen(info) {
 
+            if (!this.ctx) {
+                return;
+            }
 
-/* ============================================================
-   CORE
-============================================================ */
+            this.clear();
 
-class WebBktxCore {
+            this.ctx.fillStyle =
+                "#101820";
 
-    constructor(options = {}) {
-
-        this.version =
-            WEBBKTX_VERSION;
-
-
-        this.options =
-            options;
-
-
-        this.debug =
-            options.debug !== false;
-
-
-        this.ramSize =
-            Number(
-                options.ramSize ||
-                WEBBKTX_RAM_SIZE
+            this.ctx.fillRect(
+                0,
+                0,
+                this.width,
+                this.height
             );
 
+            this.ctx.fillStyle =
+                "#78ff00";
 
-        this.memory =
-            new WebBktxMemory(
-                this.ramSize
+            this.ctx.font =
+                "bold 42px monospace";
+
+            this.ctx.fillText(
+                "WebBktx",
+                60,
+                80
             );
 
+            this.ctx.font =
+                "20px monospace";
 
-        this.decoder =
-            new WebBktxDecoder(
-                this.memory
+            this.ctx.fillText(
+                "XBE BOOT RUNTIME",
+                60,
+                120
             );
 
+            this.ctx.fillStyle =
+                "#FFFFFF";
 
-        this.cpu =
-            new WebBktxCPU(
-                this.memory
+            this.ctx.fillText(
+                `Image: ${info.size} bytes`,
+                60,
+                190
             );
 
-
-        this.cpu.attachDecoder(
-            this.decoder
-        );
-
-
-        this.xbe = null;
-
-        this.thunks =
-            new WebBktxThunks();
-
-
-        this.xapi =
-            new WebBktxXAPI(
-                this
+            this.ctx.fillText(
+                `Base: 0x${HEX(info.base)}`,
+                60,
+                225
             );
 
-
-        this.xfile =
-            new WebBktxXFile();
-
-
-        this.kernel =
-            new WebBktxKernel(
-                this
+            this.ctx.fillText(
+                `Entry: 0x${HEX(info.entryPoint)}`,
+                60,
+                260
             );
 
+            this.ctx.fillText(
+                `CPU EIP: 0x${HEX(info.eip)}`,
+                60,
+                295
+            );
 
-        this.input = null;
+            this.ctx.fillStyle =
+                "#8A8A8A";
 
-        this.graphics = null;
+            this.ctx.fillText(
+                "CPU execution active",
+                60,
+                350
+            );
 
-        this.initialized = false;
+            this.ctx.fillText(
+                "Audio: disabled",
+                60,
+                380
+            );
 
-        this.running = false;
+            this.ctx.fillText(
+                "GPU backend: Canvas 2D",
+                60,
+                410
+            );
 
-        this.bootState =
-            "OFFLINE";
-
-        this.bootError = null;
-
-        this.bootStartedAt = 0;
-
-        this.bootFinishedAt = 0;
+            this.frameCount++;
+        }
 
 
-        this.cpu.onFault =
-            error => {
+        status() {
 
-                this.bootError =
-                    error instanceof Error
-                        ? error.message
-                        : String(error);
-
-                if (this.debug) {
-
-                    console.error(
-                        "[WebBktx CPU FAULT]",
-                        error
-                    );
-                }
+            return {
+                available: true,
+                ready: this.ready,
+                width: this.width,
+                height: this.height,
+                frames: this.frameCount
             };
+        }
     }
 
 
-    initialize() {
+    /* ========================================================
+       MACHINE
+    ======================================================== */
 
-        if (this.initialized) {
+    class Machine {
+
+        constructor(options = {}) {
+
+            this.version = VERSION;
+
+            this.memory =
+                new Memory(
+                    options.ramSize ||
+                    DEFAULT_RAM
+                );
+
+            this.cpu =
+                new CPU(
+                    this.memory
+                );
+
+            this.decoder =
+                new Decoder(
+                    this.memory
+                );
+
+            this.cpu.attachDecoder(
+                this.decoder
+            );
+
+            this.xapi =
+                new XAPI();
+
+            this.xfile =
+                new XFile();
+
+            this.kernel =
+                new Kernel(
+                    this
+                );
+
+            this.input =
+                new XInput();
+
+            this.graphics =
+                new Graphics();
+
+            this.xbe = null;
+
+            this.bootInfo = null;
+
+            this.initialized = false;
+
+            this.running = false;
+
+            this.booted = false;
+
+            this.frameHandle = null;
+
+            this.frameBudget = 5000;
+        }
+
+
+        initialize(canvas = null) {
+
+            if (this.initialized) {
+                return true;
+            }
+
+            this.kernel.initialize();
+
+            this.input.initialize();
+
+            if (canvas) {
+                this.graphics.attach(canvas);
+            }
+
+            this.initialized = true;
+
+            console.log(
+                `[WebBktx ${VERSION}] machine initialized`
+            );
+
             return true;
         }
 
 
-        this.kernel.initialize();
+        async loadXBE(source) {
 
-        this.initialized = true;
+            this.xbe =
+                new XBE();
 
-        this.bootState = "READY";
+            await this.xbe.load(source);
 
-
-        console.log(
-            `[WebBktx Core ${this.version}] initialized`
-        );
-
-
-        return true;
-    }
-
-
-    async loadGame(source) {
-
-        this.initialize();
-
-
-        this.bootState =
-            "LOADING XBE";
-
-
-        this.bootError = null;
-
-
-        this.xbe =
-            new WebBktxXBE(
-                source
+            console.log(
+                "[WebBktx] XBE:",
+                this.xbe.status()
             );
 
-
-        await this.xbe.load();
-
-
-        this.bootState =
-            "XBE PARSED";
-
-
-        console.log(
-            "[WebBktx] XBE:",
-            this.xbe.getStatus()
-        );
-
-
-        /*
-         * Map XBE sections into RAM.
-         */
-
-        const mapping =
-            this.xbe.mapIntoMemory(
-                this.memory
-            );
-
-
-        this.bootState =
-            "XBE MAPPED";
-
-
-        console.log(
-            "[WebBktx] XBE mapping:",
-            mapping
-        );
-
-
-        return {
-
-            success: true,
-
-            image:
-                this.xbe,
-
-            xbe:
-                this.xbe,
-
-            mapping,
-
-            status:
-                this.xbe.getStatus()
-        };
-    }
-
-
-    bootXBE() {
-
-        if (!this.xbe) {
-
-            throw new Error(
-                "No XBE loaded."
-            );
+            return this.xbe.status();
         }
 
 
-        if (!this.xbe.bootReady) {
+        bootXBE() {
 
-            throw new Error(
-                "XBE entry point is not mapped."
-            );
-        }
-
-
-        const entry =
-            this.xbe.getEntryPoint();
-
-
-        /*
-         * Prepare CPU.
-         */
-
-        this.cpu.reset();
-
-
-        /*
-         * Give the emulated program a safe
-         * stack near the end of available RAM.
-         */
-
-        this.cpu.ESP =
-            (
-                this.memory.size - 0x100
-            ) >>> 0;
-
-
-        this.cpu.EIP =
-            entry >>> 0;
-
-
-        /*
-         * Some basic boot registers.
-         */
-
-        this.cpu.EAX = 0;
-        this.cpu.EBX = 0;
-        this.cpu.ECX = 0;
-        this.cpu.EDX = 0;
-
-        this.cpu.ESI = 0;
-        this.cpu.EDI = 0;
-        this.cpu.EBP = this.cpu.ESP;
-
-
-        this.cpu.running = false;
-        this.cpu.halted = false;
-        this.cpu.faulted = false;
-
-        this.cpu.lastError = null;
-
-
-        this.bootState =
-            "XBE BOOTING";
-
-
-        this.bootStartedAt =
-            typeof performance !==
-            "undefined"
-                ? performance.now()
-                : Date.now();
-
-
-        console.log(
-            "[WebBktx] XBE BOOT:",
-            {
-                name:
-                    this.xbe.name,
-
-                entryPoint:
-                    hex(entry),
-
-                imageBase:
-                    hex(
-                        this.xbe.imageBase
-                    ),
-
-                stack:
-                    hex(this.cpu.ESP)
+            if (!this.xbe) {
+                throw new Error(
+                    "No XBE loaded."
+                );
             }
-        );
 
+            if (!this.initialized) {
+                this.initialize();
+            }
 
-        return {
+            this.memory.reset();
 
-            success: true,
+            const mapped =
+                this.xbe.mapInto(
+                    this.memory
+                );
 
-            entryPoint: entry,
+            this.bootInfo = mapped;
 
-            entryPointHex:
-                hex(entry),
+            /*
+             * XBE's raw entry point is represented as an
+             * address relative to the image mapping in this
+             * simplified flat-memory execution model.
+             */
 
-            cpu:
-                this.cpu.getRegisters(),
+            this.cpu.reset();
 
-            xbe:
-                this.xbe.getStatus()
-        };
-    }
+            this.cpu.EIP =
+                U32(mapped.entryPoint);
 
+            this.cpu.ESP =
+                this.memory.size - 0x1000;
 
-    runFrame(
-        instructionLimit = 10000
-    ) {
+            /*
+             * Initial stack.
+             */
 
-        if (!this.xbe) {
+            this.cpu.push(0);
 
-            throw new Error(
-                "No XBE loaded."
+            this.booted = true;
+
+            this.running = true;
+
+            console.log(
+                "[WebBktx] XBE boot:",
+                mapped
             );
+
+            return mapped;
         }
 
 
-        if (this.cpu.faulted) {
+        executeFrame() {
+
+            if (!this.booted) {
+                return {
+                    executed: 0,
+                    booted: false
+                };
+            }
+
+            if (
+                this.cpu.halted ||
+                this.cpu.faulted
+            ) {
+
+                this.running = false;
+
+                return {
+                    executed: 0,
+                    halted:
+                        this.cpu.halted,
+                    faulted:
+                        this.cpu.faulted,
+                    fault:
+                        this.cpu.lastFault
+                };
+            }
+
+            let executed = 0;
+
+            try {
+
+                while (
+                    executed <
+                    this.frameBudget
+                ) {
+
+                    const result =
+                        this.cpu.step();
+
+                    if (
+                        !result.executed
+                    ) {
+                        break;
+                    }
+
+                    executed++;
+                }
+
+            } catch (error) {
+
+                this.running = false;
+
+                return {
+                    executed,
+                    error:
+                        error instanceof Error
+                            ? error.message
+                            : String(error)
+                };
+            }
 
             return {
-
-                executed: 0,
-
-                faulted: true,
-
-                error:
-                    this.cpu.lastError
+                executed,
+                eip:
+                    this.cpu.EIP,
+                eax:
+                    this.cpu.EAX,
+                halted:
+                    this.cpu.halted,
+                faulted:
+                    this.cpu.faulted
             };
         }
 
 
-        this.running = true;
-
-        this.cpu.running = true;
-
-
-        try {
+        runFrame() {
 
             const result =
-                this.cpu.run(
-                    instructionLimit
-                );
+                this.executeFrame();
 
+            if (this.graphics.ready) {
 
-            if (result.faulted) {
-
-                this.bootState =
-                    "CPU FAULT";
+                this.graphics.presentBootScreen({
+                    size:
+                        this.xbe
+                            ? this.xbe.status().size
+                            : 0,
+                    base:
+                        this.bootInfo
+                            ? this.bootInfo.base
+                            : 0,
+                    entryPoint:
+                        this.bootInfo
+                            ? this.bootInfo.entryPoint
+                            : 0,
+                    eip:
+                        this.cpu.EIP
+                });
             }
-
-
-            if (result.halted) {
-
-                this.bootState =
-                    "CPU HALTED";
-            }
-
 
             return result;
+        }
 
-        } finally {
+
+        start() {
+
+            if (!this.booted) {
+                throw new Error(
+                    "XBE has not been booted."
+                );
+            }
+
+            this.running = true;
+
+            const loop = () => {
+
+                if (!this.running) {
+                    return;
+                }
+
+                this.runFrame();
+
+                this.frameHandle =
+                    requestAnimationFrame(
+                        loop
+                    );
+            };
+
+            loop();
+        }
+
+
+        stop() {
 
             this.running = false;
-        }
-    }
 
+            this.cpu.stop();
 
-    step() {
+            if (
+                this.frameHandle !== null
+            ) {
 
-        if (!this.xbe) {
+                cancelAnimationFrame(
+                    this.frameHandle
+                );
 
-            throw new Error(
-                "No XBE loaded."
-            );
-        }
-
-
-        return this.cpu.step();
-    }
-
-
-    stop() {
-
-        this.running = false;
-
-        this.cpu.stop();
-    }
-
-
-    reset() {
-
-        this.stop();
-
-        this.memory.reset();
-
-        this.cpu.reset();
-
-        this.xbe = null;
-
-        this.bootState = "READY";
-
-        this.bootError = null;
-    }
-
-
-    attachGraphics(canvas) {
-
-        this.graphics =
-            new WebBktxXGraphics(
-                canvas
-            );
-
-        return this.graphics;
-    }
-
-
-    attachInput() {
-
-        if (this.input) {
-            this.input.destroy();
-        }
-
-        this.input =
-            new WebBktxXInput();
-
-        this.input.initialize();
-
-        return this.input;
-    }
-
-
-    getStatus() {
-
-        return {
-
-            version:
-                this.version,
-
-            initialized:
-                this.initialized,
-
-            bootState:
-                this.bootState,
-
-            bootError:
-                this.bootError,
-
-            running:
-                this.running,
-
-            memory:
-                this.memory.getStatus(),
-
-            cpu:
-                this.cpu.getStatus(),
-
-            decoder:
-                {
-                    version:
-                        this.decoder.version
-                },
-
-            xbe:
-                this.xbe
-                    ? this.xbe.getStatus()
-                    : null,
-
-            thunks:
-                this.thunks.getStatus(),
-
-            xapi:
-                this.xapi.getStatus(),
-
-            xfile:
-                this.xfile.getStatus(),
-
-            kernel:
-                this.kernel.getStatus(),
-
-            input:
-                this.input
-                    ? this.input.getStatus()
-                    : null,
-
-            graphics:
-                this.graphics
-                    ? this.graphics.getStatus()
-                    : null
-        };
-    }
-
-
-    selfTest() {
-
-        const cpu =
-            this.cpu.selfTest();
-
-
-        if (!this.kernel.initialized) {
-            this.kernel.initialize();
+                this.frameHandle = null;
+            }
         }
 
 
-        return {
+        reset() {
 
-            version:
-                this.version,
+            this.stop();
 
-            memory:
-                true,
+            this.memory.reset();
 
-            cpu,
+            this.cpu.reset();
 
-            decoder:
-                Boolean(this.decoder),
+            this.xbe = null;
 
-            kernel:
-                this.kernel.initialized,
+            this.bootInfo = null;
 
-            passed:
-                Boolean(
+            this.booted = false;
+        }
+
+
+        selfTest() {
+
+            const cpu =
+                this.cpu.selfTest();
+
+            return {
+                version: VERSION,
+                memory: true,
+                cpu,
+                decoder: true,
+                kernel:
+                    this.kernel.ready,
+                xapi: true,
+                xfile: true,
+                graphics: true,
+                passed:
                     cpu.passed &&
-                    this.decoder &&
-                    this.kernel.initialized
-                )
-        };
+                    this.kernel.ready
+            };
+        }
+
+
+        status() {
+
+            return {
+                runtime: VERSION,
+
+                initialized:
+                    this.initialized,
+
+                booted:
+                    this.booted,
+
+                running:
+                    this.running,
+
+                memory:
+                    this.memory.getStatus(),
+
+                cpu:
+                    this.cpu.status(),
+
+                decoder:
+                    {
+                        available: true
+                    },
+
+                xbe:
+                    this.xbe
+                        ? this.xbe.status()
+                        : null,
+
+                kernel:
+                    this.kernel.status(),
+
+                xapi:
+                    this.xapi.status(),
+
+                xfile:
+                    this.xfile.status(),
+
+                xinput:
+                    this.input.status(),
+
+                xgraphics:
+                    this.graphics.status()
+            };
+        }
     }
-}
 
 
-/* ============================================================
-   GLOBAL EXPORTS
-============================================================ */
+    /* ========================================================
+       GLOBAL API
+    ======================================================== */
 
-window.WebBktxMemory =
-    WebBktxMemory;
+    const WebBktx = {
 
-window.WebBktxCPU =
-    WebBktxCPU;
+        version: VERSION,
 
-window.WebBktxCPUFlags =
-    WebBktxCPUFlags;
+        VERSION,
 
-window.WebBktxDecoder =
-    WebBktxDecoder;
+        Memory,
 
-window.WebBktxXBE =
-    WebBktxXBE;
+        CPU,
 
-window.WebBktxThunks =
-    WebBktxThunks;
+        Decoder,
 
-window.WebBktxXAPI =
-    WebBktxXAPI;
+        XBE,
 
-window.WebBktxXFile =
-    WebBktxXFile;
+        XAPI,
 
-window.WebBktxKernel =
-    WebBktxKernel;
+        XFile,
 
-window.WebBktxXInput =
-    WebBktxXInput;
+        Kernel,
 
-window.WebBktxInput =
-    WebBktxXInput;
+        XInput,
 
-window.WebBktxXGraphics =
-    WebBktxXGraphics;
+        Graphics,
 
-window.WebBktxGraphics =
-    WebBktxGraphics;
+        Machine,
 
-window.WebBktxCore =
-    WebBktxCore;
+        create(options = {}) {
 
-window.WebBktxVersion =
-    WEBBKTX_VERSION;
+            return new Machine(options);
+        }
+    };
 
 
-/* ============================================================
-   UNIFIED OBJECT
-============================================================ */
+    window.WebBktx = WebBktx;
 
-window.WebBktx = {
+    window.WebBktxMemory = Memory;
+    window.WebBktxCPU = CPU;
+    window.WebBktxDecoder = Decoder;
+    window.WebBktxXBE = XBE;
+    window.WebBktxXAPI = XAPI;
+    window.WebBktxXFile = XFile;
+    window.WebBktxKernel = Kernel;
+    window.WebBktxXInput = XInput;
+    window.WebBktxXGraphics = Graphics;
+    window.WebBktxCore = Machine;
 
-    version:
-        WEBBKTX_VERSION,
-
-    Memory:
-        WebBktxMemory,
-
-    CPU:
-        WebBktxCPU,
-
-    CPUFlags:
-        WebBktxCPUFlags,
-
-    Decoder:
-        WebBktxDecoder,
-
-    XBE:
-        WebBktxXBE,
-
-    Thunks:
-        WebBktxThunks,
-
-    XAPI:
-        WebBktxXAPI,
-
-    XFile:
-        WebBktxXFile,
-
-    Kernel:
-        WebBktxKernel,
-
-    XInput:
-        WebBktxXInput,
-
-    Input:
-        WebBktxXInput,
-
-    XGraphics:
-        WebBktxXGraphics,
-
-    Graphics:
-        WebBktxXGraphics,
-
-    Core:
-        WebBktxCore
-};
-
-
-/* ============================================================
-   AUTO CORE INSTANCE
-============================================================ */
-
-try {
+    /*
+     * One default machine.
+     */
 
     window.WebBktxRuntime =
-        new WebBktxCore({
-            debug: true,
-            ramSize:
-                WEBBKTX_RAM_SIZE
-        });
-
+        new Machine();
 
     window.WebBktxRuntime.initialize();
 
-
     console.log(
-        "[WebBktx] Unified runtime loaded."
+        "[WebBktx] Runtime:",
+        VERSION
     );
-
-
-    console.log(
-        "[WebBktx] Version:",
-        WEBBKTX_VERSION
-    );
-
-
-    const selfTest =
-        window.WebBktxRuntime.selfTest();
-
 
     console.log(
         "[WebBktx] Self-test:",
-        selfTest
+        window.WebBktxRuntime.selfTest()
     );
 
-
-    if (selfTest.passed) {
-
-        console.log(
-            "[WebBktx] CORE STATUS: READY"
-        );
-
-    } else {
-
-        console.error(
-            "[WebBktx] CORE STATUS: FAILED"
-        );
-    }
-
-} catch (error) {
-
-    console.error(
-        "[WebBktx] CORE INITIALIZATION ERROR",
-        error
-    );
-}
+})();
