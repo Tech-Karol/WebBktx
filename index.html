@@ -8,394 +8,898 @@
         content="width=device-width, initial-scale=1.0"
     >
 
-    <!-- WebBktx metadata -->
-    <meta name="application-name" content="WebBktx">
+    <meta
+        name="application-name"
+        content="WebBktx"
+    >
+
     <meta
         name="description"
-        content="WebBktx — platforma emulatorów działających bezpośrednio w przeglądarce."
+        content="WebBktx — nowoczesna platforma emulatorów działających bezpośrednio w przeglądarce."
     >
-    <meta name="generator" content="WebBktx">
-    <meta name="webbktx-schema" content="webbktx.console.v1">
+
+    <meta
+        name="webbktx-schema"
+        content="webbktx.console.v1"
+    >
 
     <title>WebBktx</title>
 
     <style>
+        /* =====================================================
+           WEBBKTX
+           Modern Retro Interface
+           ===================================================== */
+
+        :root {
+            --bg: #080a0f;
+            --bg-soft: #0d1017;
+            --panel: #11151d;
+            --panel-hover: #171c26;
+
+            --border: #252c38;
+            --border-light: #303949;
+
+            --text: #f4f5f7;
+            --muted: #8d98a8;
+
+            --accent: #7c6cff;
+            --accent-light: #9b8fff;
+
+            --green: #54d69a;
+            --yellow: #e6bd63;
+
+            --shadow:
+                0 18px 50px rgba(0, 0, 0, 0.28);
+
+            --radius: 16px;
+        }
+
+
         * {
             box-sizing: border-box;
         }
 
-        :root {
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+
+        body {
+            margin: 0;
+
+            min-height: 100vh;
+
+            background:
+                radial-gradient(
+                    circle at 15% 0%,
+                    rgba(124, 108, 255, 0.10),
+                    transparent 30%
+                ),
+                radial-gradient(
+                    circle at 90% 20%,
+                    rgba(84, 214, 154, 0.05),
+                    transparent 25%
+                ),
+                var(--bg);
+
+            color: var(--text);
+
             font-family:
                 Inter,
+                ui-sans-serif,
                 system-ui,
                 -apple-system,
                 BlinkMacSystemFont,
                 "Segoe UI",
                 sans-serif;
 
-            color-scheme: dark;
-
-            --background: #090b0f;
-            --surface: #11151b;
-            --surface-hover: #181e26;
-            --border: #252c36;
-            --text: #ffffff;
-            --muted: #9ca6b5;
-            --accent: #5865f2;
+            -webkit-font-smoothing: antialiased;
         }
 
-        body {
-            margin: 0;
-            min-height: 100vh;
-            background: var(--background);
-            color: var(--text);
-        }
 
-        /* HEADER */
+        /* =====================================================
+           HEADER
+           ===================================================== */
 
         header {
             position: sticky;
             top: 0;
-            z-index: 10;
 
-            padding: 18px 28px;
+            z-index: 100;
 
-            background: rgba(9, 11, 15, 0.9);
-            backdrop-filter: blur(14px);
+            border-bottom:
+                1px solid rgba(255,255,255,0.06);
 
-            border-bottom: 1px solid var(--border);
+            background:
+                rgba(8, 10, 15, 0.82);
+
+            backdrop-filter:
+                blur(18px);
         }
 
-        .header-content {
-            max-width: 1200px;
+
+        .header-inner {
+            max-width: 1240px;
+
             margin: auto;
 
+            min-height: 70px;
+
+            padding:
+                0 28px;
+
             display: flex;
+
             align-items: center;
+
             justify-content: space-between;
 
-            gap: 20px;
+            gap: 24px;
         }
+
 
         .brand {
             display: flex;
+
             align-items: center;
+
             gap: 12px;
         }
 
-        .logo {
-            width: 42px;
-            height: 42px;
+
+        .brand-logo {
+            width: 40px;
+            height: 40px;
 
             display: grid;
+
             place-items: center;
 
-            border-radius: 12px;
+            border:
+                1px solid rgba(124,108,255,0.45);
 
-            background: var(--accent);
+            border-radius: 11px;
 
-            font-size: 22px;
+            background:
+                linear-gradient(
+                    135deg,
+                    #302b62,
+                    #18152d
+                );
+
+            box-shadow:
+                0 0 24px
+                rgba(124,108,255,0.14);
+
+            font-size: 19px;
         }
 
+
+        .brand-text {
+            display: flex;
+
+            flex-direction: column;
+        }
+
+
         .brand-name {
-            font-size: 21px;
+            font-size: 19px;
+
+            font-weight: 800;
+
+            letter-spacing: -0.4px;
+        }
+
+
+        .brand-subtitle {
+            color: var(--muted);
+
+            font-size: 11px;
+
+            letter-spacing: 0.5px;
+
+            text-transform: uppercase;
+        }
+
+
+        .header-status {
+            display: flex;
+
+            align-items: center;
+
+            gap: 8px;
+
+            color: var(--muted);
+
+            font-size: 12px;
+        }
+
+
+        .status-dot {
+            width: 7px;
+            height: 7px;
+
+            border-radius: 50%;
+
+            background: var(--green);
+
+            box-shadow:
+                0 0 10px
+                rgba(84,214,154,0.6);
+        }
+
+
+        /* =====================================================
+           MAIN
+           ===================================================== */
+
+        main {
+            max-width: 1240px;
+
+            margin: auto;
+
+            padding:
+                64px 28px 80px;
+        }
+
+
+        /* =====================================================
+           HERO
+           ===================================================== */
+
+        .hero {
+            display: grid;
+
+            grid-template-columns:
+                minmax(0, 1fr)
+                auto;
+
+            align-items: end;
+
+            gap: 40px;
+
+            margin-bottom: 42px;
+        }
+
+
+        .hero-label {
+            display: inline-flex;
+
+            align-items: center;
+
+            gap: 8px;
+
+            margin-bottom: 16px;
+
+            color: var(--accent-light);
+
+            font-size: 12px;
+
+            font-weight: 700;
+
+            letter-spacing: 1.2px;
+
+            text-transform: uppercase;
+        }
+
+
+        .hero-label::before {
+            content: "";
+
+            width: 18px;
+            height: 1px;
+
+            background: var(--accent);
+        }
+
+
+        .hero h1 {
+            margin: 0;
+
+            max-width: 760px;
+
+            font-size:
+                clamp(42px, 7vw, 72px);
+
+            line-height: 0.98;
+
+            letter-spacing: -3px;
+        }
+
+
+        .hero h1 span {
+            color: var(--accent-light);
+        }
+
+
+        .hero-description {
+            max-width: 650px;
+
+            margin:
+                20px 0 0;
+
+            color: var(--muted);
+
+            font-size: 16px;
+
+            line-height: 1.65;
+        }
+
+
+        .hero-box {
+            min-width: 190px;
+
+            padding: 18px;
+
+            border:
+                1px solid var(--border);
+
+            border-radius: var(--radius);
+
+            background:
+                rgba(17,21,29,0.65);
+
+            box-shadow: var(--shadow);
+        }
+
+
+        .hero-box-label {
+            color: var(--muted);
+
+            font-size: 11px;
+
+            text-transform: uppercase;
+
+            letter-spacing: 0.8px;
+        }
+
+
+        .hero-box-value {
+            margin-top: 7px;
+
+            font-size: 25px;
+
             font-weight: 800;
         }
 
-        .brand-version {
-            margin-left: 6px;
 
-            color: var(--muted);
-            font-size: 12px;
-            font-weight: 500;
-        }
-
-        /* MAIN */
-
-        main {
-            max-width: 1200px;
-            margin: auto;
-            padding: 55px 28px;
-        }
-
-        .hero {
-            margin-bottom: 45px;
-        }
-
-        .hero h1 {
-            margin: 0 0 12px;
-
-            font-size: clamp(36px, 6vw, 64px);
-            line-height: 1;
-
-            letter-spacing: -2px;
-        }
-
-        .hero p {
-            max-width: 650px;
-
-            margin: 0;
-
-            color: var(--muted);
-
-            font-size: 17px;
-            line-height: 1.6;
-        }
-
-        /* SEARCH */
+        /* =====================================================
+           TOOLBAR
+           ===================================================== */
 
         .toolbar {
             display: flex;
-            gap: 12px;
 
-            margin-bottom: 28px;
+            align-items: center;
+
+            justify-content: space-between;
+
+            gap: 15px;
+
+            margin-bottom: 18px;
         }
 
-        #search {
+
+        .section-title {
+            margin: 0;
+
+            font-size: 20px;
+
+            letter-spacing: -0.5px;
+        }
+
+
+        .search {
+            position: relative;
+
+            width: min(320px, 100%);
+        }
+
+
+        .search input {
             width: 100%;
 
-            padding: 14px 16px;
+            height: 42px;
 
-            border: 1px solid var(--border);
-            border-radius: 12px;
+            padding:
+                0 15px 0 40px;
 
             outline: none;
 
-            background: var(--surface);
+            border:
+                1px solid var(--border);
+
+            border-radius: 11px;
+
+            background:
+                var(--panel);
+
             color: var(--text);
 
-            font-size: 15px;
+            font-size: 13px;
+
+            transition:
+                border-color 0.15s,
+                background 0.15s;
         }
 
-        #search:focus {
-            border-color: var(--accent);
+
+        .search input:focus {
+            border-color:
+                rgba(124,108,255,0.7);
+
+            background:
+                var(--panel-hover);
         }
 
-        /* GRID */
+
+        .search-icon {
+            position: absolute;
+
+            left: 14px;
+            top: 50%;
+
+            transform:
+                translateY(-50%);
+
+            color: var(--muted);
+
+            pointer-events: none;
+        }
+
+
+        /* =====================================================
+           GRID
+           ===================================================== */
 
         #consoleGrid {
             display: grid;
 
             grid-template-columns:
-                repeat(auto-fill, minmax(250px, 1fr));
+                repeat(
+                    auto-fill,
+                    minmax(270px, 1fr)
+                );
 
             gap: 18px;
         }
 
-        /* CONSOLE CARD */
+
+        /* =====================================================
+           CONSOLE CARD
+           ===================================================== */
 
         .console-card {
+            position: relative;
+
             overflow: hidden;
 
             display: flex;
+
             flex-direction: column;
 
-            min-height: 260px;
+            min-height: 315px;
 
-            background: var(--surface);
+            border:
+                1px solid var(--border);
 
-            border: 1px solid var(--border);
-            border-radius: 16px;
-
-            transition:
-                transform 0.15s ease,
-                border-color 0.15s ease,
-                background 0.15s ease;
-        }
-
-        .console-card:hover {
-            transform: translateY(-4px);
-
-            background: var(--surface-hover);
-
-            border-color: #3a4350;
-        }
-
-        .console-icon {
-            display: grid;
-            place-items: center;
-
-            height: 120px;
+            border-radius: var(--radius);
 
             background:
                 linear-gradient(
-                    135deg,
-                    #151a22,
-                    #0d1015
+                    160deg,
+                    rgba(20,25,34,0.96),
+                    rgba(13,16,22,0.96)
                 );
 
-            font-size: 54px;
+            box-shadow:
+                0 8px 30px
+                rgba(0,0,0,0.12);
+
+            transition:
+                transform 0.18s ease,
+                border-color 0.18s ease,
+                box-shadow 0.18s ease;
         }
+
+
+        .console-card::after {
+            content: "";
+
+            position: absolute;
+
+            top: 0;
+            left: 20px;
+            right: 20px;
+
+            height: 1px;
+
+            background:
+                linear-gradient(
+                    90deg,
+                    transparent,
+                    rgba(124,108,255,0.5),
+                    transparent
+                );
+
+            opacity: 0.6;
+        }
+
+
+        .console-card:hover {
+            transform:
+                translateY(-5px);
+
+            border-color:
+                var(--border-light);
+
+            box-shadow:
+                0 18px 45px
+                rgba(0,0,0,0.28);
+        }
+
+
+        .console-visual {
+            position: relative;
+
+            height: 135px;
+
+            display: grid;
+
+            place-items: center;
+
+            background:
+                radial-gradient(
+                    circle,
+                    rgba(124,108,255,0.10),
+                    transparent 65%
+                ),
+                #0c0f15;
+        }
+
+
+        .console-icon {
+            font-size: 55px;
+
+            filter:
+                drop-shadow(
+                    0 8px 20px
+                    rgba(0,0,0,0.4)
+                );
+        }
+
+
+        .status-badge {
+            position: absolute;
+
+            top: 12px;
+            right: 12px;
+
+            padding:
+                5px 8px;
+
+            border-radius: 7px;
+
+            background:
+                rgba(255,255,255,0.05);
+
+            border:
+                1px solid rgba(255,255,255,0.06);
+
+            color: var(--muted);
+
+            font-size: 10px;
+
+            font-weight: 700;
+
+            text-transform: uppercase;
+
+            letter-spacing: 0.6px;
+        }
+
+
+        .status-badge.ready {
+            color: var(--green);
+        }
+
+
+        .status-badge.planned {
+            color: var(--yellow);
+        }
+
 
         .console-content {
             display: flex;
-            flex-direction: column;
 
             flex: 1;
 
-            padding: 18px;
+            flex-direction: column;
+
+            padding: 19px;
         }
+
 
         .console-name {
-            margin: 0 0 6px;
+            margin: 0;
 
-            font-size: 19px;
+            font-size: 18px;
+
+            letter-spacing: -0.3px;
         }
+
 
         .console-manufacturer {
+            margin-top: 4px;
+
             color: var(--muted);
 
-            font-size: 13px;
+            font-size: 12px;
         }
 
+
         .console-description {
-            margin: 14px 0;
+            margin:
+                13px 0 15px;
 
-            color: var(--muted);
+            color: #a7afbc;
 
-            font-size: 14px;
+            font-size: 13px;
+
             line-height: 1.5;
         }
 
-        .console-meta {
+
+        .console-tags {
             display: flex;
+
             flex-wrap: wrap;
 
             gap: 6px;
 
             margin-top: auto;
-            margin-bottom: 14px;
+
+            margin-bottom: 15px;
         }
+
 
         .tag {
-            padding: 5px 8px;
+            padding:
+                5px 8px;
 
-            border-radius: 7px;
+            border:
+                1px solid rgba(255,255,255,0.05);
 
-            background: #1b212a;
+            border-radius: 6px;
 
-            color: #aeb7c4;
+            background:
+                rgba(255,255,255,0.035);
 
-            font-size: 11px;
+            color: #8e98a7;
+
+            font-size: 10px;
         }
 
-        /* BUTTON */
+
+        /* =====================================================
+           BUTTON
+           ===================================================== */
 
         .launch-button {
             width: 100%;
 
-            padding: 11px 14px;
+            height: 40px;
 
             border: 0;
-            border-radius: 10px;
 
-            background: var(--accent);
+            border-radius: 9px;
+
+            background:
+                linear-gradient(
+                    135deg,
+                    #8172ff,
+                    #6556df
+                );
+
             color: white;
 
-            font-weight: 700;
+            font-size: 12px;
+
+            font-weight: 750;
 
             cursor: pointer;
 
             transition:
-                opacity 0.15s ease,
-                transform 0.15s ease;
+                transform 0.12s,
+                filter 0.12s,
+                opacity 0.12s;
         }
+
 
         .launch-button:hover {
-            opacity: 0.9;
+            filter:
+                brightness(1.08);
         }
+
 
         .launch-button:active {
-            transform: scale(0.98);
+            transform:
+                scale(0.98);
         }
+
 
         .launch-button.disabled {
-            background: #252b34;
+            background:
+                #202631;
 
-            color: #707987;
+            color:
+                #687384;
 
-            cursor: not-allowed;
+            cursor:
+                not-allowed;
         }
 
-        /* STATUS */
 
-        #status {
-            margin-bottom: 18px;
+        /* =====================================================
+           EMPTY / ERROR
+           ===================================================== */
+
+        .message {
+            grid-column: 1 / -1;
+
+            padding: 35px;
+
+            text-align: center;
+
+            border:
+                1px solid var(--border);
+
+            border-radius: var(--radius);
+
+            background: var(--panel);
 
             color: var(--muted);
-
-            font-size: 14px;
         }
+
 
         .error {
-            padding: 15px;
-
-            border: 1px solid #542b2b;
-            border-radius: 12px;
-
-            background: #1d1111;
-
-            color: #ff8c8c;
+            color: #ff9292;
         }
 
-        /* FOOTER */
+
+        /* =====================================================
+           FOOTER
+           ===================================================== */
 
         footer {
-            max-width: 1200px;
+            max-width: 1240px;
 
-            margin: 40px auto 0;
-            padding: 25px 28px;
+            margin: auto;
 
-            border-top: 1px solid var(--border);
+            padding:
+                24px 28px 35px;
 
-            color: var(--muted);
+            border-top:
+                1px solid rgba(255,255,255,0.05);
 
-            font-size: 13px;
+            color: #626c7a;
+
+            font-size: 11px;
+
+            display: flex;
+
+            justify-content: space-between;
+
+            gap: 20px;
         }
 
-        /* MOBILE */
 
-        @media (max-width: 600px) {
-            header {
-                padding: 14px 18px;
+        /* =====================================================
+           RESPONSIVE
+           ===================================================== */
+
+        @media (max-width: 760px) {
+
+            .header-inner {
+                padding: 0 18px;
             }
+
+
+            .header-status {
+                display: none;
+            }
+
 
             main {
-                padding: 40px 18px;
+                padding:
+                    45px 18px 60px;
             }
 
-            .hero h1 {
-                letter-spacing: -1px;
+
+            .hero {
+                grid-template-columns: 1fr;
+
+                gap: 25px;
             }
+
+
+            .hero h1 {
+                letter-spacing: -2px;
+            }
+
+
+            .hero-box {
+                width: 100%;
+            }
+
+
+            .toolbar {
+                align-items: stretch;
+
+                flex-direction: column;
+            }
+
+
+            .search {
+                width: 100%;
+            }
+
 
             #consoleGrid {
                 grid-template-columns: 1fr;
             }
+
+
+            footer {
+                padding-left: 18px;
+                padding-right: 18px;
+
+                flex-direction: column;
+            }
+
         }
     </style>
 </head>
 
+
 <body>
+
+
+<!-- =========================================================
+     HEADER
+     ========================================================= -->
 
 <header>
 
-    <div class="header-content">
+    <div class="header-inner">
 
         <div class="brand">
 
-            <div class="logo">
+            <div class="brand-logo">
                 🎮
             </div>
 
-            <div>
-                <span class="brand-name">
-                    WebBktx
-                </span>
+            <div class="brand-text">
 
-                <span class="brand-version">
-                    v1
-                </span>
+                <div class="brand-name">
+                    WebBktx
+                </div>
+
+                <div class="brand-subtitle">
+                    Web Emulation Platform
+                </div>
+
             </div>
+
+        </div>
+
+
+        <div class="header-status">
+
+            <span class="status-dot"></span>
+
+            Browser Ready
 
         </div>
 
@@ -404,52 +908,113 @@
 </header>
 
 
+<!-- =========================================================
+     MAIN
+     ========================================================= -->
+
 <main>
+
 
     <section class="hero">
 
-        <h1>
-            WebBktx
-        </h1>
+        <div>
 
-        <p>
-            Platforma emulatorów działających
-            bezpośrednio w przeglądarce.
-            Wybierz konsolę i uruchom emulator.
-        </p>
+            <div class="hero-label">
+                WebBktx Platform
+            </div>
+
+
+            <h1>
+                Retro hardware.
+                <span>Modern web.</span>
+            </h1>
+
+
+            <p class="hero-description">
+                Uruchamiaj emulatory klasycznych systemów
+                bezpośrednio w przeglądarce.
+                Wszystko zorganizowane w jednej,
+                lekkiej platformie WebBktx.
+            </p>
+
+        </div>
+
+
+        <div class="hero-box">
+
+            <div class="hero-box-label">
+                Available systems
+            </div>
+
+            <div
+                class="hero-box-value"
+                id="systemCount"
+            >
+                —
+            </div>
+
+        </div>
 
     </section>
 
+
+    <!-- =====================================================
+         CONSOLES
+         ===================================================== -->
 
     <section>
 
         <div class="toolbar">
 
-            <input
-                id="search"
-                type="search"
-                placeholder="Szukaj konsoli..."
-                autocomplete="off"
-            >
+            <h2 class="section-title">
+                Konsole
+            </h2>
+
+
+            <label class="search">
+
+                <span class="search-icon">
+                    🔎
+                </span>
+
+                <input
+                    id="search"
+                    type="search"
+                    placeholder="Szukaj konsoli..."
+                    autocomplete="off"
+                >
+
+            </label>
 
         </div>
 
 
-        <div id="status">
-            Ładowanie konsol...
+        <div id="consoleGrid">
+
+            <div class="message">
+                Ładowanie konsol...
+            </div>
+
         </div>
-
-
-        <div id="consoleGrid"></div>
 
     </section>
 
 </main>
 
 
+<!-- =========================================================
+     FOOTER
+     ========================================================= -->
+
 <footer>
 
-    WebBktx • Web Emulation Platform
+    <span>
+        WebBktx
+    </span>
+
+    <span>
+        WebBktx Console Schema v1
+    </span>
 
 </footer>
 
@@ -457,39 +1022,59 @@
 <script>
 
     /*
-     * ============================================================
-     * WebBktx Console Loader
-     * Schema: webbktx.console.v1
-     * ============================================================
+     * =========================================================
+     * WebBktx Console System
+     *
+     * Console database:
+     * data/consoles.json
+     *
+     * Schema:
+     * webbktx.console.v1
+     * =========================================================
      */
 
-    const CONSOLE_DATABASE = "./consoles.json";
+
+    const DATABASE =
+        "./data/consoles.json";
+
 
     const grid =
-        document.getElementById("consoleGrid");
+        document.getElementById(
+            "consoleGrid"
+        );
 
-    const status =
-        document.getElementById("status");
 
     const search =
-        document.getElementById("search");
+        document.getElementById(
+            "search"
+        );
+
+
+    const systemCount =
+        document.getElementById(
+            "systemCount"
+        );
 
 
     let consoles = [];
 
 
-    /*
-     * ------------------------------------------------------------
-     * LOAD DATABASE
-     * ------------------------------------------------------------
-     */
+    /* =========================================================
+       LOAD JSON
+       ========================================================= */
 
-    async function loadConsoleDatabase() {
+    async function loadConsoles() {
 
         try {
 
             const response =
-                await fetch(CONSOLE_DATABASE);
+                await fetch(
+                    DATABASE,
+                    {
+                        cache: "no-store"
+                    }
+                );
+
 
             if (!response.ok) {
 
@@ -504,9 +1089,7 @@
                 await response.json();
 
 
-            /*
-             * Validate WebBktx schema
-             */
+            /* Validate schema */
 
             if (
                 database.schema !==
@@ -514,7 +1097,7 @@
             ) {
 
                 throw new Error(
-                    "Nieobsługiwany schemat consoles.json"
+                    "Nieobsługiwany schemat JSON."
                 );
 
             }
@@ -527,7 +1110,7 @@
             ) {
 
                 throw new Error(
-                    "Pole 'consoles' musi być tablicą"
+                    "Brak tablicy 'consoles'."
                 );
 
             }
@@ -537,7 +1120,13 @@
                 database.consoles;
 
 
-            renderConsoles(consoles);
+            systemCount.textContent =
+                consoles.length;
+
+
+            renderConsoles(
+                consoles
+            );
 
 
         } catch (error) {
@@ -548,12 +1137,15 @@
             );
 
 
-            status.innerHTML = `
-                <div class="error">
-                    Nie można załadować bazy konsol.
-                    <br>
+            grid.innerHTML = `
+                <div class="message error">
+                    Nie udało się załadować
+                    bazy konsol.
+                    <br><br>
                     <small>
-                        ${escapeHTML(error.message)}
+                        ${escapeHTML(
+                            error.message
+                        )}
                     </small>
                 </div>
             `;
@@ -563,39 +1155,45 @@
     }
 
 
-    /*
-     * ------------------------------------------------------------
-     * RENDER CONSOLES
-     * ------------------------------------------------------------
-     */
+    /* =========================================================
+       RENDER
+       ========================================================= */
 
-    function renderConsoles(list) {
+    function renderConsoles(
+        list
+    ) {
 
         grid.innerHTML = "";
 
 
-        if (list.length === 0) {
+        if (
+            list.length === 0
+        ) {
 
-            status.textContent =
-                "Nie znaleziono konsol.";
+            grid.innerHTML = `
+                <div class="message">
+                    Nie znaleziono konsol.
+                </div>
+            `;
 
             return;
 
         }
 
 
-        status.textContent =
-            `${list.length} konsol`;
-
-
         for (
-            const consoleInfo of list
+            const consoleInfo
+            of list
         ) {
 
-            grid.appendChild(
-                createConsoleCard(
+            const card =
+                createCard(
                     consoleInfo
-                )
+                );
+
+
+            grid.appendChild(
+                card
             );
 
         }
@@ -603,32 +1201,47 @@
     }
 
 
-    /*
-     * ------------------------------------------------------------
-     * CREATE CARD
-     * ------------------------------------------------------------
-     */
+    /* =========================================================
+       CARD
+       ========================================================= */
 
-    function createConsoleCard(
+    function createCard(
         consoleInfo
     ) {
 
         const card =
-            document.createElement("article");
+            document.createElement(
+                "article"
+            );
+
 
         card.className =
             "console-card";
 
 
         /*
-         * Icon
+         * VISUAL
          */
 
+        const visual =
+            document.createElement(
+                "div"
+            );
+
+
+        visual.className =
+            "console-visual";
+
+
         const icon =
-            document.createElement("div");
+            document.createElement(
+                "div"
+            );
+
 
         icon.className =
             "console-icon";
+
 
         icon.textContent =
             consoleInfo.ui?.icon ??
@@ -636,55 +1249,125 @@
 
 
         /*
-         * Content
+         * STATUS
+         */
+
+        const status =
+            document.createElement(
+                "div"
+            );
+
+
+        status.className =
+            "status-badge";
+
+
+        const currentStatus =
+            consoleInfo.status ??
+            "unknown";
+
+
+        status.textContent =
+            currentStatus;
+
+
+        if (
+            currentStatus === "ready"
+        ) {
+
+            status.classList.add(
+                "ready"
+            );
+
+        }
+
+
+        if (
+            currentStatus === "planned"
+        ) {
+
+            status.classList.add(
+                "planned"
+            );
+
+        }
+
+
+        visual.appendChild(
+            icon
+        );
+
+
+        visual.appendChild(
+            status
+        );
+
+
+        /*
+         * CONTENT
          */
 
         const content =
-            document.createElement("div");
+            document.createElement(
+                "div"
+            );
+
 
         content.className =
             "console-content";
 
 
         /*
-         * Name
+         * NAME
          */
 
         const name =
-            document.createElement("h2");
+            document.createElement(
+                "h3"
+            );
+
 
         name.className =
             "console-name";
 
+
         name.textContent =
             consoleInfo.name ??
-            "Unknown Console";
+            "Unknown";
 
 
         /*
-         * Manufacturer
+         * MANUFACTURER
          */
 
         const manufacturer =
-            document.createElement("div");
+            document.createElement(
+                "div"
+            );
+
 
         manufacturer.className =
             "console-manufacturer";
 
+
         manufacturer.textContent =
             consoleInfo.manufacturer ??
-            "Unknown manufacturer";
+            "";
 
 
         /*
-         * Description
+         * DESCRIPTION
          */
 
         const description =
-            document.createElement("p");
+            document.createElement(
+                "p"
+            );
+
 
         description.className =
             "console-description";
+
 
         description.textContent =
             consoleInfo.ui?.description ??
@@ -692,82 +1375,126 @@
 
 
         /*
-         * Metadata tags
+         * TAGS
          */
 
-        const meta =
-            document.createElement("div");
+        const tags =
+            document.createElement(
+                "div"
+            );
 
-        meta.className =
-            "console-meta";
+
+        tags.className =
+            "console-tags";
 
 
         addTag(
-            meta,
+            tags,
             consoleInfo.category
         );
 
+
         addTag(
-            meta,
+            tags,
             consoleInfo.releaseYear
         );
 
+
         addTag(
-            meta,
-            consoleInfo.status
+            tags,
+            consoleInfo.hardware?.cpu
         );
 
 
         /*
-         * Launch button
+         * BUTTON
          */
 
         const button =
-            document.createElement("button");
+            document.createElement(
+                "button"
+            );
+
 
         button.className =
             "launch-button";
 
 
         const ready =
-            consoleInfo.status ===
-            "ready";
+            currentStatus === "ready";
 
 
-        button.textContent =
-            ready
-                ? "Uruchom emulator"
-                : "W przygotowaniu";
+        if (ready) {
+
+            button.textContent =
+                "Uruchom emulator";
 
 
-        if (!ready) {
+            button.addEventListener(
+                "click",
+                () => {
+
+                    launchEmulator(
+                        consoleInfo
+                    );
+
+                }
+            );
+
+        } else {
+
+            button.textContent =
+                "W przygotowaniu";
+
+
+            button.disabled =
+                true;
+
 
             button.classList.add(
                 "disabled"
             );
 
-            button.disabled = true;
-
-        } else {
-
-            button.addEventListener(
-                "click",
-                () => launchConsole(
-                    consoleInfo
-                )
-            );
-
         }
 
 
-        content.appendChild(name);
-        content.appendChild(manufacturer);
-        content.appendChild(description);
-        content.appendChild(meta);
-        content.appendChild(button);
+        /*
+         * BUILD
+         */
 
-        card.appendChild(icon);
-        card.appendChild(content);
+        content.appendChild(
+            name
+        );
+
+
+        content.appendChild(
+            manufacturer
+        );
+
+
+        content.appendChild(
+            description
+        );
+
+
+        content.appendChild(
+            tags
+        );
+
+
+        content.appendChild(
+            button
+        );
+
+
+        card.appendChild(
+            visual
+        );
+
+
+        card.appendChild(
+            content
+        );
 
 
         return card;
@@ -775,11 +1502,9 @@
     }
 
 
-    /*
-     * ------------------------------------------------------------
-     * TAG
-     * ------------------------------------------------------------
-     */
+    /* =========================================================
+       TAG
+       ========================================================= */
 
     function addTag(
         parent,
@@ -788,33 +1513,41 @@
 
         if (
             value === undefined ||
-            value === null
+            value === null ||
+            value === ""
         ) {
+
             return;
+
         }
 
 
         const tag =
-            document.createElement("span");
+            document.createElement(
+                "span"
+            );
+
 
         tag.className =
             "tag";
 
+
         tag.textContent =
             value;
 
-        parent.appendChild(tag);
+
+        parent.appendChild(
+            tag
+        );
 
     }
 
 
-    /*
-     * ------------------------------------------------------------
-     * LAUNCH EMULATOR
-     * ------------------------------------------------------------
-     */
+    /* =========================================================
+       LAUNCH
+       ========================================================= */
 
-    function launchConsole(
+    function launchEmulator(
         consoleInfo
     ) {
 
@@ -840,11 +1573,9 @@
     }
 
 
-    /*
-     * ------------------------------------------------------------
-     * SEARCH
-     * ------------------------------------------------------------
-     */
+    /* =========================================================
+       SEARCH
+       ========================================================= */
 
     search.addEventListener(
         "input",
@@ -871,7 +1602,7 @@
                 consoles.filter(
                     consoleInfo => {
 
-                        const text = [
+                        const searchable = [
 
                             consoleInfo.id,
 
@@ -880,6 +1611,8 @@
                             consoleInfo.manufacturer,
 
                             consoleInfo.category,
+
+                            consoleInfo.releaseYear,
 
                             consoleInfo.ui?.description,
 
@@ -891,9 +1624,10 @@
                         .toLowerCase();
 
 
-                        return text.includes(
-                            query
-                        );
+                        return searchable
+                            .includes(
+                                query
+                            );
 
                     }
                 );
@@ -907,35 +1641,52 @@
     );
 
 
-    /*
-     * ------------------------------------------------------------
-     * BASIC HTML ESCAPE
-     * ------------------------------------------------------------
-     */
+    /* =========================================================
+       HTML ESCAPE
+       ========================================================= */
 
     function escapeHTML(
         value
     ) {
 
         return String(value)
-            .replaceAll("&", "&amp;")
-            .replaceAll("<", "&lt;")
-            .replaceAll(">", "&gt;")
-            .replaceAll('"', "&quot;")
-            .replaceAll("'", "&#039;");
+
+            .replaceAll(
+                "&",
+                "&amp;"
+            )
+
+            .replaceAll(
+                "<",
+                "&lt;"
+            )
+
+            .replaceAll(
+                ">",
+                "&gt;"
+            )
+
+            .replaceAll(
+                '"',
+                "&quot;"
+            )
+
+            .replaceAll(
+                "'",
+                "&#039;"
+            );
 
     }
 
 
-    /*
-     * ------------------------------------------------------------
-     * START
-     * ------------------------------------------------------------
-     */
+    /* =========================================================
+       START WEBBKTX
+       ========================================================= */
 
-    loadConsoleDatabase();
+    loadConsoles();
 
 </script>
+
 
 </body>
 </html>
