@@ -1,20 +1,34 @@
 /*
  * ============================================================
  * WebBktx — Game Boy Cartridge
+ * cartridge.js
  * ============================================================
  *
  * Obsługa:
  *
- * ROM ONLY
- * MBC1
- * MBC2
- * MBC3
- * MBC5
+ * DMG
+ * GBC ROM-y mogą zostać załadowane, ale emulator pracuje
+ * w trybie DMG.
  *
- * + RAM kartridża
- * + bankowanie ROM
- * + bankowanie RAM
- * + battery-backed RAM w pamięci emulatora
+ * MBC:
+ *   ROM ONLY
+ *   MBC1
+ *   MBC2
+ *   MBC3
+ *   MBC5
+ *
+ * RAM:
+ *   brak
+ *   2 KB
+ *   8 KB
+ *   32 KB
+ *   64 KB
+ *   128 KB
+ *
+ * Pokémon Yellow:
+ *   MBC5
+ *   ROM 1 MB
+ *   RAM 32 KB
  *
  * ============================================================
  */
@@ -23,76 +37,166 @@ export default class Cartridge {
 
     constructor() {
 
-        this.rom = null;
+        /*
+         * ----------------------------------------------------
+         * ROM
+         * ----------------------------------------------------
+         */
 
-        this.ram = null;
+        this.rom =
+            null;
 
-        this.title = "";
+        this.romSize =
+            0;
 
-        this.type = 0x00;
-
-        this.romSizeCode = 0;
-
-        this.ramSizeCode = 0;
-
-        this.romBanks = 0;
-
-        this.ramBanks = 0;
-
-        this.romBank = 1;
-
-        this.ramBank = 0;
-
-        this.ramEnabled = false;
-
-        this.mode = 0;
-
-        this.mbc = "ROM";
+        this.romBanks =
+            0;
 
 
         /*
+         * ----------------------------------------------------
+         * RAM
+         * ----------------------------------------------------
+         */
+
+        this.ram =
+            null;
+
+        this.ramSize =
+            0;
+
+        this.ramBanks =
+            0;
+
+
+        /*
+         * ----------------------------------------------------
+         * Cartridge info
+         * ----------------------------------------------------
+         */
+
+        this.title =
+            "";
+
+        this.type =
+            0x00;
+
+        this.typeName =
+            "ROM ONLY";
+
+        this.manufacturer =
+            "";
+
+        this.version =
+            0;
+
+
+        /*
+         * ----------------------------------------------------
+         * MBC
+         * ----------------------------------------------------
+         */
+
+        this.mbc =
+            "ROM";
+
+        this.ramEnabled =
+            false;
+
+
+        /*
+         * ----------------------------------------------------
          * MBC1
+         * ----------------------------------------------------
          */
 
-        this.mbc1Low5 = 1;
+        this.mbc1RomBank =
+            1;
 
-        this.mbc1High2 = 0;
+        this.mbc1RamBank =
+            0;
+
+        this.mbc1Mode =
+            0;
 
 
         /*
+         * ----------------------------------------------------
+         * MBC2
+         * ----------------------------------------------------
+         */
+
+        this.mbc2RomBank =
+            1;
+
+
+        /*
+         * ----------------------------------------------------
          * MBC3
+         * ----------------------------------------------------
          */
 
-        this.rtcRegister = 0;
+        this.mbc3RomBank =
+            1;
+
+        this.mbc3RamBank =
+            0;
 
 
         /*
+         * ----------------------------------------------------
          * MBC5
+         * ----------------------------------------------------
          */
 
-        this.mbc5Low8 = 1;
+        this.mbc5RomBank =
+            1;
 
-        this.mbc5High1 = 0;
+        this.mbc5RomHigh =
+            0;
+
+        this.mbc5RamBank =
+            0;
 
 
         /*
-         * RTC placeholder.
-         *
-         * Pokémon Yellow nie potrzebuje RTC,
-         * ale MBC3 obsługujemy dla kompatybilności.
+         * ----------------------------------------------------
+         * RTC
+         * ----------------------------------------------------
          */
 
-        this.rtc = {
+        this.rtc =
+            new Uint8Array(5);
 
-            seconds: 0,
-            minutes: 0,
-            hours: 0,
-            days: 0,
 
-            halt: false,
-            carry: false
+        this.rtcSelected =
+            false;
 
-        };
+
+        /*
+         * ----------------------------------------------------
+         * Battery
+         * ----------------------------------------------------
+         */
+
+        this.hasBattery =
+            false;
+
+        this.hasRAM =
+            false;
+
+        this.hasRTC =
+            false;
+
+
+        /*
+         * ----------------------------------------------------
+         * Debug
+         * ----------------------------------------------------
+         */
+
+        this.debug =
+            false;
 
     }
 
@@ -103,59 +207,104 @@ export default class Cartridge {
      * ========================================================
      */
 
-    load(buffer) {
+    load(
+        data
+    ) {
 
         if (
-            buffer instanceof ArrayBuffer
+            data instanceof ArrayBuffer
         ) {
 
-            this.rom =
+            data =
                 new Uint8Array(
-                    buffer
+                    data
                 );
 
-        } else if (
-            buffer instanceof Uint8Array
+        }
+
+
+        if (
+            ArrayBuffer.isView(data)
         ) {
 
-            this.rom =
-                buffer;
-
-        } else {
-
-            throw new Error(
-                "Cartridge: nieprawidłowy ROM."
-            );
+            data =
+                new Uint8Array(
+                    data.buffer,
+                    data.byteOffset,
+                    data.byteLength
+                );
 
         }
 
 
         if (
-            this.rom.length <
-            0x150
+            !data ||
+            data.length < 0x150
         ) {
 
             throw new Error(
-                "Cartridge: ROM jest za mały."
+                "ROM jest za mały lub nieprawidłowy."
             );
 
         }
+
+
+        /*
+         * Kopiujemy ROM.
+         *
+         * Nie przechowujemy obcego ArrayBuffer,
+         * który może zostać zmieniony przez UI.
+         */
+
+        this.rom =
+            new Uint8Array(
+                data.length
+            );
+
+
+        this.rom.set(
+            data
+        );
+
+
+        this.romSize =
+            this.rom.length;
 
 
         this.readHeader();
 
-        this.allocateRAM();
 
-        this.resetMapper();
+        this.resetMBC();
 
 
-        console.log(
-            "[WebBktx] Cartridge:",
-            this.title,
-            this.mbc,
-            "ROM:",
-            this.rom.length,
-            "bytes"
+        this.log(
+            "Cartridge: " +
+            this.title +
+            " " +
+            this.typeName +
+            " ROM: " +
+            this.romSize +
+            " bytes"
+        );
+
+
+        return true;
+
+    }
+
+
+    /*
+     * ========================================================
+     * LOAD ROM ALIAS
+     * ========================================================
+     */
+
+    loadROM(
+        data
+    ) {
+
+        return this.load(
+            data
         );
 
     }
@@ -163,17 +312,48 @@ export default class Cartridge {
 
     /*
      * ========================================================
-     * HEADER
+     * INSERT
+     * ========================================================
+     */
+
+    insert(
+        data
+    ) {
+
+        return this.load(
+            data
+        );
+
+    }
+
+
+    /*
+     * ========================================================
+     * READ HEADER
      * ========================================================
      */
 
     readHeader() {
 
+        if (
+            !this.rom
+        ) {
+
+            throw new Error(
+                "Brak ROM."
+            );
+
+        }
+
+
         /*
-         * Title: 0x0134 - 0x0143
+         * Title:
+         *
+         * 0134-0143
          */
 
-        let title = "";
+        let title =
+            "";
 
 
         for (
@@ -182,26 +362,28 @@ export default class Cartridge {
             i++
         ) {
 
-            const c =
+            const value =
                 this.rom[i];
 
 
             if (
-                c === 0
+                value === 0
             ) {
 
-                break;
+                continue;
 
             }
 
 
             if (
-                c >= 32 &&
-                c <= 126
+                value >= 32 &&
+                value <= 126
             ) {
 
                 title +=
-                    String.fromCharCode(c);
+                    String.fromCharCode(
+                        value
+                    );
 
             }
 
@@ -209,189 +391,195 @@ export default class Cartridge {
 
 
         this.title =
-            title.trim();
+            title
+                .replace(
+                    /\0/g,
+                    ""
+                )
+                .trim();
 
 
         /*
-         * Cartridge type
+         * Old/new GBC flag.
+         */
+
+        const gbcFlag =
+            this.rom[0x143] ?? 0;
+
+
+        /*
+         * Cartridge type.
          */
 
         this.type =
-            this.rom[0x147];
+            this.rom[0x147] ?? 0;
 
 
         /*
-         * ROM size
+         * ROM size.
          */
 
-        this.romSizeCode =
-            this.rom[0x148];
-
-
-        /*
-         * RAM size
-         */
-
-        this.ramSizeCode =
-            this.rom[0x149];
+        const romSizeCode =
+            this.rom[0x148] ?? 0;
 
 
         this.romBanks =
-            this.getROMBankCount(
-                this.romSizeCode
+            this.decodeROMBanks(
+                romSizeCode
+            );
+
+
+        /*
+         * RAM size.
+         */
+
+        const ramSizeCode =
+            this.rom[0x149] ?? 0;
+
+
+        this.ramSize =
+            this.decodeRAMSize(
+                ramSizeCode
             );
 
 
         this.ramBanks =
-            this.getRAMBankCount(
-                this.ramSizeCode
-            );
+            this.ramSize > 0
+                ? Math.ceil(
+                    this.ramSize /
+                    0x2000
+                )
+                : 0;
 
 
         /*
-         * Detect mapper.
+         * Cartridge type.
          */
 
-        this.mbc =
-            this.detectMBC(
-                this.type
-            );
-
-    }
+        this.decodeType(
+            this.type
+        );
 
 
-    /*
-     * ========================================================
-     * MAPPER
-     * ========================================================
-     */
+        /*
+         * Manufacturer.
+         *
+         * Newer cartridges contain
+         * manufacturer data at 013F-0142.
+         */
 
-    detectMBC(
-        type
-    ) {
+        let manufacturer =
+            "";
 
-        switch (
-            type
+
+        for (
+            let i = 0x13F;
+            i <= 0x142;
+            i++
         ) {
 
-            /*
-             * ROM ONLY
-             */
-
-            case 0x00:
-                return "ROM";
+            const value =
+                this.rom[i];
 
 
-            /*
-             * MBC1
-             */
+            if (
+                value >= 32 &&
+                value <= 126
+            ) {
 
-            case 0x01:
-            case 0x02:
-            case 0x03:
-                return "MBC1";
+                manufacturer +=
+                    String.fromCharCode(
+                        value
+                    );
 
-
-            /*
-             * MBC2
-             */
-
-            case 0x05:
-            case 0x06:
-                return "MBC2";
-
-
-            /*
-             * MBC3
-             */
-
-            case 0x0F:
-            case 0x10:
-            case 0x11:
-            case 0x12:
-            case 0x13:
-                return "MBC3";
-
-
-            /*
-             * MBC5
-             */
-
-            case 0x19:
-            case 0x1A:
-            case 0x1B:
-            case 0x1C:
-            case 0x1D:
-            case 0x1E:
-                return "MBC5";
-
-
-            default:
-
-                console.warn(
-                    "[WebBktx] Nieznany cartridge type:",
-                    "0x" +
-                    type
-                        .toString(16)
-                        .padStart(2, "0")
-                );
-
-
-                return "ROM";
+            }
 
         }
 
+
+        this.manufacturer =
+            manufacturer.trim();
+
+
+        /*
+         * Version.
+         */
+
+        this.version =
+            this.rom[0x14C] ?? 0;
+
+
+        /*
+         * GBC flag isn't used by DMG PPU,
+         * but keep it available.
+         */
+
+        this.isGBC =
+            gbcFlag === 0x80 ||
+            gbcFlag === 0xC0;
+
     }
 
 
     /*
      * ========================================================
-     * ROM SIZE
+     * ROM BANK COUNT
      * ========================================================
      */
 
-    getROMBankCount(
+    decodeROMBanks(
         code
     ) {
 
-        /*
-         * Standard Game Boy ROM sizes.
-         */
+        const table = {
+
+            0x00: 2,
+
+            0x01: 4,
+
+            0x02: 8,
+
+            0x03: 16,
+
+            0x04: 32,
+
+            0x05: 64,
+
+            0x06: 128,
+
+            0x07: 256,
+
+            0x08: 512,
+
+            0x52: 72,
+
+            0x53: 80,
+
+            0x54: 96
+
+        };
+
 
         if (
-            code <= 0x08
+            table[code]
         ) {
 
-            return 2 << code;
+            return table[code];
 
         }
 
 
         /*
-         * Special sizes:
-         *
-         * 0x52 = 72 banks
-         * 0x53 = 80 banks
-         * 0x54 = 96 banks
+         * Fallback based on actual ROM.
          */
 
-        switch (
-            code
-        ) {
-
-            case 0x52:
-                return 72;
-
-            case 0x53:
-                return 80;
-
-            case 0x54:
-                return 96;
-
-            default:
-                return 2;
-
-        }
+        return Math.max(
+            1,
+            Math.ceil(
+                this.romSize /
+                0x4000
+            )
+        );
 
     }
 
@@ -402,7 +590,7 @@ export default class Cartridge {
      * ========================================================
      */
 
-    getRAMBankCount(
+    decodeRAMSize(
         code
     ) {
 
@@ -414,19 +602,19 @@ export default class Cartridge {
                 return 0;
 
             case 0x01:
-                return 1;
+                return 0x0800;
 
             case 0x02:
-                return 1;
+                return 0x2000;
 
             case 0x03:
-                return 4;
+                return 0x8000;
 
             case 0x04:
-                return 16;
+                return 0x20000;
 
             case 0x05:
-                return 8;
+                return 0x10000;
 
             default:
                 return 0;
@@ -438,70 +626,398 @@ export default class Cartridge {
 
     /*
      * ========================================================
-     * RAM ALLOCATION
+     * CARTRIDGE TYPE
      * ========================================================
      */
 
-    allocateRAM() {
+    decodeType(
+        type
+    ) {
 
-        let size = 0;
+        this.mbc =
+            "ROM";
+
+        this.typeName =
+            "ROM ONLY";
+
+        this.hasRAM =
+            false;
+
+        this.hasBattery =
+            false;
+
+        this.hasRTC =
+            false;
 
 
         switch (
-            this.ramSizeCode
+            type
         ) {
 
+            /*
+             * ------------------------------------------------
+             * ROM ONLY
+             * ------------------------------------------------
+             */
+
             case 0x00:
-                size = 0;
+
+                this.mbc =
+                    "ROM";
+
+                this.typeName =
+                    "ROM ONLY";
+
                 break;
+
+
+            /*
+             * ------------------------------------------------
+             * MBC1
+             * ------------------------------------------------
+             */
 
             case 0x01:
-                size = 2 * 1024;
+
+                this.mbc =
+                    "MBC1";
+
+                this.typeName =
+                    "MBC1";
+
                 break;
+
 
             case 0x02:
-                size = 8 * 1024;
+
+                this.mbc =
+                    "MBC1";
+
+                this.hasRAM =
+                    true;
+
+                this.typeName =
+                    "MBC1+RAM";
+
                 break;
+
 
             case 0x03:
-                size = 32 * 1024;
+
+                this.mbc =
+                    "MBC1";
+
+                this.hasRAM =
+                    true;
+
+                this.hasBattery =
+                    true;
+
+                this.typeName =
+                    "MBC1+RAM+BATTERY";
+
                 break;
 
-            case 0x04:
-                size = 128 * 1024;
-                break;
+
+            /*
+             * ------------------------------------------------
+             * MBC2
+             * ------------------------------------------------
+             */
 
             case 0x05:
-                size = 64 * 1024;
+
+                this.mbc =
+                    "MBC2";
+
+                this.typeName =
+                    "MBC2";
+
+                this.ramSize =
+                    0x200;
+
+                this.ramBanks =
+                    1;
+
                 break;
 
+
+            case 0x06:
+
+                this.mbc =
+                    "MBC2";
+
+                this.typeName =
+                    "MBC2+BATTERY";
+
+                this.ramSize =
+                    0x200;
+
+                this.ramBanks =
+                    1;
+
+                this.hasBattery =
+                    true;
+
+                break;
+
+
+            /*
+             * ------------------------------------------------
+             * MBC3
+             * ------------------------------------------------
+             */
+
+            case 0x0F:
+
+                this.mbc =
+                    "MBC3";
+
+                this.hasRTC =
+                    true;
+
+                this.hasBattery =
+                    true;
+
+                this.typeName =
+                    "MBC3+TIMER+BATTERY";
+
+                break;
+
+
+            case 0x10:
+
+                this.mbc =
+                    "MBC3";
+
+                this.hasRAM =
+                    true;
+
+                this.hasRTC =
+                    true;
+
+                this.hasBattery =
+                    true;
+
+                this.typeName =
+                    "MBC3+TIMER+RAM+BATTERY";
+
+                break;
+
+
+            case 0x11:
+
+                this.mbc =
+                    "MBC3";
+
+                this.typeName =
+                    "MBC3";
+
+                break;
+
+
+            case 0x12:
+
+                this.mbc =
+                    "MBC3";
+
+                this.hasRAM =
+                    true;
+
+                this.typeName =
+                    "MBC3+RAM";
+
+                break;
+
+
+            case 0x13:
+
+                this.mbc =
+                    "MBC3";
+
+                this.hasRAM =
+                    true;
+
+                this.hasBattery =
+                    true;
+
+                this.typeName =
+                    "MBC3+RAM+BATTERY";
+
+                break;
+
+
+            /*
+             * ------------------------------------------------
+             * MBC5
+             * ------------------------------------------------
+             */
+
+            case 0x19:
+
+                this.mbc =
+                    "MBC5";
+
+                this.typeName =
+                    "MBC5";
+
+                break;
+
+
+            case 0x1A:
+
+                this.mbc =
+                    "MBC5";
+
+                this.hasRAM =
+                    true;
+
+                this.typeName =
+                    "MBC5+RAM";
+
+                break;
+
+
+            case 0x1B:
+
+                this.mbc =
+                    "MBC5";
+
+                this.hasRAM =
+                    true;
+
+                this.hasBattery =
+                    true;
+
+                this.typeName =
+                    "MBC5+RAM+BATTERY";
+
+                break;
+
+
+            case 0x1C:
+
+                this.mbc =
+                    "MBC5";
+
+                this.typeName =
+                    "MBC5+RUMBLE";
+
+                break;
+
+
+            case 0x1D:
+
+                this.mbc =
+                    "MBC5";
+
+                this.hasRAM =
+                    true;
+
+                this.typeName =
+                    "MBC5+RUMBLE+RAM";
+
+                break;
+
+
+            case 0x1E:
+
+                this.mbc =
+                    "MBC5";
+
+                this.hasRAM =
+                    true;
+
+                this.hasBattery =
+                    true;
+
+                this.typeName =
+                    "MBC5+RUMBLE+RAM+BATTERY";
+
+                break;
+
+
             default:
-                size = 0;
+
+                /*
+                 * Nieznany typ.
+                 *
+                 * Lepiej potraktować go jako ROM
+                 * niż dopuścić do null reference.
+                 */
+
+                this.mbc =
+                    "ROM";
+
+                this.typeName =
+                    "UNKNOWN";
+
+                break;
 
         }
+
+    }
+
+
+    /*
+     * ========================================================
+     * RESET MBC
+     * ========================================================
+     */
+
+    resetMBC() {
+
+        this.ramEnabled =
+            false;
+
+
+        this.mbc1RomBank =
+            1;
+
+        this.mbc1RamBank =
+            0;
+
+        this.mbc1Mode =
+            0;
+
+
+        this.mbc2RomBank =
+            1;
+
+
+        this.mbc3RomBank =
+            1;
+
+        this.mbc3RamBank =
+            0;
+
+
+        this.mbc5RomBank =
+            1;
+
+        this.mbc5RomHigh =
+            0;
+
+        this.mbc5RamBank =
+            0;
+
+
+        this.rtcSelected =
+            false;
 
 
         /*
-         * MBC2 has internal 512 × 4-bit RAM.
+         * Zawsze zapewnij RAM, jeśli cartridge
+         * deklaruje RAM.
          */
 
         if (
-            this.mbc === "MBC2"
-        ) {
-
-            size =
-                512;
-
-        }
-
-
-        if (
-            size > 0
+            this.ramSize > 0
         ) {
 
             this.ram =
                 new Uint8Array(
-                    size
+                    this.ramSize
                 );
 
         } else {
@@ -511,58 +1027,6 @@ export default class Cartridge {
 
         }
 
-
-        /*
-         * RAM starts as FF.
-         */
-
-        if (
-            this.ram
-        ) {
-
-            this.ram.fill(
-                0xFF
-            );
-
-        }
-
-    }
-
-
-    /*
-     * ========================================================
-     * RESET
-     * ========================================================
-     */
-
-    resetMapper() {
-
-        this.romBank =
-            1;
-
-        this.ramBank =
-            0;
-
-        this.ramEnabled =
-            false;
-
-        this.mode =
-            0;
-
-
-        this.mbc1Low5 =
-            1;
-
-        this.mbc1High2 =
-            0;
-
-
-        this.mbc5Low8 =
-            1;
-
-        this.mbc5High1 =
-            0;
-
     }
 
 
@@ -571,11 +1035,9 @@ export default class Cartridge {
      * READ
      * ========================================================
      *
-     * CPU address:
+     * Memory bus może wywoływać:
      *
-     * 0000-3FFF = fixed ROM bank
-     * 4000-7FFF = switchable ROM bank
-     * A000-BFFF = cartridge RAM
+     * cartridge.read(address)
      *
      * ========================================================
      */
@@ -589,74 +1051,613 @@ export default class Cartridge {
 
 
         /*
-         * Fixed ROM area.
+         * ROM nie może być null.
          */
 
         if (
-            address < 0x4000
+            !this.rom
         ) {
 
-            let bank =
-                this.getFixedROMBank();
-
-
-            const offset =
-                bank *
-                0x4000 +
-                address;
-
-
-            return this.rom[offset]
-                ?? 0xFF;
+            return 0xFF;
 
         }
 
 
         /*
-         * Switchable ROM area.
+         * 0000-7FFF
+         *
+         * ROM
          */
 
         if (
-            address < 0x8000
+            address <=
+            0x7FFF
         ) {
 
-            const bank =
-                this.getSwitchableROMBank();
-
-
-            const offset =
-                bank *
-                0x4000 +
-                (
-                    address -
-                    0x4000
-                );
-
-
-            return this.rom[offset]
-                ?? 0xFF;
+            return this.readROM(
+                address
+            );
 
         }
 
 
         /*
-         * External RAM.
+         * A000-BFFF
+         *
+         * Cartridge RAM
          */
 
         if (
             address >= 0xA000 &&
-            address < 0xC000
+            address <= 0xBFFF
         ) {
 
             return this.readRAM(
-                address -
-                0xA000
+                address
             );
 
         }
 
 
         return 0xFF;
+
+    }
+
+
+    /*
+     * ========================================================
+     * READ ROM
+     * ========================================================
+     */
+
+    readROM(
+        address
+    ) {
+
+        if (
+            !this.rom ||
+            this.rom.length === 0
+        ) {
+
+            return 0xFF;
+
+        }
+
+
+        let bank =
+            0;
+
+
+        let offset =
+            0;
+
+
+        /*
+         * ----------------------------------------------------
+         * ROM ONLY
+         * ----------------------------------------------------
+         */
+
+        if (
+            this.mbc ===
+            "ROM"
+        ) {
+
+            if (
+                address < 0x4000
+            ) {
+
+                offset =
+                    address;
+
+            } else {
+
+                /*
+                 * Przy małych ROM-ach bank 1 może nie istnieć.
+                 */
+
+                bank =
+                    1 % Math.max(
+                        1,
+                        this.romBanks
+                    );
+
+                offset =
+                    (
+                        bank *
+                        0x4000
+                    ) +
+                    (
+                        address -
+                        0x4000
+                    );
+
+            }
+
+        }
+
+
+        /*
+         * ----------------------------------------------------
+         * MBC1
+         * ----------------------------------------------------
+         */
+
+        else if (
+            this.mbc ===
+            "MBC1"
+        ) {
+
+            if (
+                address < 0x4000
+            ) {
+
+                if (
+                    this.mbc1Mode ===
+                    0
+                ) {
+
+                    bank =
+                        0;
+
+                } else {
+
+                    bank =
+                        (
+                            this.mbc1RamBank <<
+                            5
+                        );
+
+                }
+
+                bank %=
+                    Math.max(
+                        1,
+                        this.romBanks
+                    );
+
+
+                offset =
+                    (
+                        bank *
+                        0x4000
+                    ) +
+                    address;
+
+            } else {
+
+                bank =
+                    (
+                        this.mbc1RomBank &
+                        0x1F
+                    ) ||
+                    1;
+
+
+                bank |=
+                    (
+                        this.mbc1RamBank <<
+                        5
+                    );
+
+
+                bank %=
+                    Math.max(
+                        1,
+                        this.romBanks
+                    );
+
+
+                offset =
+                    (
+                        bank *
+                        0x4000
+                    ) +
+                    (
+                        address -
+                        0x4000
+                    );
+
+            }
+
+        }
+
+
+        /*
+         * ----------------------------------------------------
+         * MBC2
+         * ----------------------------------------------------
+         */
+
+        else if (
+            this.mbc ===
+            "MBC2"
+        ) {
+
+            if (
+                address < 0x4000
+            ) {
+
+                offset =
+                    address;
+
+            } else {
+
+                bank =
+                    this.mbc2RomBank &
+                    0x0F;
+
+
+                if (
+                    bank ===
+                    0
+                ) {
+
+                    bank =
+                        1;
+
+                }
+
+
+                bank %=
+                    Math.max(
+                        1,
+                        this.romBanks
+                    );
+
+
+                offset =
+                    (
+                        bank *
+                        0x4000
+                    ) +
+                    (
+                        address -
+                        0x4000
+                    );
+
+            }
+
+        }
+
+
+        /*
+         * ----------------------------------------------------
+         * MBC3
+         * ----------------------------------------------------
+         */
+
+        else if (
+            this.mbc ===
+            "MBC3"
+        ) {
+
+            if (
+                address < 0x4000
+            ) {
+
+                offset =
+                    address;
+
+            } else {
+
+                bank =
+                    this.mbc3RomBank &
+                    0x7F;
+
+
+                if (
+                    bank ===
+                    0
+                ) {
+
+                    bank =
+                        1;
+
+                }
+
+
+                bank %=
+                    Math.max(
+                        1,
+                        this.romBanks
+                    );
+
+
+                offset =
+                    (
+                        bank *
+                        0x4000
+                    ) +
+                    (
+                        address -
+                        0x4000
+                    );
+
+            }
+
+        }
+
+
+        /*
+         * ----------------------------------------------------
+         * MBC5
+         * ----------------------------------------------------
+         */
+
+        else if (
+            this.mbc ===
+            "MBC5"
+        ) {
+
+            if (
+                address < 0x4000
+            ) {
+
+                /*
+                 * Bank 0.
+                 */
+
+                bank =
+                    0;
+
+                offset =
+                    address;
+
+            } else {
+
+                /*
+                 * MBC5 has 9-bit ROM bank.
+                 */
+
+                bank =
+                    (
+                        this.mbc5RomBank &
+                        0xFF
+                    ) |
+                    (
+                        (
+                            this.mbc5RomHigh &
+                            0x01
+                        ) << 8
+                    );
+
+
+                bank %=
+                    Math.max(
+                        1,
+                        this.romBanks
+                    );
+
+
+                offset =
+                    (
+                        bank *
+                        0x4000
+                    ) +
+                    (
+                        address -
+                        0x4000
+                    );
+
+            }
+
+        }
+
+
+        /*
+         * ----------------------------------------------------
+         * SAFE ROM READ
+         * ----------------------------------------------------
+         *
+         * To jest ważne dla Twojego wcześniejszego błędu.
+         *
+         * Nigdy nie zwracamy:
+         *
+         * this.rom[offset]
+         *
+         * bez sprawdzenia offsetu.
+         *
+         * ----------------------------------------------------
+         */
+
+        if (
+            offset < 0 ||
+            offset >=
+            this.rom.length
+        ) {
+
+            return 0xFF;
+
+        }
+
+
+        return (
+            this.rom[offset] ??
+            0xFF
+        ) & 0xFF;
+
+    }
+
+
+    /*
+     * ========================================================
+     * READ RAM
+     * ========================================================
+     */
+
+    readRAM(
+        address
+    ) {
+
+        /*
+         * RAM disabled.
+         */
+
+        if (
+            !this.ramEnabled
+        ) {
+
+            /*
+             * MBC2 behaves slightly differently,
+             * but FF is safe for generic access.
+             */
+
+            return 0xFF;
+
+        }
+
+
+        /*
+         * MBC3 RTC registers.
+         */
+
+        if (
+            this.mbc ===
+            "MBC3" &&
+            this.rtcSelected
+        ) {
+
+            return this.readRTC(
+                this.mbc3RamBank
+            );
+
+        }
+
+
+        /*
+         * No RAM.
+         */
+
+        if (
+            !this.ram ||
+            this.ram.length === 0
+        ) {
+
+            return 0xFF;
+
+        }
+
+
+        let offset =
+            address -
+            0xA000;
+
+
+        /*
+         * MBC1 RAM banking.
+         */
+
+        if (
+            this.mbc ===
+            "MBC1"
+        ) {
+
+            let bank =
+                0;
+
+
+            if (
+                this.mbc1Mode !==
+                0
+            ) {
+
+                bank =
+                    this.mbc1RamBank &
+                    0x03;
+
+            }
+
+
+            offset +=
+                bank *
+                0x2000;
+
+        }
+
+
+        /*
+         * MBC2 internal RAM.
+         */
+
+        else if (
+            this.mbc ===
+            "MBC2"
+        ) {
+
+            offset &=
+                0x01FF;
+
+
+            /*
+             * MBC2 RAM stores only lower nibble.
+             */
+
+            return (
+                this.ram[offset] |
+                0xF0
+            ) & 0xFF;
+
+        }
+
+
+        /*
+         * MBC3 RAM.
+         */
+
+        else if (
+            this.mbc ===
+            "MBC3"
+        ) {
+
+            const bank =
+                this.mbc3RamBank &
+                0x03;
+
+
+            offset +=
+                bank *
+                0x2000;
+
+        }
+
+
+        /*
+         * MBC5 RAM.
+         */
+
+        else if (
+            this.mbc ===
+            "MBC5"
+        ) {
+
+            const bank =
+                this.mbc5RamBank &
+                0x0F;
+
+
+            offset +=
+                bank *
+                0x2000;
+
+        }
+
+
+        if (
+            offset < 0 ||
+            offset >=
+            this.ram.length
+        ) {
+
+            return 0xFF;
+
+        }
+
+
+        return (
+            this.ram[offset] ??
+            0xFF
+        ) & 0xFF;
 
     }
 
@@ -679,15 +1680,12 @@ export default class Cartridge {
             0xFF;
 
 
-        /*
-         * Cartridge control area.
-         */
-
         if (
-            address < 0x8000
+            address <=
+            0x7FFF
         ) {
 
-            this.writeMapper(
+            this.writeControl(
                 address,
                 value
             );
@@ -697,18 +1695,13 @@ export default class Cartridge {
         }
 
 
-        /*
-         * External RAM.
-         */
-
         if (
             address >= 0xA000 &&
-            address < 0xC000
+            address <= 0xBFFF
         ) {
 
             this.writeRAM(
-                address -
-                0xA000,
+                address,
                 value
             );
 
@@ -719,602 +1712,427 @@ export default class Cartridge {
 
     /*
      * ========================================================
-     * MAPPER WRITE
+     * WRITE CONTROL
      * ========================================================
      */
 
-    writeMapper(
+    writeControl(
         address,
         value
     ) {
 
-        switch (
-            this.mbc
-        ) {
-
-            case "MBC1":
-
-                this.writeMBC1(
-                    address,
-                    value
-                );
-
-                break;
-
-
-            case "MBC2":
-
-                this.writeMBC2(
-                    address,
-                    value
-                );
-
-                break;
-
-
-            case "MBC3":
-
-                this.writeMBC3(
-                    address,
-                    value
-                );
-
-                break;
-
-
-            case "MBC5":
-
-                this.writeMBC5(
-                    address,
-                    value
-                );
-
-                break;
-
-
-            case "ROM":
-
-                /*
-                 * ROM-only cartridges ignore writes.
-                 */
-
-                break;
-
-        }
-
-    }
-
-
-    /*
-     * ========================================================
-     * MBC1
-     * ========================================================
-     */
-
-    writeMBC1(
-        address,
-        value
-    ) {
+        /*
+         * ROM ONLY.
+         */
 
         if (
-            address < 0x2000
+            this.mbc ===
+            "ROM"
         ) {
-
-            this.ramEnabled =
-                (
-                    value & 0x0F
-                ) === 0x0A;
 
             return;
 
         }
 
 
-        if (
-            address < 0x4000
-        ) {
-
-            this.mbc1Low5 =
-                value & 0x1F;
-
-
-            if (
-                this.mbc1Low5 === 0
-            ) {
-
-                this.mbc1Low5 =
-                    1;
-
-            }
-
-
-            return;
-
-        }
-
+        /*
+         * MBC1
+         */
 
         if (
-            address < 0x6000
-        ) {
-
-            this.mbc1High2 =
-                value & 0x03;
-
-            return;
-
-        }
-
-
-        this.mode =
-            value & 1;
-
-    }
-
-
-    /*
-     * ========================================================
-     * MBC2
-     * ========================================================
-     */
-
-    writeMBC2(
-        address,
-        value
-    ) {
-
-        if (
-            address < 0x4000
+            this.mbc ===
+            "MBC1"
         ) {
 
             /*
-             * A8 determines operation.
+             * 0000-1FFF
+             *
+             * RAM enable.
              */
 
             if (
-                (
-                    address &
-                    0x0100
-                ) === 0
+                address <=
+                0x1FFF
             ) {
 
                 this.ramEnabled =
                     (
-                        value & 0x0F
-                    ) === 0x0A;
+                        value &
+                        0x0F
+                    ) ===
+                    0x0A;
 
-            } else {
+                return;
 
-                let bank =
-                    value & 0x0F;
+            }
+
+
+            /*
+             * 2000-3FFF
+             *
+             * ROM bank low 5 bits.
+             */
+
+            if (
+                address <=
+                0x3FFF
+            ) {
+
+                this.mbc1RomBank =
+                    value &
+                    0x1F;
 
 
                 if (
-                    bank === 0
+                    this.mbc1RomBank ===
+                    0
                 ) {
 
-                    bank = 1;
+                    this.mbc1RomBank =
+                        1;
 
                 }
 
 
-                this.romBank =
-                    bank;
+                return;
 
             }
 
-        }
-
-    }
-
-
-    /*
-     * ========================================================
-     * MBC3
-     * ========================================================
-     */
-
-    writeMBC3(
-        address,
-        value
-    ) {
-
-        if (
-            address < 0x2000
-        ) {
-
-            this.ramEnabled =
-                (
-                    value & 0x0F
-                ) === 0x0A;
-
-            return;
-
-        }
-
-
-        if (
-            address < 0x4000
-        ) {
-
-            let bank =
-                value & 0x7F;
-
-
-            if (
-                bank === 0
-            ) {
-
-                bank = 1;
-
-            }
-
-
-            this.romBank =
-                bank;
-
-
-            return;
-
-        }
-
-
-        if (
-            address < 0x6000
-        ) {
-
-            this.ramBank =
-                value;
-
-
-            return;
-
-        }
-
-
-        /*
-         * RTC latch.
-         *
-         * Basic implementation.
-         */
-
-        if (
-            address >= 0x6000
-        ) {
 
             /*
-             * 0 -> 1 latches RTC.
+             * 4000-5FFF
+             *
+             * RAM bank / ROM high bits.
              */
 
             if (
-                value === 1
+                address <=
+                0x5FFF
             ) {
 
-                this.updateRTC();
+                value &=
+                    0x03;
+
+
+                this.mbc1RamBank =
+                    value;
+
+                return;
+
+            }
+
+
+            /*
+             * 6000-7FFF
+             *
+             * Banking mode.
+             */
+
+            if (
+                address <=
+                0x7FFF
+            ) {
+
+                this.mbc1Mode =
+                    value &
+                    0x01;
+
+                return;
 
             }
 
         }
 
-    }
-
-
-    /*
-     * ========================================================
-     * MBC5
-     * ========================================================
-     */
-
-    writeMBC5(
-        address,
-        value
-    ) {
 
         /*
-         * RAM enable
+         * MBC2
          */
 
         if (
-            address < 0x2000
+            this.mbc ===
+            "MBC2"
         ) {
 
-            this.ramEnabled =
-                (
-                    value & 0x0F
-                ) === 0x0A;
+            if (
+                address <=
+                0x1FFF
+            ) {
+
+                /*
+                 * A8 must be 0.
+                 */
+
+                if (
+                    (
+                        address &
+                        0x0100
+                    ) ===
+                    0
+                ) {
+
+                    this.ramEnabled =
+                        (
+                            value &
+                            0x0F
+                        ) ===
+                        0x0A;
+
+                }
+
+
+                return;
+
+            }
+
+
+            if (
+                address <=
+                0x3FFF
+            ) {
+
+                /*
+                 * A8 must be 1.
+                 */
+
+                if (
+                    (
+                        address &
+                        0x0100
+                    ) !==
+                    0
+                ) {
+
+                    this.mbc2RomBank =
+                        value &
+                        0x0F;
+
+
+                    if (
+                        this.mbc2RomBank ===
+                        0
+                    ) {
+
+                        this.mbc2RomBank =
+                            1;
+
+                    }
+
+                }
+
+
+                return;
+
+            }
+
+        }
+
+
+        /*
+         * MBC3
+         */
+
+        if (
+            this.mbc ===
+            "MBC3"
+        ) {
+
+            if (
+                address <=
+                0x1FFF
+            ) {
+
+                this.ramEnabled =
+                    (
+                        value &
+                        0x0F
+                    ) ===
+                    0x0A;
+
+                return;
+
+            }
+
+
+            if (
+                address <=
+                0x3FFF
+            ) {
+
+                this.mbc3RomBank =
+                    value &
+                    0x7F;
+
+
+                if (
+                    this.mbc3RomBank ===
+                    0
+                ) {
+
+                    this.mbc3RomBank =
+                        1;
+
+                }
+
+
+                return;
+
+            }
+
+
+            if (
+                address <=
+                0x5FFF
+            ) {
+
+                this.mbc3RamBank =
+                    value;
+
+
+                this.rtcSelected =
+                    value >= 0x08 &&
+                    value <= 0x0C;
+
+
+                return;
+
+            }
+
+
+            if (
+                address <=
+                0x7FFF
+            ) {
+
+                /*
+                 * RTC latch command.
+                 *
+                 * Minimal implementation.
+                 */
+
+                return;
+
+            }
+
+        }
+
+
+        /*
+         * MBC5
+         */
+
+        if (
+            this.mbc ===
+            "MBC5"
+        ) {
+
+            /*
+             * 0000-1FFF
+             *
+             * RAM enable.
+             */
+
+            if (
+                address <=
+                0x1FFF
+            ) {
+
+                this.ramEnabled =
+                    (
+                        value &
+                        0x0F
+                    ) ===
+                    0x0A;
+
+                return;
+
+            }
+
+
+            /*
+             * 2000-2FFF
+             *
+             * ROM bank low 8 bits.
+             */
+
+            if (
+                address <=
+                0x2FFF
+            ) {
+
+                this.mbc5RomBank =
+                    value &
+                    0xFF;
+
+                return;
+
+            }
+
+
+            /*
+             * 3000-3FFF
+             *
+             * ROM bank bit 8.
+             */
+
+            if (
+                address <=
+                0x3FFF
+            ) {
+
+                this.mbc5RomHigh =
+                    value &
+                    0x01;
+
+                return;
+
+            }
+
+
+            /*
+             * 4000-5FFF
+             *
+             * RAM bank.
+             */
+
+            if (
+                address <=
+                0x5FFF
+            ) {
+
+                this.mbc5RamBank =
+                    value &
+                    0x0F;
+
+                return;
+
+            }
+
+
+            /*
+             * 6000-7FFF.
+             *
+             * Rumble/other control.
+             */
 
             return;
 
         }
 
-
-        /*
-         * ROM bank low 8 bits
-         */
-
-        if (
-            address < 0x3000
-        ) {
-
-            this.mbc5Low8 =
-                value;
-
-            this.updateMBC5Bank();
-
-            return;
-
-        }
-
-
-        /*
-         * ROM bank bit 8
-         */
-
-        if (
-            address < 0x4000
-        ) {
-
-            this.mbc5High1 =
-                value & 1;
-
-            this.updateMBC5Bank();
-
-            return;
-
-        }
-
-
-        /*
-         * RAM bank
-         */
-
-        if (
-            address < 0x6000
-        ) {
-
-            this.ramBank =
-                value & 0x0F;
-
-        }
-
     }
 
 
     /*
      * ========================================================
-     * MBC5 BANK
-     * ========================================================
-     */
-
-    updateMBC5Bank() {
-
-        this.romBank =
-            (
-                this.mbc5High1 << 8
-            ) |
-            this.mbc5Low8;
-
-
-        this.romBank %=
-            Math.max(
-                1,
-                this.romBanks
-            );
-
-    }
-
-
-    /*
-     * ========================================================
-     * FIXED ROM BANK
-     * ========================================================
-     */
-
-    getFixedROMBank() {
-
-        if (
-            this.mbc === "MBC1" &&
-            this.mode === 1
-        ) {
-
-            return (
-                this.mbc1High2 << 5
-            ) %
-            this.romBanks;
-
-        }
-
-
-        return 0;
-
-    }
-
-
-    /*
-     * ========================================================
-     * SWITCHABLE ROM BANK
-     * ========================================================
-     */
-
-    getSwitchableROMBank() {
-
-        let bank =
-            this.romBank;
-
-
-        if (
-            this.mbc === "MBC1"
-        ) {
-
-            bank =
-                this.mbc1Low5;
-
-
-            if (
-                this.mode === 0
-            ) {
-
-                bank |=
-                    this.mbc1High2 << 5;
-
-            }
-
-
-            bank %=
-                this.romBanks;
-
-
-            if (
-                bank === 0
-            ) {
-
-                bank = 1;
-
-            }
-
-        }
-
-
-        if (
-            this.mbc === "MBC2"
-        ) {
-
-            bank %=
-                16;
-
-            if (
-                bank === 0
-            ) {
-
-                bank = 1;
-
-            }
-
-        }
-
-
-        if (
-            this.mbc === "MBC3"
-        ) {
-
-            bank %=
-                this.romBanks;
-
-            if (
-                bank === 0
-            ) {
-
-                bank = 1;
-
-            }
-
-        }
-
-
-        if (
-            this.mbc === "MBC5"
-        ) {
-
-            bank %=
-                this.romBanks;
-
-        }
-
-
-        return bank;
-
-    }
-
-
-    /*
-     * ========================================================
-     * RAM READ
-     * ========================================================
-     */
-
-    readRAM(
-        offset
-    ) {
-
-        if (
-            !this.ram ||
-            !this.ramEnabled
-        ) {
-
-            return 0xFF;
-
-        }
-
-
-        /*
-         * MBC3 RTC registers.
-         */
-
-        if (
-            this.mbc === "MBC3" &&
-            this.ramBank >= 0x08 &&
-            this.ramBank <= 0x0C
-        ) {
-
-            return this.readRTC(
-                this.ramBank
-            );
-
-        }
-
-
-        if (
-            this.mbc === "MBC2"
-        ) {
-
-            const index =
-                offset & 0x01FF;
-
-
-            return (
-                this.ram[index] |
-                0xF0
-            );
-
-        }
-
-
-        const bank =
-            this.getRAMBank();
-
-
-        const index =
-            bank *
-            0x2000 +
-            offset;
-
-
-        if (
-            index >= this.ram.length
-        ) {
-
-            return 0xFF;
-
-        }
-
-
-        return this.ram[index];
-
-    }
-
-
-    /*
-     * ========================================================
-     * RAM WRITE
+     * WRITE RAM
      * ========================================================
      */
 
     writeRAM(
-        offset,
+        address,
         value
     ) {
 
         if (
-            !this.ram ||
             !this.ramEnabled
         ) {
 
@@ -1328,13 +2146,13 @@ export default class Cartridge {
          */
 
         if (
-            this.mbc === "MBC3" &&
-            this.ramBank >= 0x08 &&
-            this.ramBank <= 0x0C
+            this.mbc ===
+            "MBC3" &&
+            this.rtcSelected
         ) {
 
             this.writeRTC(
-                this.ramBank,
+                this.mbc3RamBank,
                 value
             );
 
@@ -1344,35 +2162,12 @@ export default class Cartridge {
 
 
         /*
-         * MBC2 = only lower 4 bits.
+         * No RAM.
          */
 
         if (
-            this.mbc === "MBC2"
-        ) {
-
-            this.ram[
-                offset & 0x01FF
-            ] =
-                value & 0x0F;
-
-            return;
-
-        }
-
-
-        const bank =
-            this.getRAMBank();
-
-
-        const index =
-            bank *
-            0x2000 +
-            offset;
-
-
-        if (
-            index >= this.ram.length
+            !this.ram ||
+            this.ram.length === 0
         ) {
 
             return;
@@ -1380,247 +2175,200 @@ export default class Cartridge {
         }
 
 
-        this.ram[index] =
-            value;
+        let offset =
+            address -
+            0xA000;
 
-    }
 
-
-    /*
-     * ========================================================
-     * RAM BANK
-     * ========================================================
-     */
-
-    getRAMBank() {
+        /*
+         * MBC1
+         */
 
         if (
-            this.mbc === "MBC1"
+            this.mbc ===
+            "MBC1"
         ) {
+
+            let bank =
+                0;
+
 
             if (
-                this.mode === 1
+                this.mbc1Mode !==
+                0
             ) {
 
-                return (
-                    this.mbc1High2
-                ) %
-                Math.max(
-                    1,
-                    this.ramBanks
-                );
+                bank =
+                    this.mbc1RamBank &
+                    0x03;
 
             }
 
 
-            return 0;
+            offset +=
+                bank *
+                0x2000;
+
+        }
+
+
+        /*
+         * MBC2
+         */
+
+        else if (
+            this.mbc ===
+            "MBC2"
+        ) {
+
+            offset &=
+                0x01FF;
+
+
+            /*
+             * Only lower nibble exists.
+             */
+
+            this.ram[offset] =
+                value &
+                0x0F;
+
+            return;
+
+        }
+
+
+        /*
+         * MBC3
+         */
+
+        else if (
+            this.mbc ===
+            "MBC3"
+        ) {
+
+            const bank =
+                this.mbc3RamBank &
+                0x03;
+
+
+            offset +=
+                bank *
+                0x2000;
+
+        }
+
+
+        /*
+         * MBC5
+         */
+
+        else if (
+            this.mbc ===
+            "MBC5"
+        ) {
+
+            const bank =
+                this.mbc5RamBank &
+                0x0F;
+
+
+            offset +=
+                bank *
+                0x2000;
 
         }
 
 
         if (
-            this.mbc === "MBC2"
+            offset < 0 ||
+            offset >=
+            this.ram.length
         ) {
 
-            return 0;
+            return;
 
         }
 
 
-        if (
-            this.mbc === "MBC3"
-        ) {
-
-            return (
-                this.ramBank
-            ) %
-            Math.max(
-                1,
-                this.ramBanks
-            );
-
-        }
-
-
-        if (
-            this.mbc === "MBC5"
-        ) {
-
-            return (
-                this.ramBank
-            ) %
-            Math.max(
-                1,
-                this.ramBanks
-            );
-
-        }
-
-
-        return 0;
+        this.ram[offset] =
+            value & 0xFF;
 
     }
 
 
     /*
      * ========================================================
-     * RTC
+     * READ RTC
      * ========================================================
      */
-
-    updateRTC() {
-
-        /*
-         * Minimal RTC implementation.
-         *
-         * Full RTC persistence can be added later.
-         */
-
-        const now =
-            new Date();
-
-
-        this.rtc.seconds =
-            now.getUTCSeconds();
-
-
-        this.rtc.minutes =
-            now.getUTCMinutes();
-
-
-        this.rtc.hours =
-            now.getUTCHours();
-
-
-        this.rtc.days =
-            Math.floor(
-                Date.now() /
-                86400000
-            );
-
-    }
-
 
     readRTC(
         register
     ) {
 
-        switch (
-            register
+        const index =
+            register -
+            0x08;
+
+
+        if (
+            index < 0 ||
+            index >= 5
         ) {
 
-            case 0x08:
-                return this.rtc.seconds;
-
-            case 0x09:
-                return this.rtc.minutes;
-
-            case 0x0A:
-                return this.rtc.hours;
-
-            case 0x0B:
-                return this.rtc.days & 0xFF;
-
-            case 0x0C:
-
-                return (
-                    (
-                        this.rtc.days >>
-                        8
-                    ) & 1
-                ) |
-                (
-                    this.rtc.halt
-                        ? 0x40
-                        : 0
-                ) |
-                (
-                    this.rtc.carry
-                        ? 0x80
-                        : 0
-                );
+            return 0xFF;
 
         }
 
 
-        return 0xFF;
+        return (
+            this.rtc[index] ??
+            0
+        ) & 0xFF;
 
     }
 
+
+    /*
+     * ========================================================
+     * WRITE RTC
+     * ========================================================
+     */
 
     writeRTC(
         register,
         value
     ) {
 
-        switch (
-            register
+        const index =
+            register -
+            0x08;
+
+
+        if (
+            index < 0 ||
+            index >= 5
         ) {
 
-            case 0x08:
-                this.rtc.seconds =
-                    value % 60;
-                break;
-
-            case 0x09:
-                this.rtc.minutes =
-                    value % 60;
-                break;
-
-            case 0x0A:
-                this.rtc.hours =
-                    value % 24;
-                break;
-
-            case 0x0B:
-
-                this.rtc.days =
-                    (
-                        this.rtc.days &
-                        0x100
-                    ) |
-                    value;
-
-                break;
-
-            case 0x0C:
-
-                this.rtc.days =
-                    (
-                        this.rtc.days &
-                        0xFF
-                    ) |
-                    (
-                        (value & 1)
-                        << 8
-                    );
-
-
-                this.rtc.halt =
-                    Boolean(
-                        value & 0x40
-                    );
-
-
-                this.rtc.carry =
-                    Boolean(
-                        value & 0x80
-                    );
-
-                break;
+            return;
 
         }
+
+
+        this.rtc[index] =
+            value & 0xFF;
 
     }
 
 
     /*
      * ========================================================
-     * BATTERY SAVE
+     * SAVE RAM
      * ========================================================
      */
 
-    exportRAM() {
+    getRAM() {
 
         if (
             !this.ram
@@ -1638,39 +2386,316 @@ export default class Cartridge {
     }
 
 
-    importRAM(
+    /*
+     * ========================================================
+     * LOAD RAM
+     * ========================================================
+     */
+
+    setRAM(
         data
     ) {
 
         if (
-            !this.ram ||
             !data
         ) {
 
-            return;
+            return false;
 
         }
 
 
-        const source =
-            data instanceof Uint8Array
-                ? data
-                : new Uint8Array(data);
+        if (
+            data instanceof ArrayBuffer
+        ) {
+
+            data =
+                new Uint8Array(
+                    data
+                );
+
+        }
+
+
+        if (
+            !ArrayBuffer.isView(data)
+        ) {
+
+            return false;
+
+        }
+
+
+        /*
+         * Jeżeli cartridge nie deklaruje RAM,
+         * nie tworzymy go przypadkowo.
+         */
+
+        if (
+            this.ramSize <= 0
+        ) {
+
+            return false;
+
+        }
+
+
+        if (
+            !this.ram
+        ) {
+
+            this.ram =
+                new Uint8Array(
+                    this.ramSize
+                );
+
+        }
+
+
+        this.ram.fill(
+            0
+        );
 
 
         this.ram.set(
-            source.subarray(
+            data.subarray(
                 0,
                 this.ram.length
             )
         );
+
+
+        return true;
 
     }
 
 
     /*
      * ========================================================
-     * INFORMATION
+     * BATTERY STATE
+     * ========================================================
+     */
+
+    getSaveState() {
+
+        return {
+
+            ram:
+                this.getRAM(),
+
+            rtc:
+                new Uint8Array(
+                    this.rtc
+                ),
+
+            ramEnabled:
+                this.ramEnabled,
+
+            mbc1RomBank:
+                this.mbc1RomBank,
+
+            mbc1RamBank:
+                this.mbc1RamBank,
+
+            mbc1Mode:
+                this.mbc1Mode,
+
+            mbc2RomBank:
+                this.mbc2RomBank,
+
+            mbc3RomBank:
+                this.mbc3RomBank,
+
+            mbc3RamBank:
+                this.mbc3RamBank,
+
+            mbc5RomBank:
+                this.mbc5RomBank,
+
+            mbc5RomHigh:
+                this.mbc5RomHigh,
+
+            mbc5RamBank:
+                this.mbc5RamBank
+
+        };
+
+    }
+
+
+    /*
+     * ========================================================
+     * LOAD SAVE STATE
+     * ========================================================
+     */
+
+    setSaveState(
+        state
+    ) {
+
+        if (
+            !state
+        ) {
+
+            return false;
+
+        }
+
+
+        if (
+            state.ram
+        ) {
+
+            this.setRAM(
+                state.ram
+            );
+
+        }
+
+
+        if (
+            state.rtc
+        ) {
+
+            this.rtc.set(
+                new Uint8Array(
+                    state.rtc
+                ).subarray(
+                    0,
+                    5
+                )
+            );
+
+        }
+
+
+        if (
+            typeof state.ramEnabled ===
+            "boolean"
+        ) {
+
+            this.ramEnabled =
+                state.ramEnabled;
+
+        }
+
+
+        if (
+            Number.isFinite(
+                state.mbc1RomBank
+            )
+        ) {
+
+            this.mbc1RomBank =
+                state.mbc1RomBank;
+
+        }
+
+
+        if (
+            Number.isFinite(
+                state.mbc1RamBank
+            )
+        ) {
+
+            this.mbc1RamBank =
+                state.mbc1RamBank;
+
+        }
+
+
+        if (
+            Number.isFinite(
+                state.mbc1Mode
+            )
+        ) {
+
+            this.mbc1Mode =
+                state.mbc1Mode;
+
+        }
+
+
+        if (
+            Number.isFinite(
+                state.mbc2RomBank
+            )
+        ) {
+
+            this.mbc2RomBank =
+                state.mbc2RomBank;
+
+        }
+
+
+        if (
+            Number.isFinite(
+                state.mbc3RomBank
+            )
+        ) {
+
+            this.mbc3RomBank =
+                state.mbc3RomBank;
+
+        }
+
+
+        if (
+            Number.isFinite(
+                state.mbc3RamBank
+            )
+        ) {
+
+            this.mbc3RamBank =
+                state.mbc3RamBank;
+
+        }
+
+
+        if (
+            Number.isFinite(
+                state.mbc5RomBank
+            )
+        ) {
+
+            this.mbc5RomBank =
+                state.mbc5RomBank;
+
+        }
+
+
+        if (
+            Number.isFinite(
+                state.mbc5RomHigh
+            )
+        ) {
+
+            this.mbc5RomHigh =
+                state.mbc5RomHigh;
+
+        }
+
+
+        if (
+            Number.isFinite(
+                state.mbc5RamBank
+            )
+        ) {
+
+            this.mbc5RamBank =
+                state.mbc5RamBank;
+
+        }
+
+
+        return true;
+
+    }
+
+
+    /*
+     * ========================================================
+     * INFO
      * ========================================================
      */
 
@@ -1684,33 +2709,240 @@ export default class Cartridge {
             type:
                 this.type,
 
+            typeName:
+                this.typeName,
+
             mbc:
                 this.mbc,
 
             romSize:
-                this.rom.length,
+                this.romSize,
 
             romBanks:
                 this.romBanks,
 
             ramSize:
-                this.ram
-                    ? this.ram.length
-                    : 0,
+                this.ramSize,
 
             ramBanks:
                 this.ramBanks,
 
-            romBank:
-                this.getSwitchableROMBank(),
-
-            ramBank:
-                this.getRAMBank(),
-
             ramEnabled:
-                this.ramEnabled
+                this.ramEnabled,
+
+            battery:
+                this.hasBattery,
+
+            rtc:
+                this.hasRTC,
+
+            gbc:
+                Boolean(
+                    this.isGBC
+                ),
+
+            bankROM:
+                this.getCurrentROMBank(),
+
+            bankRAM:
+                this.getCurrentRAMBank()
 
         };
+
+    }
+
+
+    /*
+     * ========================================================
+     * CURRENT ROM BANK
+     * ========================================================
+     */
+
+    getCurrentROMBank() {
+
+        switch (
+            this.mbc
+        ) {
+
+            case "MBC1":
+
+                return (
+                    this.mbc1RomBank &
+                    0x1F
+                ) |
+                (
+                    (
+                        this.mbc1RamBank &
+                        0x03
+                    ) << 5
+                );
+
+
+            case "MBC2":
+
+                return (
+                    this.mbc2RomBank &
+                    0x0F
+                );
+
+
+            case "MBC3":
+
+                return (
+                    this.mbc3RomBank &
+                    0x7F
+                );
+
+
+            case "MBC5":
+
+                return (
+                    this.mbc5RomBank &
+                    0xFF
+                ) |
+                (
+                    (
+                        this.mbc5RomHigh &
+                        1
+                    ) << 8
+                );
+
+
+            default:
+
+                return 0;
+
+        }
+
+    }
+
+
+    /*
+     * ========================================================
+     * CURRENT RAM BANK
+     * ========================================================
+     */
+
+    getCurrentRAMBank() {
+
+        switch (
+            this.mbc
+        ) {
+
+            case "MBC1":
+
+                return this.mbc1RamBank & 3;
+
+            case "MBC3":
+
+                return this.mbc3RamBank & 3;
+
+            case "MBC5":
+
+                return this.mbc5RamBank & 0x0F;
+
+            default:
+
+                return 0;
+
+        }
+
+    }
+
+
+    /*
+     * ========================================================
+     * HAS ROM
+     * ========================================================
+     */
+
+    hasROM() {
+
+        return Boolean(
+            this.rom &&
+            this.rom.length > 0
+        );
+
+    }
+
+
+    /*
+     * ========================================================
+     * GET ROM
+     * ========================================================
+     */
+
+    getROM() {
+
+        return this.rom;
+
+    }
+
+
+    /*
+     * ========================================================
+     * RESET
+     * ========================================================
+     */
+
+    reset() {
+
+        this.resetMBC();
+
+    }
+
+
+    /*
+     * ========================================================
+     * DEBUG
+     * ========================================================
+     */
+
+    setDebug(
+        value
+    ) {
+
+        this.debug =
+            Boolean(
+                value
+            );
+
+    }
+
+
+    /*
+     * ========================================================
+     * LOG
+     * ========================================================
+     */
+
+    log(
+        message
+    ) {
+
+        if (
+            !this.debug
+        ) {
+
+            /*
+             * Cartridge load information
+             * is still useful for emulator logs.
+             */
+
+            console.log(
+                "[WebBktx] " +
+                message
+            );
+
+            return;
+
+        }
+
+
+        console.log(
+            "[WebBktx] " +
+            message
+        );
 
     }
 
