@@ -1,32 +1,44 @@
 /*
  * ============================================================
- * WebBktx Game Boy — PPU
- * Compatible with current emulator.js + memory.js
+ * WebBktx Game Boy — PPU / LCD Controller
  * ============================================================
  *
- * Game Boy DMG-compatible LCD controller / PPU.
+ * DMG-compatible PPU.
  *
- * Important compatibility API:
+ * API używane przez obecny emulator.js:
  *
- *   lcdEnabled()
- *   connectCanvas()
- *   consumeFrame()
- *   step()
+ *   connectCanvas(canvas)
+ *   step(cycles)
  *   advanceMode()
  *   renderScanline()
- *   readRegister()
- *   writeRegister()
- *   readVRAM()
- *   writeVRAM()
- *   readOAM()
- *   writeOAM()
+ *   consumeFrame()
+ *   lcdEnabled()
+ *
+ * Rejestry:
+ *
+ * FF40 LCDC
+ * FF41 STAT
+ * FF42 SCY
+ * FF43 SCX
+ * FF44 LY
+ * FF45 LYC
+ * FF47 BGP
+ * FF48 OBP0
+ * FF49 OBP1
+ * FF4A WY
+ * FF4B WX
+ *
+ * VRAM: 8000-9FFF
+ * OAM : FE00-FE9F
  *
  * ============================================================
  */
 
 export default class PPU {
 
-    constructor(canvas = null) {
+    constructor(memory = null, canvas = null) {
+
+        this.memory = memory;
 
         /*
          * ----------------------------------------------------
@@ -37,23 +49,12 @@ export default class PPU {
         this.canvas = null;
         this.ctx = null;
 
-        this.connectCanvas(canvas);
-
-
-        /*
-         * ----------------------------------------------------
-         * Screen
-         * ----------------------------------------------------
-         */
-
-        this.WIDTH = 160;
-        this.HEIGHT = 144;
-
         this.imageData = null;
+        this.frameBuffer = null;
 
         this.frameReady = false;
 
-        this.frameCounter = 0;
+        this.connectCanvas(canvas);
 
 
         /*
@@ -62,8 +63,7 @@ export default class PPU {
          * ----------------------------------------------------
          */
 
-        this.vram =
-            new Uint8Array(0x2000);
+        this.vram = new Uint8Array(0x2000);
 
 
         /*
@@ -72,8 +72,7 @@ export default class PPU {
          * ----------------------------------------------------
          */
 
-        this.oam =
-            new Uint8Array(0xA0);
+        this.oam = new Uint8Array(0xA0);
 
 
         /*
@@ -92,7 +91,6 @@ export default class PPU {
         this.lyc = 0x00;
 
         this.bgp = 0xFC;
-
         this.obp0 = 0xFF;
         this.obp1 = 0xFF;
 
@@ -110,96 +108,84 @@ export default class PPU {
 
         this.modeClock = 0;
 
-        this.dot = 0;
+        this.lineCycles = 0;
 
-        this.frameCycles = 0;
+        this.frameCounter = 0;
 
-
-        /*
-         * ----------------------------------------------------
-         * Interrupt state
-         * ----------------------------------------------------
-         */
-
-        this.interruptFlags = 0;
-
-        this.vblankInterrupt = false;
-        this.statInterrupt = false;
+        this.totalCycles = 0;
 
 
         /*
          * ----------------------------------------------------
-         * Internal flags
+         * Frame
          * ----------------------------------------------------
          */
 
-        this.windowLine = 0;
+        this.frameWidth = 160;
+        this.frameHeight = 144;
 
-        this.windowActiveThisLine = false;
-
-        this.statLine = false;
-
-
-        /*
-         * ----------------------------------------------------
-         * Frame buffer
-         * ----------------------------------------------------
-         */
-
-        this.framebuffer =
+        this.frameBuffer =
             new Uint8ClampedArray(
-                this.WIDTH *
-                this.HEIGHT *
+                this.frameWidth *
+                this.frameHeight *
                 4
             );
 
 
         /*
          * ----------------------------------------------------
-         * Initialize framebuffer
+         * Temporary scanline buffers
          * ----------------------------------------------------
          */
 
-        this.clearFrame();
+        this.bgColorLine =
+            new Uint8Array(160);
+
+        this.bgPriorityLine =
+            new Uint8Array(160);
+
+        this.objColorLine =
+            new Uint8Array(160);
+
+        this.objPaletteLine =
+            new Uint8Array(160);
+
+        this.objPriorityLine =
+            new Uint8Array(160);
+
+        this.objPresentLine =
+            new Uint8Array(160);
 
 
         /*
          * ----------------------------------------------------
-         * Initial LCD state
+         * Window
          * ----------------------------------------------------
          */
 
-        this.updateCoincidence();
+        this.windowLine =
+            0;
 
-        this.updateSTATLine();
-
-
-        this.log(
-            "PPU gotowe."
-        );
-
-    }
+        this.windowTriggered =
+            false;
 
 
-    /*
-     * ========================================================
-     * LOG
-     * ========================================================
-     */
+        /*
+         * ----------------------------------------------------
+         * Interrupt callback
+         * ----------------------------------------------------
+         */
 
-    log(message) {
+        this.interruptCallback = null;
 
-        if (
-            typeof console !== "undefined"
-        ) {
 
-            console.log(
-                "[WebBktx PPU] " +
-                message
-            );
+        /*
+         * ----------------------------------------------------
+         * Reset
+         * ----------------------------------------------------
+         */
 
-        }
-
+        this.reset();
     }
 
 
@@ -209,268 +195,70 @@ export default class PPU {
      * ========================================================
      */
 
-    connectCanvas(canvas = null) {
+    connectCanvas(canvas) {
 
         /*
-         * Already connected.
+         * Canvas może nie być przekazany podczas konstrukcji.
          */
 
-        if (
-            this.ctx &&
-            this.canvas
-        ) {
-
-            return true;
-
-        }
-
-
-        /*
-         * No canvas supplied.
-         *
-         * Try common browser lookup methods.
-         */
-
-        let target =
-            canvas;
-
-
-        /*
-         * If an object was supplied but it isn't
-         * an actual canvas, try common wrappers.
-         */
-
-        if (
-            target &&
-            typeof target.getContext !== "function"
-        ) {
-
-            if (
-                target.canvas &&
-                typeof target.canvas.getContext === "function"
-            ) {
-
-                target =
-                    target.canvas;
-
-            } else if (
-                target[0] &&
-                typeof target[0].getContext === "function"
-            ) {
-
-                target =
-                    target[0];
-
-            } else {
-
-                target =
-                    null;
-
-            }
-
-        }
-
-
-        /*
-         * If a string was supplied, treat it as
-         * an element ID.
-         */
-
-        if (
-            typeof canvas === "string"
-        ) {
-
-            if (
-                typeof document !== "undefined"
-            ) {
-
-                const element =
-                    document.getElementById(
-                        canvas
-                    );
-
-                if (
-                    element &&
-                    typeof element.getContext === "function"
-                ) {
-
-                    target =
-                        element;
-
-                }
-
-            }
-
-        }
-
-
-        /*
-         * Automatic canvas discovery.
-         */
-
-        if (
-            !target &&
-            typeof document !== "undefined"
-        ) {
-
-            target =
-                document.querySelector(
-                    "canvas"
-                );
-
-        }
-
-
-        /*
-         * Nothing available.
-         *
-         * PPU still works headless.
-         */
-
-        if (
-            !target ||
-            typeof target.getContext !== "function"
-        ) {
-
-            this.canvas = null;
-            this.ctx = null;
-
-            this.log(
-                "Brak poprawnego canvas — tryb headless."
-            );
-
+        if (!canvas) {
             return false;
-
         }
 
+        /*
+         * Nie zakładamy, że obiekt posiada getContext.
+         */
+
+        if (
+            typeof canvas.getContext !== "function"
+        ) {
+            return false;
+        }
 
         this.canvas =
-            target;
+            canvas;
 
+        this.ctx =
+            canvas.getContext("2d", {
+                alpha: false
+            });
 
-        try {
-
-            this.ctx =
-                target.getContext(
-                    "2d",
-                    {
-                        alpha: false
-                    }
-                );
-
-        } catch (
-            error
-        ) {
-
-            /*
-             * Some browsers don't accept the
-             * options object.
-             */
-
-            this.ctx =
-                target.getContext(
-                    "2d"
-                );
-
-        }
-
-
-        if (
-            !this.ctx
-        ) {
-
-            this.canvas = null;
-
-            this.log(
-                "Nie udało się uzyskać kontekstu 2D."
-            );
-
+        if (!this.ctx) {
             return false;
-
         }
 
+        this.canvas.width =
+            160;
 
-        /*
-         * Native resolution.
-         */
-
-        target.width =
-            this.WIDTH;
-
-        target.height =
-            this.HEIGHT;
+        this.canvas.height =
+            144;
 
 
         /*
-         * Disable smoothing for pixel art.
+         * Skalowanie wykonywane przez CSS,
+         * ale wyłączamy interpolację.
          */
 
         this.ctx.imageSmoothingEnabled =
             false;
 
 
-        /*
-         * Create ImageData.
-         */
-
         try {
 
             this.imageData =
                 this.ctx.createImageData(
-                    this.WIDTH,
-                    this.HEIGHT
+                    160,
+                    144
                 );
 
-        } catch (
-            error
-        ) {
+        } catch (e) {
 
-            this.imageData =
-                null;
+            this.imageData = null;
 
         }
 
 
-        this.log(
-            "Canvas podłączony."
-        );
-
-
         return true;
-
-    }
-
-
-    /*
-     * ========================================================
-     * LCD ENABLE
-     * ========================================================
-     *
-     * memory.js expects this to be a function.
-     *
-     * ========================================================
-     */
-
-    lcdEnabled() {
-
-        return (
-            (
-                this.lcdc &
-                0x80
-            ) !== 0
-        );
-
-    }
-
-
-    /*
-     * Compatibility alias.
-     */
-
-    isLCDEnabled() {
-
-        return this.lcdEnabled();
-
     }
 
 
@@ -504,70 +292,119 @@ export default class PPU {
 
         this.wx = 0;
 
+
         this.mode = 2;
 
         this.modeClock = 0;
 
-        this.dot = 0;
-
-        this.frameCycles = 0;
-
-        this.windowLine = 0;
-
-        this.windowActiveThisLine = false;
-
-        this.statLine = false;
-
-        this.frameReady = false;
+        this.lineCycles = 0;
 
         this.frameCounter = 0;
 
-        this.interruptFlags = 0;
+        this.totalCycles = 0;
 
-        this.vblankInterrupt = false;
+        this.windowLine = 0;
 
-        this.statInterrupt = false;
+        this.windowTriggered = false;
+
+        this.frameReady = false;
+
+
+        this.vram.fill(0);
+
+        this.oam.fill(0);
+
 
         this.clearFrame();
 
-        this.updateCoincidence();
 
-        this.updateSTATLine();
+        this.updateSTAT();
 
     }
 
 
     /*
      * ========================================================
-     * CLEAR FRAME
+     * INTERRUPTS
      * ========================================================
      */
 
-    clearFrame() {
+    setInterruptCallback(callback) {
 
-        const buffer =
-            this.framebuffer;
+        this.interruptCallback =
+            typeof callback === "function"
+                ? callback
+                : null;
+    }
 
 
-        for (
-            let i = 0;
-            i < buffer.length;
-            i += 4
+    requestInterrupt(bit) {
+
+        /*
+         * VBlank = 0
+         * STAT   = 1
+         */
+
+        if (
+            this.interruptCallback
         ) {
 
-            buffer[i] = 255;
-            buffer[i + 1] = 255;
-            buffer[i + 2] = 255;
-            buffer[i + 3] = 255;
+            this.interruptCallback(
+                bit
+            );
 
+            return;
         }
 
+
+        if (
+            this.memory &&
+            typeof this.memory.requestInterrupt === "function"
+        ) {
+
+            this.memory.requestInterrupt(
+                bit
+            );
+
+            return;
+        }
+
+
+        if (
+            this.memory &&
+            typeof this.memory.setInterruptFlag === "function"
+        ) {
+
+            this.memory.setInterruptFlag(
+                bit
+            );
+        }
     }
 
 
     /*
      * ========================================================
-     * REGISTER READ
+     * LCDC
+     * ========================================================
+     */
+
+    lcdEnabled() {
+
+        return Boolean(
+            this.lcdc & 0x80
+        );
+    }
+
+
+    isLCDEnabled() {
+
+        return this.lcdEnabled();
+    }
+
+
+    /*
+     * ========================================================
+     * REGISTERS
      * ========================================================
      */
 
@@ -618,101 +455,38 @@ export default class PPU {
 
             default:
                 return 0xFF;
-
         }
-
     }
 
 
-    /*
-     * ========================================================
-     * REGISTER WRITE
-     * ========================================================
-     *
-     * IMPORTANT:
-     * This function NEVER writes back through memory.writeByte().
-     * That prevents the previous recursion:
-     *
-     * PPU -> memory -> PPU -> memory -> ...
-     *
-     * ========================================================
-     */
+    readIO(address) {
 
-    writeRegister(
-        address,
-        value
-    ) {
-
-        address &= 0xFF;
-        value &= 0xFF;
+        return this.readRegister(address);
+    }
 
 
-        switch (
-            address
-        ) {
+    writeRegister(address, value) {
 
-            /*
-             * LCDC
-             */
+        address &=
+            0xFF;
 
-            case 0x40: {
-
-                const old =
-                    this.lcdc;
-
-                this.lcdc =
-                    value;
+        value &=
+            0xFF;
 
 
-                /*
-                 * LCD was disabled.
-                 */
+        switch (address) {
 
-                if (
-                    (
-                        old & 0x80
-                    ) &&
-                    !(
-                        value & 0x80
-                    )
-                ) {
+            case 0x40:
 
-                    this.disableLCD();
-
-                }
-
-
-                /*
-                 * LCD was enabled.
-                 */
-
-                if (
-                    !(
-                        old & 0x80
-                    ) &&
-                    (
-                        value & 0x80
-                    )
-                ) {
-
-                    this.enableLCD();
-
-                }
+                this.writeLCDC(value);
 
                 break;
 
-            }
-
-
-            /*
-             * STAT
-             */
 
             case 0x41:
 
                 /*
-                 * Bits 0-2 are read-only.
-                 * Bits 3-6 are writable.
+                 * Bits 0-2 są read-only.
                  */
 
                 this.stat =
@@ -722,18 +496,13 @@ export default class PPU {
                     ) |
                     (
                         value &
-                        0x78
-                    ) |
-                    0x80;
+                        0xF8
+                    );
 
-                this.updateSTATLine();
+                this.updateSTAT();
 
                 break;
 
-
-            /*
-             * SCY
-             */
 
             case 0x42:
 
@@ -743,10 +512,6 @@ export default class PPU {
                 break;
 
 
-            /*
-             * SCX
-             */
-
             case 0x43:
 
                 this.scx =
@@ -755,50 +520,33 @@ export default class PPU {
                 break;
 
 
-            /*
-             * LY is read-only.
-             */
-
             case 0x44:
 
                 /*
-                 * Hardware ignores writes.
+                 * LY jest read-only.
                  */
 
                 break;
 
-
-            /*
-             * LYC
-             */
 
             case 0x45:
 
                 this.lyc =
                     value;
 
-                this.updateCoincidence();
-
-                this.updateSTATLine();
+                this.updateLYC();
 
                 break;
 
-
-            /*
-             * DMA.
-             *
-             * Actual DMA is normally handled by memory.js.
-             * Do not recurse into memory here.
-             */
 
             case 0x46:
 
+                /*
+                 * DMA jest obsługiwane przez memory.
+                 */
+
                 break;
 
-
-            /*
-             * BGP
-             */
 
             case 0x47:
 
@@ -808,10 +556,6 @@ export default class PPU {
                 break;
 
 
-            /*
-             * OBP0
-             */
-
             case 0x48:
 
                 this.obp0 =
@@ -819,10 +563,6 @@ export default class PPU {
 
                 break;
 
-
-            /*
-             * OBP1
-             */
 
             case 0x49:
 
@@ -832,10 +572,6 @@ export default class PPU {
                 break;
 
 
-            /*
-             * WY
-             */
-
             case 0x4A:
 
                 this.wy =
@@ -844,19 +580,114 @@ export default class PPU {
                 break;
 
 
-            /*
-             * WX
-             */
-
             case 0x4B:
 
                 this.wx =
                     value;
 
                 break;
+        }
+    }
 
+
+    writeIO(address, value) {
+
+        this.writeRegister(
+            address,
+            value
+        );
+    }
+
+
+    /*
+     * ========================================================
+     * LCDC WRITE
+     * ========================================================
+     */
+
+    writeLCDC(value) {
+
+        value &=
+            0xFF;
+
+
+        const oldEnabled =
+            this.lcdEnabled();
+
+        const newEnabled =
+            Boolean(
+                value & 0x80
+            );
+
+
+        this.lcdc =
+            value;
+
+
+        /*
+         * LCD OFF
+         */
+
+        if (
+            oldEnabled &&
+            !newEnabled
+        ) {
+
+            this.mode =
+                0;
+
+            this.ly =
+                0;
+
+            this.modeClock =
+                0;
+
+            this.lineCycles =
+                0;
+
+            this.windowLine =
+                0;
+
+            this.windowTriggered =
+                false;
+
+            this.clearFrame();
+
+            this.updateSTAT();
+
+            return;
         }
 
+
+        /*
+         * LCD ON
+         */
+
+        if (
+            !oldEnabled &&
+            newEnabled
+        ) {
+
+            this.mode =
+                2;
+
+            this.ly =
+                0;
+
+            this.modeClock =
+                0;
+
+            this.lineCycles =
+                0;
+
+            this.windowLine =
+                0;
+
+            this.windowTriggered =
+                false;
+
+            this.updateSTAT();
+        }
     }
 
 
@@ -868,23 +699,26 @@ export default class PPU {
 
     readVRAM(address) {
 
-        return this.vram[
-            address & 0x1FFF
-        ];
+        const offset =
+            (
+                address -
+                0x8000
+            ) & 0x1FFF;
 
+        return this.vram[offset];
     }
 
 
-    writeVRAM(
-        address,
-        value
-    ) {
+    writeVRAM(address, value) {
 
-        this.vram[
-            address & 0x1FFF
-        ] =
+        const offset =
+            (
+                address -
+                0x8000
+            ) & 0x1FFF;
+
+        this.vram[offset] =
             value & 0xFF;
-
     }
 
 
@@ -896,81 +730,186 @@ export default class PPU {
 
     readOAM(address) {
 
-        return this.oam[
-            address & 0x9F
-        ];
+        const offset =
+            (
+                address -
+                0xFE00
+            ) & 0xFF;
 
+        if (
+            offset >= 0xA0
+        ) {
+            return 0xFF;
+        }
+
+        return this.oam[offset];
     }
 
 
-    writeOAM(
-        address,
-        value
-    ) {
+    writeOAM(address, value) {
 
-        this.oam[
-            address & 0x9F
-        ] =
+        const offset =
+            (
+                address -
+                0xFE00
+            ) & 0xFF;
+
+        if (
+            offset >= 0xA0
+        ) {
+            return;
+        }
+
+        this.oam[offset] =
             value & 0xFF;
-
     }
 
 
     /*
      * ========================================================
-     * LCD ON/OFF
+     * PPU ACCESS RESTRICTIONS
      * ========================================================
      */
 
-    disableLCD() {
+    vramBlocked() {
 
-        this.mode =
-            0;
-
-        this.modeClock =
-            0;
-
-        this.ly =
-            0;
-
-        this.windowLine =
-            0;
-
-        this.windowActiveThisLine =
-            false;
-
-        this.stat &=
-            0xFC;
-
-        this.frameReady =
-            false;
-
-        this.clearFrame();
-
+        return (
+            this.lcdEnabled() &&
+            this.mode === 3
+        );
     }
 
 
-    enableLCD() {
+    oamBlocked() {
+
+        return (
+            this.lcdEnabled() &&
+            (
+                this.mode === 2 ||
+                this.mode === 3
+            )
+        );
+    }
+
+
+    /*
+     * ========================================================
+     * MODE
+     * ========================================================
+     */
+
+    getMode() {
+
+        return this.mode;
+    }
+
+
+    setMode(mode) {
+
+        mode &=
+            3;
+
+        const oldMode =
+            this.mode;
 
         this.mode =
-            2;
+            mode;
 
-        this.modeClock =
-            0;
 
-        this.ly =
-            0;
+        this.updateSTAT();
 
-        this.windowLine =
-            0;
 
-        this.windowActiveThisLine =
-            false;
+        /*
+         * STAT mode interrupts.
+         */
 
-        this.updateCoincidence();
+        if (
+            oldMode !== mode
+        ) {
 
-        this.updateSTATLine();
+            if (
+                mode === 0 &&
+                (this.stat & 0x08)
+            ) {
 
+                this.requestInterrupt(1);
+            }
+
+
+            if (
+                mode === 1 &&
+                (this.stat & 0x10)
+            ) {
+
+                this.requestInterrupt(1);
+            }
+
+
+            if (
+                mode === 2 &&
+                (this.stat & 0x20)
+            ) {
+
+                this.requestInterrupt(1);
+            }
+        }
+    }
+
+
+    /*
+     * ========================================================
+     * STAT / LYC
+     * ========================================================
+     */
+
+    updateLYC() {
+
+        const old =
+            Boolean(
+                this.stat & 0x04
+            );
+
+        const equal =
+            this.ly === this.lyc;
+
+
+        if (equal) {
+
+            this.stat |=
+                0x04;
+
+        } else {
+
+            this.stat &=
+                ~0x04;
+        }
+
+
+        if (
+            equal &&
+            !old &&
+            (this.stat & 0x40)
+        ) {
+
+            this.requestInterrupt(1);
+        }
+    }
+
+
+    updateSTAT() {
+
+        this.stat =
+            (
+                this.stat &
+                0xF8
+            ) |
+            (
+                this.mode &
+                3
+            );
+
+
+        this.updateLYC();
     }
 
 
@@ -978,108 +917,65 @@ export default class PPU {
      * ========================================================
      * STEP
      * ========================================================
-     *
-     * cycles = CPU cycles.
-     *
-     * DMG LCD:
-     *
-     * mode 2 = 80 cycles
-     * mode 3 = 172 cycles
-     * mode 0 = 204 cycles
-     * line   = 456 cycles
-     *
-     * visible lines 0-143
-     * VBlank lines 144-153
-     *
-     * ========================================================
      */
 
-    step(
-        cycles = 4
-    ) {
+    step(cycles = 4) {
 
-        cycles |= 0;
+        cycles =
+            Math.max(
+                0,
+                cycles | 0
+            );
 
-
-        if (
-            cycles <= 0
-        ) {
-
-            return;
-
-        }
-
-
-        /*
-         * LCD disabled.
-         */
 
         if (
             !this.lcdEnabled()
         ) {
 
             return;
-
         }
+
+
+        this.totalCycles +=
+            cycles;
 
 
         this.modeClock +=
             cycles;
 
-        this.frameCycles +=
-            cycles;
+        this.lineCycles =
+            this.modeClock;
 
 
         /*
-         * Handle multiple transitions.
+         * Jedno wywołanie może przeskoczyć
+         * przez kilka stanów PPU.
          */
 
         while (
-            true
+            this.modeClock >=
+            this.modeDuration()
         ) {
 
-            const limit =
-                this.getModeLimit();
-
-
-            if (
-                this.modeClock <
-                limit
-            ) {
-
-                break;
-
-            }
-
-
             this.modeClock -=
-                limit;
-
+                this.modeDuration();
 
             this.advanceMode();
-
         }
-
     }
 
 
     /*
      * ========================================================
-     * MODE LIMIT
+     * MODE DURATION
      * ========================================================
      */
 
-    getModeLimit() {
+    modeDuration() {
 
         switch (
             this.mode
         ) {
-
-            case 0:
-                return 204;
-
-            case 1:
-                return 456;
 
             case 2:
                 return 80;
@@ -1087,11 +983,15 @@ export default class PPU {
             case 3:
                 return 172;
 
-            default:
+            case 0:
+                return 204;
+
+            case 1:
                 return 456;
 
+            default:
+                return 456;
         }
-
     }
 
 
@@ -1103,95 +1003,17 @@ export default class PPU {
 
     advanceMode() {
 
+        if (
+            !this.lcdEnabled()
+        ) {
+
+            return;
+        }
+
+
         switch (
             this.mode
         ) {
-
-            /*
-             * ------------------------------------------------
-             * HBlank -> next line
-             * ------------------------------------------------
-             */
-
-            case 0:
-
-                this.ly =
-                    (
-                        this.ly + 1
-                    ) & 0xFF;
-
-
-                if (
-                    this.ly === 144
-                ) {
-
-                    /*
-                     * Enter VBlank.
-                     */
-
-                    this.mode =
-                        1;
-
-                    this.requestVBlank();
-
-                } else {
-
-                    this.mode =
-                        2;
-
-                }
-
-
-                this.updateCoincidence();
-
-                this.updateSTATLine();
-
-                break;
-
-
-            /*
-             * ------------------------------------------------
-             * VBlank
-             * ------------------------------------------------
-             */
-
-            case 1:
-
-                this.ly =
-                    (
-                        this.ly + 1
-                    ) & 0xFF;
-
-
-                if (
-                    this.ly > 153
-                ) {
-
-                    this.ly =
-                        0;
-
-                    this.mode =
-                        2;
-
-                    this.windowLine =
-                        0;
-
-                    this.frameCounter++;
-
-                    this.frameReady =
-                        true;
-
-                    this.presentFrame();
-
-                }
-
-
-                this.updateCoincidence();
-
-                this.updateSTATLine();
-
-                break;
-
 
             /*
              * ------------------------------------------------
@@ -1201,17 +1023,14 @@ export default class PPU {
 
             case 2:
 
-                this.mode =
-                    3;
-
-                this.updateSTATLine();
+                this.setMode(3);
 
                 break;
 
 
             /*
              * ------------------------------------------------
-             * Drawing -> HBlank
+             * DRAW
              * ------------------------------------------------
              */
 
@@ -1219,110 +1038,133 @@ export default class PPU {
 
                 this.renderScanline();
 
-                this.mode =
-                    0;
-
-                this.updateSTATLine();
+                this.setMode(0);
 
                 break;
 
-        }
 
+            /*
+             * ------------------------------------------------
+             * HBLANK
+             * ------------------------------------------------
+             */
+
+            case 0:
+
+                this.ly++;
+
+
+                if (
+                    this.ly === 144
+                ) {
+
+                    this.setMode(1);
+
+                    this.frameCounter++;
+
+                    this.frameReady =
+                        true;
+
+                    this.requestInterrupt(0);
+
+                    this.presentFrame();
+
+                } else {
+
+                    this.setMode(2);
+                }
+
+                break;
+
+
+            /*
+             * ------------------------------------------------
+             * VBLANK
+             * ------------------------------------------------
+             */
+
+            case 1:
+
+                this.ly++;
+
+
+                if (
+                    this.ly > 153
+                ) {
+
+                    this.ly =
+                        0;
+
+                    this.windowLine =
+                        0;
+
+                    this.windowTriggered =
+                        false;
+
+                    this.setMode(2);
+                } else {
+
+                    this.updateSTAT();
+                }
+
+                break;
+        }
     }
 
 
     /*
      * ========================================================
-     * COMPATIBILITY RENDER METHOD
+     * RENDER SCANLINE
      * ========================================================
      */
 
     renderScanline() {
 
-        const line =
+        const y =
             this.ly;
 
+
         if (
-            line < 0 ||
-            line >= this.HEIGHT
+            y < 0 ||
+            y >= 144
         ) {
-
             return;
-
         }
 
 
         /*
-         * LCD disabled.
+         * Zerujemy scanline.
+         */
+
+        this.bgColorLine.fill(0);
+
+        this.bgPriorityLine.fill(0);
+
+        this.objColorLine.fill(0);
+
+        this.objPaletteLine.fill(0);
+
+        this.objPriorityLine.fill(0);
+
+        this.objPresentLine.fill(0);
+
+
+        /*
+         * BG / WINDOW
          */
 
         if (
-            !this.lcdEnabled()
+            this.lcdc & 0x01
         ) {
 
-            return;
+            this.renderBackground(y);
 
-        }
+        } else {
 
-
-        this.windowActiveThisLine =
-            false;
-
-
-        /*
-         * Draw background.
-         */
-
-        this.renderBackground(
-            line
-        );
-
-
-        /*
-         * Draw window.
-         */
-
-        this.renderWindow(
-            line
-        );
-
-
-        /*
-         * Draw sprites.
-         */
-
-        this.renderSprites(
-            line
-        );
-
-    }
-
-
-    /*
-     * ========================================================
-     * BACKGROUND
-     * ========================================================
-     */
-
-    renderBackground(
-        line
-    ) {
-
-        const bgEnabled =
-            (
-                this.lcdc &
-                0x01
-            ) !== 0;
-
-
-        /*
-         * On DMG, when BG is disabled, color 0
-         * is effectively used.
-         */
-
-        if (
-            !bgEnabled
-        ) {
+            /*
+             * Gdy BG jest wyłączone,
+             * kolor 0.
+             */
 
             for (
                 let x = 0;
@@ -1330,333 +1172,209 @@ export default class PPU {
                 x++
             ) {
 
-                this.putShade(
-                    x,
-                    line,
-                    0
-                );
-
+                this.bgColorLine[x] =
+                    0;
             }
-
-            return;
-
         }
 
 
-        const mapBase =
-            (
-                this.lcdc &
-                0x08
-            )
-                ? 0x1C00
-                : 0x1800;
+        /*
+         * Sprites.
+         */
 
-
-        const tileUnsigned =
-            (
-                this.lcdc &
-                0x10
-            ) !== 0;
-
-
-        const y =
-            (
-                line +
-                this.scy
-            ) & 0xFF;
-
-
-        const tileRow =
-            (
-                y >> 3
-            ) & 31;
-
-
-        const pixelY =
-            y & 7;
-
-
-        for (
-            let screenX = 0;
-            screenX < 160;
-            screenX++
+        if (
+            this.lcdc & 0x02
         ) {
 
-            const x =
-                (
-                    screenX +
-                    this.scx
-                ) & 0xFF;
-
-
-            const tileColumn =
-                (
-                    x >> 3
-                ) & 31;
-
-
-            const mapAddress =
-                mapBase +
-                tileRow * 32 +
-                tileColumn;
-
-
-            const tile =
-                this.vram[
-                    mapAddress &
-                    0x1FFF
-                ];
-
-
-            let tileAddress;
-
-
-            if (
-                tileUnsigned
-            ) {
-
-                tileAddress =
-                    tile * 16;
-
-            } else {
-
-                /*
-                 * Signed tile index:
-                 *
-                 * 0x80..0xFF = -128..-1
-                 */
-
-                const signed =
-                    tile < 0x80
-                        ? tile
-                        : tile - 0x100;
-
-
-                tileAddress =
-                    0x1000 +
-                    signed * 16;
-
-            }
-
-
-            const rowAddress =
-                (
-                    tileAddress +
-                    pixelY * 2
-                ) & 0x1FFF;
-
-
-            const lo =
-                this.vram[
-                    rowAddress
-                ];
-
-
-            const hi =
-                this.vram[
-                    (
-                        rowAddress + 1
-                    ) & 0x1FFF
-                ];
-
-
-            const bit =
-                7 -
-                (
-                    x & 7
-                );
-
-
-            const color =
-                (
-                    (
-                        hi >> bit
-                    ) & 1
-                ) << 1 |
-                (
-                    lo >> bit
-                ) & 1;
-
-
-            this.putShade(
-                screenX,
-                line,
-                this.paletteColor(
-                    this.bgp,
-                    color
-                )
-            );
-
+            this.renderSprites(y);
         }
 
+
+        /*
+         * Finalny compositing.
+         */
+
+        this.compositeScanline(y);
     }
 
 
     /*
      * ========================================================
-     * WINDOW
+     * BACKGROUND + WINDOW
      * ========================================================
      */
 
-    renderWindow(
-        line
-    ) {
+    renderBackground(y) {
 
-        const windowEnabled =
+        const tileMapBase =
             (
-                this.lcdc &
-                0x20
-            ) !== 0;
-
-
-        if (
-            !windowEnabled
-        ) {
-
-            return;
-
-        }
-
-
-        if (
-            line <
-            this.wy
-        ) {
-
-            return;
-
-        }
-
-
-        /*
-         * WX is offset by 7.
-         */
-
-        const windowX =
-            this.wx - 7;
-
-
-        if (
-            windowX >= 160
-        ) {
-
-            return;
-
-        }
-
-
-        this.windowActiveThisLine =
-            true;
-
-
-        const mapBase =
-            (
-                this.lcdc &
-                0x40
+                this.lcdc & 0x08
             )
                 ? 0x1C00
                 : 0x1800;
 
 
-        const tileUnsigned =
+        const tileDataUnsigned =
+            Boolean(
+                this.lcdc & 0x10
+            );
+
+
+        const windowEnabled =
+            Boolean(
+                this.lcdc & 0x20
+            );
+
+
+        const windowMapBase =
             (
-                this.lcdc &
-                0x10
-            ) !== 0;
+                this.lcdc & 0x40
+            )
+                ? 0x1C00
+                : 0x1800;
 
 
-        const y =
-            this.windowLine;
-
-
-        const tileRow =
-            (
-                y >> 3
-            ) & 31;
-
-
-        const pixelY =
-            y & 7;
+        let windowUsed =
+            false;
 
 
         for (
-            let screenX =
-                Math.max(
-                    0,
-                    windowX
-                );
-
-            screenX < 160;
-
-            screenX++
+            let x = 0;
+            x < 160;
+            x++
         ) {
 
-            const wxPixel =
-                screenX -
-                windowX;
-
-
-            const tileColumn =
+            let px =
                 (
-                    wxPixel >> 3
+                    x +
+                    this.scx
+                ) & 0xFF;
+
+            let py =
+                (
+                    y +
+                    this.scy
+                ) & 0xFF;
+
+
+            /*
+             * WINDOW
+             */
+
+            if (
+                windowEnabled &&
+                y >= this.wy &&
+                x + 7 >= this.wx
+            ) {
+
+                const wx =
+                    x -
+                    (
+                        this.wx -
+                        7
+                    );
+
+
+                if (
+                    wx >= 0
+                ) {
+
+                    px =
+                        wx;
+
+                    py =
+                        this.windowLine;
+
+                    windowUsed =
+                        true;
+                }
+            }
+
+
+            const tileX =
+                (
+                    px >> 3
+                ) & 31;
+
+            const tileY =
+                (
+                    py >> 3
                 ) & 31;
 
 
-            const mapAddress =
-                mapBase +
-                tileRow * 32 +
-                tileColumn;
+            const tileMapAddress =
+                tileMapBase +
+                tileY * 32 +
+                tileX;
 
 
-            const tile =
+            let tile =
                 this.vram[
-                    mapAddress &
+                    tileMapAddress &
                     0x1FFF
                 ];
+
+
+            if (
+                tileDataUnsigned
+            ) {
+
+                tile &=
+                    0xFF;
+
+            } else {
+
+                tile =
+                    (
+                        tile < 128
+                    )
+                        ? tile
+                        : tile - 256;
+            }
 
 
             let tileAddress;
 
 
             if (
-                tileUnsigned
+                tileDataUnsigned
             ) {
 
                 tileAddress =
+                    0x0000 +
                     tile * 16;
 
             } else {
 
-                const signed =
-                    tile < 0x80
-                        ? tile
-                        : tile - 0x100;
-
-
                 tileAddress =
                     0x1000 +
-                    signed * 16;
-
+                    tile * 16;
             }
 
 
-            const rowAddress =
-                (
-                    tileAddress +
-                    pixelY * 2
-                ) & 0x1FFF;
+            tileAddress &=
+                0x1FFF;
 
 
-            const lo =
+            const row =
+                py & 7;
+
+
+            const low =
                 this.vram[
-                    rowAddress
+                    (
+                        tileAddress +
+                        row * 2
+                    ) & 0x1FFF
                 ];
 
 
-            const hi =
+            const high =
                 this.vram[
                     (
-                        rowAddress + 1
+                        tileAddress +
+                        row * 2 +
+                        1
                     ) & 0x1FFF
                 ];
 
@@ -1664,40 +1382,46 @@ export default class PPU {
             const bit =
                 7 -
                 (
-                    wxPixel & 7
+                    px & 7
                 );
 
 
             const color =
                 (
                     (
-                        hi >> bit
+                        high >> bit
                     ) & 1
                 ) << 1 |
                 (
-                    lo >> bit
+                    low >> bit
                 ) & 1;
 
 
-            this.putShade(
-                screenX,
-                line,
-                this.paletteColor(
-                    this.bgp,
-                    color
-                )
-            );
+            this.bgColorLine[x] =
+                color;
 
+
+            /*
+             * BG priority dla DMG jest zasadniczo
+             * związane z kolorem 0.
+             */
+
+            this.bgPriorityLine[x] =
+                color !== 0
+                    ? 1
+                    : 0;
         }
 
 
-        /*
-         * The window line advances only when
-         * the window actually appears.
-         */
+        if (
+            windowUsed
+        ) {
 
-        this.windowLine++;
+            this.windowTriggered =
+                true;
 
+            this.windowLine++;
+        }
     }
 
 
@@ -1707,48 +1431,30 @@ export default class PPU {
      * ========================================================
      */
 
-    renderSprites(
-        line
-    ) {
-
-        if (
-            !(
-                this.lcdc &
-                0x02
-            )
-        ) {
-
-            return;
-
-        }
-
-
-        const large =
-            (
-                this.lcdc &
-                0x04
-            ) !== 0;
-
+    renderSprites(y) {
 
         const spriteHeight =
-            large
+            (
+                this.lcdc & 0x04
+            )
                 ? 16
                 : 8;
 
 
-        const sprites = [];
+        const visible =
+            [];
 
 
         /*
-         * Find up to 10 sprites on this line.
+         * Game Boy może wyświetlić maksymalnie
+         * 10 sprite'ów na scanline.
+         *
+         * Zachowujemy kolejność OAM.
          */
 
         for (
             let i = 0;
-
-            i < 40 &&
-            sprites.length < 10;
-
+            i < 40;
             i++
         ) {
 
@@ -1756,127 +1462,115 @@ export default class PPU {
                 i * 4;
 
 
-            const y =
-                this.oam[
-                    base
-                ] - 16;
+            const sy =
+                this.oam[base] -
+                16;
 
+            const sx =
+                this.oam[base + 1] -
+                8;
 
-            const x =
-                this.oam[
-                    base + 1
-                ] - 8;
+            const tile =
+                this.oam[base + 2];
+
+            const flags =
+                this.oam[base + 3];
 
 
             if (
-                line >= y &&
-                line <
-                y + spriteHeight
+                y < sy ||
+                y >= sy + spriteHeight
             ) {
-
-                sprites.push({
-                    index: i,
-                    x: x,
-                    y: y,
-                    tile:
-                        this.oam[
-                            base + 2
-                        ],
-                    attr:
-                        this.oam[
-                            base + 3
-                        ]
-                });
-
+                continue;
             }
 
+
+            visible.push({
+                index: i,
+                x: sx,
+                y: sy,
+                tile,
+                flags
+            });
+
+
+            if (
+                visible.length >= 10
+            ) {
+                break;
+            }
         }
 
 
         /*
-         * DMG priority:
-         * lower X wins; then lower OAM index.
+         * DMG priorytet:
+         *
+         * niższy X ma wyższy priorytet,
+         * a przy równym X niższy indeks OAM.
          */
 
-        sprites.sort(
-            (
-                a,
-                b
-            ) => {
+        visible.sort(
+            (a, b) => {
 
                 if (
-                    a.x !==
-                    b.x
+                    a.x !== b.x
                 ) {
 
-                    return a.x -
-                        b.x;
-
+                    return a.x - b.x;
                 }
 
-                return a.index -
-                    b.index;
-
+                return a.index - b.index;
             }
         );
 
 
-        /*
-         * Draw from lowest priority toward highest
-         * so the later/high-priority sprite remains visible.
-         */
-
         for (
-            let s = sprites.length - 1;
+            let s = visible.length - 1;
             s >= 0;
             s--
         ) {
 
             const sprite =
-                sprites[s];
-
-
-            let tile =
-                sprite.tile;
+                visible[s];
 
 
             let row =
-                line -
+                y -
                 sprite.y;
 
 
-            const attr =
-                sprite.attr;
+            const flags =
+                sprite.flags;
 
 
             const flipY =
-                (
-                    attr &
-                    0x40
-                ) !== 0;
+                Boolean(
+                    flags & 0x40
+                );
 
 
             const flipX =
-                (
-                    attr &
-                    0x20
-                ) !== 0;
+                Boolean(
+                    flags & 0x20
+                );
 
 
             const behindBG =
-                (
-                    attr &
-                    0x80
-                ) !== 0;
+                Boolean(
+                    flags & 0x80
+                );
 
 
             const palette =
                 (
-                    attr &
-                    0x10
+                    flags & 0x10
                 )
-                    ? this.obp1
-                    : this.obp0;
+                    ? 1
+                    : 0;
+
+
+            const height =
+                spriteHeight;
 
 
             if (
@@ -1884,52 +1578,52 @@ export default class PPU {
             ) {
 
                 row =
-                    spriteHeight -
+                    height -
                     1 -
                     row;
-
             }
 
 
+            let tile =
+                sprite.tile;
+
+
+            /*
+             * 8x16 sprite:
+             * bit 0 tile is ignored.
+             */
+
             if (
-                large
+                height === 16
             ) {
 
-                tile &= 0xFE;
+                tile &=
+                    0xFE;
 
                 if (
                     row >= 8
                 ) {
 
                     tile++;
-
+                    row -= 8;
                 }
-
             }
-
-
-            const tileRow =
-                row & 7;
 
 
             const address =
                 (
                     tile * 16 +
-                    tileRow * 2
+                    row * 2
                 ) & 0x1FFF;
 
 
-            const lo =
-                this.vram[
-                    address
-                ];
+            const low =
+                this.vram[address];
 
 
-            const hi =
+            const high =
                 this.vram[
-                    (
-                        address + 1
-                    ) & 0x1FFF
+                    address + 1
                 ];
 
 
@@ -1938,44 +1632,6 @@ export default class PPU {
                 px < 8;
                 px++
             ) {
-
-                let bit =
-                    px;
-
-
-                if (
-                    !flipX
-                ) {
-
-                    bit =
-                        7 - px;
-
-                }
-
-
-                const color =
-                    (
-                        (
-                            hi >> bit
-                        ) & 1
-                    ) << 1 |
-                    (
-                        lo >> bit
-                    ) & 1;
-
-
-                /*
-                 * Sprite color 0 is transparent.
-                 */
-
-                if (
-                    color === 0
-                ) {
-
-                    continue;
-
-                }
-
 
                 const screenX =
                     sprite.x +
@@ -1986,180 +1642,173 @@ export default class PPU {
                     screenX < 0 ||
                     screenX >= 160
                 ) {
-
                     continue;
+                }
 
+
+                const bit =
+                    flipX
+                        ? px
+                        : 7 - px;
+
+
+                const color =
+                    (
+                        (
+                            high >> bit
+                        ) & 1
+                    ) << 1 |
+                    (
+                        low >> bit
+                    ) & 1;
+
+
+                /*
+                 * Sprite color 0 = transparent.
+                 */
+
+                if (
+                    color === 0
+                ) {
+                    continue;
                 }
 
 
                 /*
-                 * OBJ-to-BG priority.
-                 *
-                 * Color 0 background is not obstructive.
+                 * Już istniejący sprite ma priorytet.
                  */
 
                 if (
-                    behindBG &&
-                    this.getBackgroundColor(
-                        screenX,
-                        line
-                    ) !== 0
+                    this.objPresentLine[screenX]
                 ) {
-
                     continue;
-
                 }
 
 
-                this.putShade(
-                    screenX,
-                    line,
-                    this.paletteColor(
-                        palette,
-                        color
-                    )
-                );
+                this.objPresentLine[screenX] =
+                    1;
 
+                this.objColorLine[screenX] =
+                    color;
+
+                this.objPaletteLine[screenX] =
+                    palette;
+
+                this.objPriorityLine[screenX] =
+                    behindBG
+                        ? 1
+                        : 0;
             }
-
         }
-
     }
 
 
     /*
      * ========================================================
-     * GET BACKGROUND COLOR
-     * ========================================================
-     *
-     * Used for sprite priority.
-     *
+     * COMPOSITE
      * ========================================================
      */
 
-    getBackgroundColor(
-        screenX,
-        line
-    ) {
+    compositeScanline(y) {
 
-        const y =
-            (
-                line +
-                this.scy
-            ) & 0xFF;
+        const base =
+            y * 160 * 4;
 
 
-        const x =
-            (
-                screenX +
-                this.scx
-            ) & 0xFF;
-
-
-        const mapBase =
-            (
-                this.lcdc &
-                0x08
-            )
-                ? 0x1C00
-                : 0x1800;
-
-
-        const tileUnsigned =
-            (
-                this.lcdc &
-                0x10
-            ) !== 0;
-
-
-        const tileRow =
-            (
-                y >> 3
-            ) & 31;
-
-
-        const tileColumn =
-            (
-                x >> 3
-            ) & 31;
-
-
-        const tile =
-            this.vram[
-                (
-                    mapBase +
-                    tileRow * 32 +
-                    tileColumn
-                ) & 0x1FFF
-            ];
-
-
-        let tileAddress;
-
-
-        if (
-            tileUnsigned
+        for (
+            let x = 0;
+            x < 160;
+            x++
         ) {
 
-            tileAddress =
-                tile * 16;
-
-        } else {
-
-            const signed =
-                tile < 0x80
-                    ? tile
-                    : tile - 0x100;
+            let colorIndex =
+                this.bgColorLine[x];
 
 
-            tileAddress =
-                0x1000 +
-                signed * 16;
+            /*
+             * Sprite.
+             */
 
+            if (
+                this.objPresentLine[x]
+            ) {
+
+                const spriteColor =
+                    this.objColorLine[x];
+
+
+                const behind =
+                    this.objPriorityLine[x];
+
+
+                /*
+                 * OBJ priority bit:
+                 *
+                 * sprite jest za BG, jeśli BG
+                 * ma niezerowy kolor.
+                 */
+
+                if (
+                    !behind ||
+                    this.bgColorLine[x] === 0
+                ) {
+
+                    colorIndex =
+                        this.mapOBJColor(
+                            spriteColor,
+                            this.objPaletteLine[x]
+                        );
+                }
+            }
+
+
+            /*
+             * BG palette.
+             */
+
+            if (
+                !this.objPresentLine[x] ||
+                (
+                    this.objPriorityLine[x] &&
+                    this.bgColorLine[x] !== 0
+                )
+            ) {
+
+                colorIndex =
+                    this.mapBGColor(
+                        this.bgColorLine[x]
+                    );
+            }
+
+
+            const shade =
+                colorIndex &
+                3;
+
+
+            const rgb =
+                this.shadeToRGB(
+                    shade
+                );
+
+
+            const offset =
+                base +
+                x * 4;
+
+
+            this.frameBuffer[offset] =
+                rgb[0];
+
+            this.frameBuffer[offset + 1] =
+                rgb[1];
+
+            this.frameBuffer[offset + 2] =
+                rgb[2];
+
+            this.frameBuffer[offset + 3] =
+                255;
         }
-
-
-        const rowAddress =
-            (
-                tileAddress +
-                (
-                    y & 7
-                ) * 2
-            ) & 0x1FFF;
-
-
-        const lo =
-            this.vram[
-                rowAddress
-            ];
-
-
-        const hi =
-            this.vram[
-                (
-                    rowAddress + 1
-                ) & 0x1FFF
-            ];
-
-
-        const bit =
-            7 -
-            (
-                x & 7
-            );
-
-
-        return (
-            (
-                (
-                    hi >> bit
-                ) & 1
-            ) << 1
-        ) |
-        (
-            lo >> bit
-        ) & 1;
-
     }
 
 
@@ -2169,189 +1818,155 @@ export default class PPU {
      * ========================================================
      */
 
-    paletteColor(
-        palette,
-        color
-    ) {
+    mapBGColor(color) {
 
         return (
-            palette >>
+            this.bgp >>
             (
                 color * 2
             )
         ) & 3;
+    }
 
+
+    mapOBJColor(color, palette) {
+
+        const reg =
+            palette === 0
+                ? this.obp0
+                : this.obp1;
+
+
+        return (
+            reg >>
+            (
+                color * 2
+            )
+        ) & 3;
     }
 
 
     /*
      * ========================================================
-     * PUT SHADE
+     * DMG SHADES
      * ========================================================
      */
 
-    putShade(
-        x,
-        y,
-        shade
-    ) {
+    shadeToRGB(shade) {
 
-        if (
-            x < 0 ||
-            x >= 160 ||
-            y < 0 ||
-            y >= 144
+        /*
+         * Klasyczna paleta DMG.
+         *
+         * Możesz później zmienić ją na własną.
+         */
+
+        switch (
+            shade & 3
         ) {
 
-            return;
+            case 0:
+                return [224, 248, 208];
 
+            case 1:
+                return [136, 192, 112];
+
+            case 2:
+                return [52, 104, 86];
+
+            case 3:
+            default:
+                return [8, 24, 32];
+        }
+    }
+
+
+    /*
+     * ========================================================
+     * FRAMEBUFFER
+     * ========================================================
+     */
+
+    clearFrame() {
+
+        for (
+            let i = 0;
+            i < this.frameBuffer.length;
+            i += 4
+        ) {
+
+            this.frameBuffer[i] =
+                224;
+
+            this.frameBuffer[i + 1] =
+                248;
+
+            this.frameBuffer[i + 2] =
+                208;
+
+            this.frameBuffer[i + 3] =
+                255;
         }
 
 
-        /*
-         * DMG grayscale.
-         *
-         * 0 = white
-         * 1 = light gray
-         * 2 = dark gray
-         * 3 = black
-         */
-
-        const value =
-            [
-                255,
-                192,
-                96,
-                0
-            ][
-                shade & 3
-            ];
-
-
-        const index =
-            (
-                y * 160 +
-                x
-            ) * 4;
-
-
-        this.framebuffer[
-            index
-        ] = value;
-
-
-        this.framebuffer[
-            index + 1
-        ] = value;
-
-
-        this.framebuffer[
-            index + 2
-        ] = value;
-
-
-        this.framebuffer[
-            index + 3
-        ] = 255;
-
+        this.frameReady =
+            false;
     }
 
-
-    /*
-     * ========================================================
-     * PRESENT FRAME
-     * ========================================================
-     */
 
     presentFrame() {
 
         if (
             !this.ctx
         ) {
-
             return;
-
         }
 
 
-        try {
-
-            if (
-                this.imageData &&
-                this.imageData.data &&
-                this.imageData.data.length ===
-                this.framebuffer.length
-            ) {
-
-                this.imageData.data.set(
-                    this.framebuffer
-                );
-
-                this.ctx.putImageData(
-                    this.imageData,
-                    0,
-                    0
-                );
-
-                return;
-
-            }
-
-
-            /*
-             * Fallback.
-             */
-
-            const image =
-                this.ctx.createImageData(
-                    160,
-                    144
-                );
-
-
-            image.data.set(
-                this.framebuffer
-            );
-
-
-            this.ctx.putImageData(
-                image,
-                0,
-                0
-            );
-
-        } catch (
-            error
+        if (
+            !this.imageData
         ) {
 
-            /*
-             * Do not crash emulator because
-             * of rendering.
-             */
+            try {
 
-            this.log(
-                "Błąd prezentacji klatki: " +
-                error.message
-            );
+                this.imageData =
+                    this.ctx.createImageData(
+                        160,
+                        144
+                    );
 
+            } catch (e) {
+
+                return;
+            }
         }
 
+
+        this.imageData.data.set(
+            this.frameBuffer
+        );
+
+
+        /*
+         * Najważniejsze:
+         * obraz jest rysowany dopiero po całej
+         * ukończonej klatce.
+         */
+
+        this.ctx.putImageData(
+            this.imageData,
+            0,
+            0
+        );
     }
 
 
     /*
      * ========================================================
-     * FRAME CONSUME
+     * CONSUME FRAME
      * ========================================================
      *
-     * Current emulator.js calls:
-     *
-     *   ppu.consumeFrame()
-     *
-     * Return:
-     *
-     *   null
-     *   or framebuffer
+     * emulator.js może używać tego do sprawdzania,
+     * czy pojawiła się nowa klatka.
      *
      * ========================================================
      */
@@ -2362,8 +1977,7 @@ export default class PPU {
             !this.frameReady
         ) {
 
-            return null;
-
+            return false;
         }
 
 
@@ -2371,198 +1985,83 @@ export default class PPU {
             false;
 
 
-        return this.framebuffer;
-
+        return true;
     }
 
 
     /*
      * ========================================================
-     * FRAME READY
+     * GET FRAME
      * ========================================================
      */
 
-    hasFrame() {
+    getFrameBuffer() {
 
-        return this.frameReady;
-
-    }
-
-
-    /*
-     * ========================================================
-     * INTERRUPTS
-     * ========================================================
-     */
-
-    requestVBlank() {
-
-        this.vblankInterrupt =
-            true;
-
-
-        this.interruptFlags |=
-            0x01;
-
-    }
-
-
-    requestSTAT() {
-
-        this.statInterrupt =
-            true;
-
-
-        this.interruptFlags |=
-            0x02;
-
-    }
-
-
-    consumeInterrupts() {
-
-        const value =
-            this.interruptFlags;
-
-
-        this.interruptFlags =
-            0;
-
-        this.vblankInterrupt =
-            false;
-
-        this.statInterrupt =
-            false;
-
-
-        return value;
-
-    }
-
-
-    /*
-     * ========================================================
-     * COINCIDENCE
-     * ========================================================
-     */
-
-    updateCoincidence() {
-
-        if (
-            this.ly ===
-            this.lyc
-        ) {
-
-            this.stat |=
-                0x04;
-
-        } else {
-
-            this.stat &=
-                ~0x04;
-
-        }
-
-    }
-
-
-    /*
-     * ========================================================
-     * STAT INTERRUPT
-     * ========================================================
-     */
-
-    updateSTATLine() {
-
-        const coincidence =
-            (
-                this.stat &
-                0x04
-            ) !== 0;
-
-
-        const mode0 =
-            (
-                this.mode === 0
-            ) &&
-            (
-                this.stat &
-                0x08
-            );
-
-
-        const mode1 =
-            (
-                this.mode === 1
-            ) &&
-            (
-                this.stat &
-                0x10
-            );
-
-
-        const mode2 =
-            (
-                this.mode === 2
-            ) &&
-            (
-                this.stat &
-                0x20
-            );
-
-
-        const coincidenceIRQ =
-            coincidence &&
-            (
-                this.stat &
-                0x40
-            );
-
-
-        const active =
-            Boolean(
-                mode0 ||
-                mode1 ||
-                mode2 ||
-                coincidenceIRQ
-            );
-
-
-        /*
-         * STAT IRQ is edge-triggered.
-         */
-
-        if (
-            active &&
-            !this.statLine
-        ) {
-
-            this.requestSTAT();
-
-        }
-
-
-        this.statLine =
-            active;
-
-
-        this.stat =
-            (
-                this.stat &
-                0xFC
-            ) |
-            (
-                this.mode &
-                3
-            ) |
-            0x80;
-
+        return this.frameBuffer;
     }
 
 
     /*
      * ========================================================
      * DEBUG / INFO
+     * ========================================================
+     */
+
+    getInfo() {
+
+        return {
+
+            lcdc:
+                this.lcdc,
+
+            stat:
+                this.stat,
+
+            scy:
+                this.scy,
+
+            scx:
+                this.scx,
+
+            ly:
+                this.ly,
+
+            lyc:
+                this.lyc,
+
+            bgp:
+                this.bgp,
+
+            obp0:
+                this.obp0,
+
+            obp1:
+                this.obp1,
+
+            wy:
+                this.wy,
+
+            wx:
+                this.wx,
+
+            mode:
+                this.mode,
+
+            modeClock:
+                this.modeClock,
+
+            frame:
+                this.frameCounter,
+
+            lcdEnabled:
+                this.lcdEnabled()
+        };
+    }
+
+
+    /*
+     * ========================================================
+     * STATE
      * ========================================================
      */
 
@@ -2609,17 +2108,11 @@ export default class PPU {
             modeClock:
                 this.modeClock,
 
-            frame:
+            frameCounter:
                 this.frameCounter,
 
-            frameReady:
-                this.frameReady,
-
-            lcdEnabled:
-                this.lcdEnabled()
-
+            windowLine:
+                this.windowLine
         };
-
     }
-
 }
