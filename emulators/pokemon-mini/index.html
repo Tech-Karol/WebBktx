@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>WebBktx — Pokémon Mini</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            min-height: 100%;
+            background: #111;
+            color: #fff;
+            font-family: Arial, Helvetica, sans-serif;
+        }
+
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .emulator {
+            width: min(100%, 900px);
+            padding: 20px;
+        }
+
+        .title {
+            text-align: center;
+            margin-bottom: 16px;
+        }
+
+        .title h1 {
+            margin: 0;
+            font-size: 28px;
+        }
+
+        .title span {
+            color: #888;
+            font-size: 13px;
+        }
+
+        .screen-container {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+
+        #screen {
+            width: min(100%, 640px);
+            height: auto;
+            aspect-ratio: 96 / 64;
+
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+
+            background: #c8c8c8;
+            border: 8px solid #333;
+            border-radius: 8px;
+
+            display: block;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 60px;
+            margin-top: 20px;
+        }
+
+        .dpad {
+            display: grid;
+            grid-template-columns: 55px 55px 55px;
+            grid-template-rows: 55px 55px 55px;
+            gap: 4px;
+        }
+
+        .dpad button:nth-child(1) {
+            grid-column: 2;
+            grid-row: 1;
+        }
+
+        .dpad button:nth-child(2) {
+            grid-column: 1;
+            grid-row: 2;
+        }
+
+        .dpad button:nth-child(3) {
+            grid-column: 2;
+            grid-row: 3;
+        }
+
+        .dpad button:nth-child(4) {
+            grid-column: 3;
+            grid-row: 2;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 14px;
+            align-items: center;
+        }
+
+        button {
+            border: none;
+            background: #292929;
+            color: #fff;
+            font-size: 18px;
+            font-weight: bold;
+
+            min-width: 55px;
+            min-height: 55px;
+
+            border-radius: 10px;
+
+            cursor: pointer;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+
+            box-shadow:
+                0 4px 0 #111,
+                inset 0 0 0 1px #444;
+        }
+
+        button:hover {
+            background: #353535;
+        }
+
+        button:active,
+        button.active {
+            transform: translateY(3px);
+            box-shadow:
+                0 1px 0 #111,
+                inset 0 0 0 1px #555;
+            background: #444;
+        }
+
+        .action-buttons button {
+            border-radius: 50%;
+            width: 65px;
+            height: 65px;
+        }
+
+        .system-controls {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 25px;
+        }
+
+        .system-controls button {
+            min-width: 90px;
+            min-height: 40px;
+            font-size: 14px;
+        }
+
+        .file {
+            display: flex;
+            justify-content: center;
+            margin-top: 20px;
+        }
+
+        #rom {
+            display: none;
+        }
+
+        .rom-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+
+            min-height: 42px;
+            padding: 0 20px;
+
+            border-radius: 8px;
+            background: #292929;
+            cursor: pointer;
+        }
+
+        .status {
+            text-align: center;
+            margin-top: 15px;
+            color: #777;
+            font-size: 12px;
+        }
+
+        @media (max-width: 600px) {
+            .emulator {
+                padding: 10px;
+            }
+
+            .controls {
+                gap: 30px;
+            }
+
+            .dpad {
+                grid-template-columns: 45px 45px 45px;
+                grid-template-rows: 45px 45px 45px;
+            }
+
+            button {
+                min-width: 45px;
+                min-height: 45px;
+            }
+
+            .action-buttons button {
+                width: 55px;
+                height: 55px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="emulator">
+
+    <div class="title">
+        <h1>WebBktx — Pokémon Mini</h1>
+        <span>Pokémon Mini Emulator</span>
+    </div>
+
+    <div class="screen-container">
+        <canvas
+            id="screen"
+            width="96"
+            height="64">
+        </canvas>
+    </div>
+
+    <!--
+        Pokémon Mini controls
+
+        D-Pad:
+        Arrow keys
+
+        A:
+        Z
+
+        B:
+        X
+
+        Power:
+        P
+
+        Menu:
+        Enter
+    -->
+
+    <div class="controls">
+
+        <div class="dpad">
+
+            <button
+                data-button="up"
+                aria-label="Góra">
+                ▲
+            </button>
+
+            <button
+                data-button="left"
+                aria-label="Lewo">
+                ◀
+            </button>
+
+            <button
+                data-button="down"
+                aria-label="Dół">
+                ▼
+            </button>
+
+            <button
+                data-button="right"
+                aria-label="Prawo">
+                ▶
+            </button>
+
+        </div>
+
+        <div class="action-buttons">
+
+            <button
+                data-button="a"
+                aria-label="A">
+                A
+            </button>
+
+            <button
+                data-button="b"
+                aria-label="B">
+                B
+            </button>
+
+        </div>
+
+    </div>
+
+    <div class="system-controls">
+
+        <button
+            data-button="power">
+            POWER
+        </button>
+
+        <button
+            data-button="menu">
+            MENU
+        </button>
+
+    </div>
+
+    <div class="file">
+
+        <label class="rom-button" for="rom">
+            Wczytaj ROM
+        </label>
+
+        <input
+            id="rom"
+            type="file"
+            accept=".min,.bin">
+
+    </div>
+
+    <div class="status">
+        <span id="status">
+            Gotowy
+        </span>
+    </div>
+
+</div>
+
+<script type="module">
+
+    import Emulator from "./Emulator.js";
+
+    const canvas = document.getElementById("screen");
+    const status = document.getElementById("status");
+    const romInput = document.getElementById("rom");
+
+    const emulator = new Emulator(canvas);
+
+    /*
+     * Klawiatura
+     */
+
+    const keyboard = {
+
+        ArrowUp: "up",
+        ArrowDown: "down",
+        ArrowLeft: "left",
+        ArrowRight: "right",
+
+        z: "a",
+        Z: "a",
+
+        x: "b",
+        X: "b",
+
+        p: "power",
+        P: "power",
+
+        Enter: "menu"
+    };
+
+    function buttonDown(button) {
+
+        if (!emulator.input) return;
+
+        if (emulator.input.press) {
+            emulator.input.press(button);
+        }
+
+        document
+            .querySelector(`[data-button="${button}"]`)
+            ?.classList.add("active");
+    }
+
+    function buttonUp(button) {
+
+        if (!emulator.input) return;
+
+        if (emulator.input.release) {
+            emulator.input.release(button);
+        }
+
+        document
+            .querySelector(`[data-button="${button}"]`)
+            ?.classList.remove("active");
+    }
+
+    window.addEventListener("keydown", event => {
+
+        const button = keyboard[event.key];
+
+        if (!button) return;
+
+        event.preventDefault();
+
+        if (!event.repeat) {
+            buttonDown(button);
+        }
+    });
+
+    window.addEventListener("keyup", event => {
+
+        const button = keyboard[event.key];
+
+        if (!button) return;
+
+        event.preventDefault();
+
+        buttonUp(button);
+    });
+
+    /*
+     * Przyciski ekranowe / telefon
+     */
+
+    document
+        .querySelectorAll("[data-button]")
+        .forEach(button => {
+
+            const name =
+                button.dataset.button;
+
+            button.addEventListener(
+                "pointerdown",
+                event => {
+
+                    event.preventDefault();
+
+                    button.setPointerCapture(
+                        event.pointerId
+                    );
+
+                    buttonDown(name);
+                }
+            );
+
+            button.addEventListener(
+                "pointerup",
+                event => {
+
+                    event.preventDefault();
+
+                    buttonUp(name);
+                }
+            );
+
+            button.addEventListener(
+                "pointercancel",
+                () => {
+                    buttonUp(name);
+                }
+            );
+
+            button.addEventListener(
+                "pointerleave",
+                event => {
+
+                    if (
+                        event.buttons === 0
+                    ) {
+                        buttonUp(name);
+                    }
+                }
+            );
+        });
+
+    /*
+     * ROM
+     */
+
+    romInput.addEventListener(
+        "change",
+        async event => {
+
+            const file =
+                event.target.files[0];
+
+            if (!file) return;
+
+            try {
+
+                const buffer =
+                    await file.arrayBuffer();
+
+                const rom =
+                    new Uint8Array(buffer);
+
+                if (emulator.loadROM) {
+                    emulator.loadROM(rom);
+                }
+
+                status.textContent =
+                    `ROM: ${file.name}`;
+
+            } catch (error) {
+
+                console.error(error);
+
+                status.textContent =
+                    "Błąd wczytywania ROM";
+            }
+        }
+    );
+
+    /*
+     * Start emulatora
+     */
+
+    if (emulator.start) {
+        emulator.start();
+    }
+
+</script>
+
+</body>
+</html>
