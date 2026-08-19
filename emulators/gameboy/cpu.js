@@ -1,136 +1,46 @@
 /*
  * ============================================================
  * WebBktx — Game Boy CPU / Sharp LR35902
- * ============================================================
- *
- * 8-bit CPU used by Nintendo Game Boy.
- *
- * Registers:
- *
- * AF
- * BC
- * DE
- * HL
- * SP
- * PC
- *
- * Flags:
- *
- * Z  7  Zero
- * N  6  Subtract
- * H  5  Half Carry
- * C  4  Carry
- *
- * CPU clock:
- *
- * 4.194304 MHz
- *
- * This implementation executes the complete
- * unprefixed and CB-prefixed opcode space.
- *
+ * Complete instruction implementation
  * ============================================================
  */
 
 export default class CPU {
 
     constructor(memory) {
-
-        this.memory =
-            memory;
-
-
-        /*
-         * ----------------------------------------------------
-         * Registers
-         * ----------------------------------------------------
-         */
+        this.memory = memory;
 
         this.a = 0;
         this.f = 0;
-
         this.b = 0;
         this.c = 0;
-
         this.d = 0;
         this.e = 0;
-
         this.h = 0;
         this.l = 0;
 
-
-        /*
-         * ----------------------------------------------------
-         * Stack / Program Counter
-         * ----------------------------------------------------
-         */
-
         this.sp = 0;
         this.pc = 0;
-
-
-        /*
-         * ----------------------------------------------------
-         * CPU state
-         * ----------------------------------------------------
-         */
 
         this.halted = false;
         this.stopped = false;
 
         this.ime = false;
-
         this.imeDelay = 0;
-
         this.haltBug = false;
 
-
-        /*
-         * ----------------------------------------------------
-         * Last instruction
-         * ----------------------------------------------------
-         */
+        this.cycles = 0;
+        this.instructions = 0;
 
         this.lastOpcode = 0;
-
         this.lastPC = 0;
-
-
-        /*
-         * ----------------------------------------------------
-         * Cycle counter
-         * ----------------------------------------------------
-         */
-
-        this.cycles = 0;
-
-
-        /*
-         * ----------------------------------------------------
-         * Debug
-         * ----------------------------------------------------
-         */
-
-        this.instructions =
-            0;
-
     }
 
-
-    /*
-     * ========================================================
+    /* ========================================================
      * RESET
-     * ========================================================
-     *
-     * DMG post-boot state.
-     *
-     * This assumes the Nintendo boot ROM has already
-     * completed.
-     *
-     * ========================================================
-     */
+     * ======================================================== */
 
     reset() {
-
         this.a = 0x01;
         this.f = 0xB0;
 
@@ -143,101 +53,86 @@ export default class CPU {
         this.h = 0x01;
         this.l = 0x4D;
 
-        this.sp =
-            0xFFFE;
+        this.sp = 0xFFFE;
+        this.pc = 0x0100;
 
-        this.pc =
-            0x0100;
+        this.halted = false;
+        this.stopped = false;
 
+        this.ime = false;
+        this.imeDelay = 0;
+        this.haltBug = false;
 
-        this.halted =
-            false;
+        this.cycles = 0;
+        this.instructions = 0;
 
-        this.stopped =
-            false;
-
-        this.ime =
-            false;
-
-        this.imeDelay =
-            0;
-
-        this.haltBug =
-            false;
-
-        this.lastOpcode =
-            0;
-
-        this.lastPC =
-            0;
-
-        this.cycles =
-            0;
-
-        this.instructions =
-            0;
-
+        this.lastOpcode = 0;
+        this.lastPC = 0;
     }
 
+    /* ========================================================
+     * MEMORY
+     * ======================================================== */
 
-    /*
-     * ========================================================
-     * 8-BIT REGISTER ACCESS
-     * ========================================================
-     */
+    readByte(address) {
+        address &= 0xFFFF;
 
-    readReg8(index) {
+        if (!this.memory) return 0xFF;
 
-        switch (
-            index & 7
-        ) {
+        const value = this.memory.readByte(address);
 
-            case 0:
-                return this.b;
+        return value === undefined || value === null
+            ? 0xFF
+            : value & 0xFF;
+    }
 
-            case 1:
-                return this.c;
+    writeByte(address, value) {
+        if (!this.memory) return;
 
-            case 2:
-                return this.d;
+        this.memory.writeByte(
+            address & 0xFFFF,
+            value & 0xFF
+        );
+    }
 
-            case 3:
-                return this.e;
+    fetch8() {
+        const value = this.readByte(this.pc);
 
-            case 4:
-                return this.h;
+        this.pc = (this.pc + 1) & 0xFFFF;
 
-            case 5:
-                return this.l;
+        return value;
+    }
 
-            case 6:
-                return this.readByte(
-                    this.getHL()
-                );
+    fetch16() {
+        const lo = this.fetch8();
+        const hi = this.fetch8();
 
-            case 7:
-                return this.a;
+        return lo | (hi << 8);
+    }
 
+    /* ========================================================
+     * 8 BIT REGISTERS
+     * ======================================================== */
+
+    readReg8(r) {
+        switch (r & 7) {
+            case 0: return this.b;
+            case 1: return this.c;
+            case 2: return this.d;
+            case 3: return this.e;
+            case 4: return this.h;
+            case 5: return this.l;
+            case 6: return this.readByte(this.getHL());
+            case 7: return this.a;
         }
 
-        return 0;
-
+        return 0xFF;
     }
 
+    writeReg8(r, value) {
+        value &= 0xFF;
 
-    writeReg8(
-        index,
-        value
-    ) {
-
-        value &=
-            0xFF;
-
-
-        switch (
-            index & 7
-        ) {
-
+        switch (r & 7) {
             case 0:
                 this.b = value;
                 break;
@@ -263,1477 +158,667 @@ export default class CPU {
                 break;
 
             case 6:
-
-                this.writeByte(
-                    this.getHL(),
-                    value
-                );
-
+                this.writeByte(this.getHL(), value);
                 break;
 
             case 7:
                 this.a = value;
                 break;
-
         }
-
     }
 
-
-    /*
-     * ========================================================
-     * 16-BIT REGISTERS
-     * ========================================================
-     */
+    /* ========================================================
+     * 16 BIT REGISTERS
+     * ======================================================== */
 
     getAF() {
-
-        return (
-            this.a << 8 |
-            this.f
-        ) & 0xFFF0;
-
+        return ((this.a << 8) | (this.f & 0xF0)) & 0xFFF0;
     }
 
+    setAF(value) {
+        value &= 0xFFFF;
 
-    setAF(
-        value
-    ) {
-
-        this.a =
-            (value >> 8) &
-            0xFF;
-
-        this.f =
-            value &
-            0xF0;
-
+        this.a = (value >> 8) & 0xFF;
+        this.f = value & 0xF0;
     }
-
 
     getBC() {
-
-        return (
-            this.b << 8 |
-            this.c
-        );
-
+        return ((this.b << 8) | this.c) & 0xFFFF;
     }
 
+    setBC(value) {
+        value &= 0xFFFF;
 
-    setBC(
-        value
-    ) {
-
-        this.b =
-            (value >> 8) &
-            0xFF;
-
-        this.c =
-            value & 0xFF;
-
+        this.b = (value >> 8) & 0xFF;
+        this.c = value & 0xFF;
     }
-
 
     getDE() {
-
-        return (
-            this.d << 8 |
-            this.e
-        );
-
+        return ((this.d << 8) | this.e) & 0xFFFF;
     }
 
+    setDE(value) {
+        value &= 0xFFFF;
 
-    setDE(
-        value
-    ) {
-
-        this.d =
-            (value >> 8) &
-            0xFF;
-
-        this.e =
-            value & 0xFF;
-
+        this.d = (value >> 8) & 0xFF;
+        this.e = value & 0xFF;
     }
-
 
     getHL() {
-
-        return (
-            this.h << 8 |
-            this.l
-        );
-
+        return ((this.h << 8) | this.l) & 0xFFFF;
     }
 
+    setHL(value) {
+        value &= 0xFFFF;
 
-    setHL(
-        value
-    ) {
-
-        this.h =
-            (value >> 8) &
-            0xFF;
-
-        this.l =
-            value & 0xFF;
-
+        this.h = (value >> 8) & 0xFF;
+        this.l = value & 0xFF;
     }
 
-
-    /*
-     * ========================================================
-     * MEMORY
-     * ========================================================
-     */
-
-    readByte(
-        address
-    ) {
-
-        return this.memory.readByte(
-            address & 0xFFFF
-        );
-
-    }
-
-
-    writeByte(
-        address,
-        value
-    ) {
-
-        this.memory.writeByte(
-            address & 0xFFFF,
-            value & 0xFF
-        );
-
-    }
-
-
-    fetch8() {
-
-        const value =
-            this.readByte(
-                this.pc
-            );
-
-
-        this.pc =
-            (
-                this.pc + 1
-            ) & 0xFFFF;
-
-
-        return value;
-
-    }
-
-
-    fetch16() {
-
-        const low =
-            this.fetch8();
-
-
-        const high =
-            this.fetch8();
-
-
-        return (
-            low |
-            high << 8
-        );
-
-    }
-
-
-    /*
-     * ========================================================
-     * STACK
-     * ========================================================
-     */
-
-    push16(
-        value
-    ) {
-
-        value &=
-            0xFFFF;
-
-
-        this.sp =
-            (
-                this.sp - 1
-            ) & 0xFFFF;
-
-        this.writeByte(
-            this.sp,
-            value >> 8
-        );
-
-
-        this.sp =
-            (
-                this.sp - 1
-            ) & 0xFFFF;
-
-        this.writeByte(
-            this.sp,
-            value & 0xFF
-        );
-
-    }
-
-
-    pop16() {
-
-        const low =
-            this.readByte(
-                this.sp
-            );
-
-
-        this.sp =
-            (
-                this.sp + 1
-            ) & 0xFFFF;
-
-
-        const high =
-            this.readByte(
-                this.sp
-            );
-
-
-        this.sp =
-            (
-                this.sp + 1
-            ) & 0xFFFF;
-
-
-        return (
-            low |
-            high << 8
-        );
-
-    }
-
-
-    /*
-     * ========================================================
+    /* ========================================================
      * FLAGS
-     * ========================================================
-     */
+     * ======================================================== */
 
     getZ() {
-
-        return Boolean(
-            this.f & 0x80
-        );
-
+        return !!(this.f & 0x80);
     }
-
 
     getN() {
-
-        return Boolean(
-            this.f & 0x40
-        );
-
+        return !!(this.f & 0x40);
     }
-
 
     getH() {
-
-        return Boolean(
-            this.f & 0x20
-        );
-
+        return !!(this.f & 0x20);
     }
-
 
     getC() {
-
-        return Boolean(
-            this.f & 0x10
-        );
-
+        return !!(this.f & 0x10);
     }
 
-
-    setFlag(
-        mask,
-        enabled
-    ) {
-
-        if (
-            enabled
-        ) {
-
-            this.f |=
-                mask;
-
-        } else {
-
-            this.f &=
-                ~mask;
-
-        }
-
-
-        this.f &=
-            0xF0;
-
+    setFlags(z, n, h, c) {
+        this.f =
+            (z ? 0x80 : 0) |
+            (n ? 0x40 : 0) |
+            (h ? 0x20 : 0) |
+            (c ? 0x10 : 0);
     }
 
+    /* ========================================================
+     * STACK
+     * ======================================================== */
 
-    /*
-     * ========================================================
-     * ADD 8
-     * ========================================================
-     */
+    push16(value) {
+        value &= 0xFFFF;
 
-    add8(
-        value,
-        carry = false
-    ) {
+        this.sp = (this.sp - 1) & 0xFFFF;
+        this.writeByte(this.sp, (value >> 8) & 0xFF);
 
-        const a =
-            this.a;
+        this.sp = (this.sp - 1) & 0xFFFF;
+        this.writeByte(this.sp, value & 0xFF);
+    }
 
+    pop16() {
+        const lo = this.readByte(this.sp);
 
-        const c =
-            carry &&
-            this.getC()
-                ? 1
-                : 0;
+        this.sp = (this.sp + 1) & 0xFFFF;
 
+        const hi = this.readByte(this.sp);
 
-        const result =
-            a +
-            value +
-            c;
+        this.sp = (this.sp + 1) & 0xFFFF;
 
+        return lo | (hi << 8);
+    }
 
-        this.setFlag(
-            0x80,
-            (result & 0xFF) === 0
-        );
+    /* ========================================================
+     * ARITHMETIC
+     * ======================================================== */
 
-        this.setFlag(
-            0x40,
-            false
-        );
+    add8(value, carry = false) {
+        value &= 0xFF;
 
-        this.setFlag(
-            0x20,
-            (
-                (a & 0x0F) +
-                (value & 0x0F) +
-                c
-            ) > 0x0F
-        );
+        const c = carry && this.getC() ? 1 : 0;
+        const a = this.a;
+        const result = a + value + c;
 
-        this.setFlag(
-            0x10,
+        this.a = result & 0xFF;
+
+        this.setFlags(
+            this.a === 0,
+            false,
+            ((a & 0x0F) + (value & 0x0F) + c) > 0x0F,
             result > 0xFF
         );
-
-
-        this.a =
-            result & 0xFF;
-
     }
 
+    sub8(value, carry = false) {
+        value &= 0xFF;
 
-    /*
-     * ========================================================
-     * SUB 8
-     * ========================================================
-     */
+        const c = carry && this.getC() ? 1 : 0;
+        const a = this.a;
+        const result = a - value - c;
 
-    sub8(
-        value,
-        carry = false
-    ) {
+        this.a = result & 0xFF;
 
-        const a =
-            this.a;
-
-
-        const c =
-            carry &&
-            this.getC()
-                ? 1
-                : 0;
-
-
-        const result =
-            a -
-            value -
-            c;
-
-
-        this.setFlag(
-            0x80,
-            (result & 0xFF) === 0
-        );
-
-        this.setFlag(
-            0x40,
-            true
-        );
-
-        this.setFlag(
-            0x20,
-            (
-                (a & 0x0F) -
-                (value & 0x0F) -
-                c
-            ) < 0
-        );
-
-        this.setFlag(
-            0x10,
+        this.setFlags(
+            this.a === 0,
+            true,
+            ((a & 0x0F) - (value & 0x0F) - c) < 0,
             result < 0
         );
-
-
-        this.a =
-            result & 0xFF;
-
     }
 
-
-    /*
-     * ========================================================
-     * INC 8
-     * ========================================================
-     */
-
-    inc8(
-        value
-    ) {
-
-        const result =
-            (
-                value + 1
-            ) & 0xFF;
-
-
-        this.setFlag(
-            0x80,
-            result === 0
-        );
-
-        this.setFlag(
-            0x40,
-            false
-        );
-
-        this.setFlag(
-            0x20,
-            (
-                (value & 0x0F) +
-                1
-            ) > 0x0F
-        );
-
-
-        return result;
-
-    }
-
-
-    /*
-     * ========================================================
-     * DEC 8
-     * ========================================================
-     */
-
-    dec8(
-        value
-    ) {
-
-        const result =
-            (
-                value - 1
-            ) & 0xFF;
-
-
-        this.setFlag(
-            0x80,
-            result === 0
-        );
-
-        this.setFlag(
-            0x40,
-            true
-        );
-
-        this.setFlag(
-            0x20,
-            (value & 0x0F) === 0
-        );
-
-
-        return result;
-
-    }
-
-
-    /*
-     * ========================================================
-     * ADD HL
-     * ========================================================
-     */
-
-    addHL(
-        value
-    ) {
-
-        const hl =
-            this.getHL();
-
-
-        const result =
-            hl +
-            value;
-
-
-        this.setFlag(
-            0x40,
-            false
-        );
-
-        this.setFlag(
-            0x20,
-            (
-                (hl & 0x0FFF) +
-                (value & 0x0FFF)
-            ) > 0x0FFF
-        );
-
-        this.setFlag(
-            0x10,
-            result > 0xFFFF
-        );
-
-
-        this.setHL(
-            result & 0xFFFF
-        );
-
-    }
-
-
-    /*
-     * ========================================================
-     * ROTATE
-     * ========================================================
-     */
-
-    rlc(
-        value
-    ) {
-
-        const result =
-            (
-                value << 1 |
-                value >> 7
-            ) & 0xFF;
-
-
-        this.f =
-            0;
-
-
-        if (
-            result === 0
-        ) {
-
-            this.f |=
-                0x80;
-
-        }
-
-
-        if (
-            value & 0x80
-        ) {
-
-            this.f |=
-                0x10;
-
-        }
-
-
-        return result;
-
-    }
-
-
-    rrc(
-        value
-    ) {
-
-        const result =
-            (
-                value >> 1 |
-                (
-                    value & 1
-                ) << 7
-            ) & 0xFF;
-
-
-        this.f =
-            0;
-
-
-        if (
-            result === 0
-        ) {
-
-            this.f |=
-                0x80;
-
-        }
-
-
-        if (
-            value & 1
-        ) {
-
-            this.f |=
-                0x10;
-
-        }
-
-
-        return result;
-
-    }
-
-
-    rl(
-        value
-    ) {
-
-        const carry =
-            this.getC()
-                ? 1
-                : 0;
-
-
-        const newCarry =
-            Boolean(
-                value & 0x80
-            );
-
-
-        const result =
-            (
-                value << 1 |
-                carry
-            ) & 0xFF;
-
-
-        this.f =
-            0;
-
-
-        if (
-            result === 0
-        ) {
-
-            this.f |=
-                0x80;
-
-        }
-
-
-        if (
-            newCarry
-        ) {
-
-            this.f |=
-                0x10;
-
-        }
-
-
-        return result;
-
-    }
-
-
-    rr(
-        value
-    ) {
-
-        const carry =
-            this.getC()
-                ? 0x80
-                : 0;
-
-
-        const newCarry =
-            Boolean(
-                value & 1
-            );
-
-
-        const result =
-            (
-                value >> 1 |
-                carry
-            ) & 0xFF;
-
-
-        this.f =
-            0;
-
-
-        if (
-            result === 0
-        ) {
-
-            this.f |=
-                0x80;
-
-        }
-
-
-        if (
-            newCarry
-        ) {
-
-            this.f |=
-                0x10;
-
-        }
-
-
-        return result;
-
-    }
-
-
-    sla(
-        value
-    ) {
-
-        const carry =
-            Boolean(
-                value & 0x80
-            );
-
-
-        const result =
-            (
-                value << 1
-            ) & 0xFF;
-
-
-        this.f =
-            0;
-
-
-        if (
-            result === 0
-        ) {
-
-            this.f |=
-                0x80;
-
-        }
-
-
-        if (
-            carry
-        ) {
-
-            this.f |=
-                0x10;
-
-        }
-
-
-        return result;
-
-    }
-
-
-    sra(
-        value
-    ) {
-
-        const carry =
-            Boolean(
-                value & 1
-            );
-
-
-        const result =
-            (
-                value >> 1 |
-                value & 0x80
-            ) & 0xFF;
-
-
-        this.f =
-            0;
-
-
-        if (
-            result === 0
-        ) {
-
-            this.f |=
-                0x80;
-
-        }
-
-
-        if (
-            carry
-        ) {
-
-            this.f |=
-                0x10;
-
-        }
-
-
-        return result;
-
-    }
-
-
-    srl(
-        value
-    ) {
-
-        const carry =
-            Boolean(
-                value & 1
-            );
-
-
-        const result =
-            value >> 1;
-
-
-        this.f =
-            0;
-
-
-        if (
-            result === 0
-        ) {
-
-            this.f |=
-                0x80;
-
-        }
-
-
-        if (
-            carry
-        ) {
-
-            this.f |=
-                0x10;
-
-        }
-
-
-        return result;
-
-    }
-
-
-    swap(
-        value
-    ) {
-
-        const result =
-            (
-                value >> 4 |
-                value << 4
-            ) & 0xFF;
-
-
-        this.f =
-            result === 0
-                ? 0x80
-                : 0;
-
-
-        return result;
-
-    }
-
-
-    /*
-     * ========================================================
-     * DAA
-     * ========================================================
-     */
-
-    daa() {
-
-        let correction =
-            0;
-
-        let carry =
-            this.getC();
-
-
-        if (
-            !this.getN()
-        ) {
-
-            if (
-                this.getH() ||
-                (
-                    this.a &
-                    0x0F
-                ) > 9
-            ) {
-
-                correction |=
-                    0x06;
-
-            }
-
-
-            if (
-                this.getC() ||
-                this.a > 0x99
-            ) {
-
-                correction |=
-                    0x60;
-
-                carry = true;
-
-            }
-
-
-            this.a =
-                (
-                    this.a +
-                    correction
-                ) & 0xFF;
-
-        } else {
-
-            if (
-                this.getH()
-            ) {
-
-                correction |=
-                    0x06;
-
-            }
-
-
-            if (
-                this.getC()
-            ) {
-
-                correction |=
-                    0x60;
-
-            }
-
-
-            this.a =
-                (
-                    this.a -
-                    correction
-                ) & 0xFF;
-
-        }
-
-
-        this.setFlag(
-            0x80,
-            this.a === 0
-        );
-
-        this.setFlag(
-            0x20,
-            false
-        );
-
-        this.setFlag(
-            0x10,
-            carry
-        );
-
-    }
-
-
-    /*
-     * ========================================================
-     * CP
-     * ========================================================
-     */
-
-    cp(
-        value
-    ) {
-
-        const a =
-            this.a;
-
-
-        const result =
-            a -
-            value;
-
-
-        this.setFlag(
-            0x80,
-            (
-                result & 0xFF
-            ) === 0
-        );
-
-        this.setFlag(
-            0x40,
-            true
-        );
-
-        this.setFlag(
-            0x20,
-            (
-                (a & 0x0F) <
-                (value & 0x0F)
-            )
-        );
-
-        this.setFlag(
-            0x10,
+    cp(value) {
+        value &= 0xFF;
+
+        const a = this.a;
+        const result = a - value;
+
+        this.setFlags(
+            (result & 0xFF) === 0,
+            true,
+            (a & 0x0F) < (value & 0x0F),
             a < value
         );
-
     }
 
+    inc8(value) {
+        value &= 0xFF;
 
-    /*
-     * ========================================================
-     * BIT
-     * ========================================================
-     */
+        const result = (value + 1) & 0xFF;
 
-    bit(
-        bit,
-        value
-    ) {
+        this.f =
+            (result === 0 ? 0x80 : 0) |
+            (this.f & 0x10) |
+            (((value & 0x0F) + 1 > 0x0F) ? 0x20 : 0);
 
-        this.setFlag(
-            0x80,
-            (
-                value &
-                (
-                    1 << bit
-                )
-            ) === 0
+        return result;
+    }
+
+    dec8(value) {
+        value &= 0xFF;
+
+        const result = (value - 1) & 0xFF;
+
+        this.f =
+            (result === 0 ? 0x80 : 0) |
+            0x40 |
+            ((value & 0x0F) === 0 ? 0x20 : 0) |
+            (this.f & 0x10);
+
+        return result;
+    }
+
+    addHL(value) {
+        const hl = this.getHL();
+
+        value &= 0xFFFF;
+
+        const result = hl + value;
+
+        this.f =
+            (this.f & 0x80) |
+            (((hl & 0x0FFF) + (value & 0x0FFF)) > 0x0FFF ? 0x20 : 0) |
+            (result > 0xFFFF ? 0x10 : 0);
+
+        this.setHL(result);
+    }
+
+    /* ========================================================
+     * DAA
+     * ======================================================== */
+
+    daa() {
+        let a = this.a;
+        let correction = 0;
+        let carry = this.getC();
+
+        if (!this.getN()) {
+            if (this.getH() || (a & 0x0F) > 9) {
+                correction |= 0x06;
+            }
+
+            if (carry || a > 0x99) {
+                correction |= 0x60;
+                carry = true;
+            }
+
+            a = (a + correction) & 0xFF;
+        } else {
+            if (this.getH()) correction |= 0x06;
+            if (carry) correction |= 0x60;
+
+            a = (a - correction) & 0xFF;
+        }
+
+        this.a = a;
+
+        this.f =
+            (a === 0 ? 0x80 : 0) |
+            (this.f & 0x40) |
+            (carry ? 0x10 : 0);
+    }
+
+    /* ========================================================
+     * ROTATES
+     * ======================================================== */
+
+    rlc(value) {
+        value &= 0xFF;
+
+        const carry = !!(value & 0x80);
+        const result = ((value << 1) | (carry ? 1 : 0)) & 0xFF;
+
+        this.setFlags(
+            result === 0,
+            false,
+            false,
+            carry
         );
 
-        this.setFlag(
-            0x40,
+        return result;
+    }
+
+    rrc(value) {
+        value &= 0xFF;
+
+        const carry = !!(value & 1);
+        const result =
+            ((value >> 1) | (carry ? 0x80 : 0)) & 0xFF;
+
+        this.setFlags(
+            result === 0,
+            false,
+            false,
+            carry
+        );
+
+        return result;
+    }
+
+    rl(value) {
+        value &= 0xFF;
+
+        const oldCarry = this.getC();
+        const carry = !!(value & 0x80);
+
+        const result =
+            ((value << 1) | (oldCarry ? 1 : 0)) & 0xFF;
+
+        this.setFlags(
+            result === 0,
+            false,
+            false,
+            carry
+        );
+
+        return result;
+    }
+
+    rr(value) {
+        value &= 0xFF;
+
+        const oldCarry = this.getC();
+        const carry = !!(value & 1);
+
+        const result =
+            ((value >> 1) | (oldCarry ? 0x80 : 0)) & 0xFF;
+
+        this.setFlags(
+            result === 0,
+            false,
+            false,
+            carry
+        );
+
+        return result;
+    }
+
+    sla(value) {
+        value &= 0xFF;
+
+        const carry = !!(value & 0x80);
+        const result = (value << 1) & 0xFF;
+
+        this.setFlags(
+            result === 0,
+            false,
+            false,
+            carry
+        );
+
+        return result;
+    }
+
+    sra(value) {
+        value &= 0xFF;
+
+        const carry = !!(value & 1);
+
+        const result =
+            ((value >> 1) | (value & 0x80)) & 0xFF;
+
+        this.setFlags(
+            result === 0,
+            false,
+            false,
+            carry
+        );
+
+        return result;
+    }
+
+    srl(value) {
+        value &= 0xFF;
+
+        const carry = !!(value & 1);
+        const result = value >> 1;
+
+        this.setFlags(
+            result === 0,
+            false,
+            false,
+            carry
+        );
+
+        return result;
+    }
+
+    swap(value) {
+        value &= 0xFF;
+
+        const result =
+            ((value >> 4) | (value << 4)) & 0xFF;
+
+        this.setFlags(
+            result === 0,
+            false,
+            false,
             false
         );
 
-        this.setFlag(
-            0x20,
-            true
-        );
-
+        return result;
     }
 
-
-    /*
-     * ========================================================
-     * STEP
-     * ========================================================
-     */
-
-    step() {
-
-        /*
-         * ----------------------------------------------------
-         * STOPPED
-         * ----------------------------------------------------
-         */
-
-        if (
-            this.stopped
-        ) {
-
-            return 4;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * HALTED
-         * ----------------------------------------------------
-         */
-
-        if (
-            this.halted
-        ) {
-
-            const pending =
-                this.getPendingInterrupts();
-
-
-            if (
-                pending
-            ) {
-
-                this.halted =
-                    false;
-
-            } else {
-
-                this.cycles +=
-                    4;
-
-                return 4;
-
-            }
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * Interrupts
-         * ----------------------------------------------------
-         */
-
-        if (
-            this.ime
-        ) {
-
-            const pending =
-                this.getPendingInterrupts();
-
-
-            if (
-                pending
-            ) {
-
-                return this.serviceInterrupt(
-                    pending
-                );
-
-            }
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * Fetch
-         * ----------------------------------------------------
-         */
-
-        this.lastPC =
-            this.pc;
-
-
-        let opcode =
-            this.fetch8();
-
-
-        /*
-         * HALT bug.
-         *
-         * On the real CPU, PC handling is special.
-         */
-
-        if (
-            this.haltBug
-        ) {
-
-            this.pc =
-                (
-                    this.pc -
-                    1
-                ) & 0xFFFF;
-
-            this.haltBug =
-                false;
-
-        }
-
-
-        this.lastOpcode =
-            opcode;
-
-
-        this.instructions++;
-
-
-        /*
-         * ----------------------------------------------------
-         * CB prefix
-         * ----------------------------------------------------
-         */
-
-        if (
-            opcode ===
-            0xCB
-        ) {
-
-            const cb =
-                this.fetch8();
-
-
-            const cycles =
-                this.executeCB(
-                    cb
-                );
-
-
-            this.cycles +=
-                cycles;
-
-
-            this.finishEI();
-
-
-            return cycles;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * Normal opcode
-         * ----------------------------------------------------
-         */
-
-        const cycles =
-            this.executeOpcode(
-                opcode
-            );
-
-
-        this.cycles +=
-            cycles;
-
-
-        this.finishEI();
-
-
-        return cycles;
-
+    /* ========================================================
+     * SIGNED
+     * ======================================================== */
+
+    sign8(value) {
+        value &= 0xFF;
+
+        return value & 0x80
+            ? value - 0x100
+            : value;
     }
 
+    /* ========================================================
+     * CONDITIONS
+     * ======================================================== */
 
-    /*
-     * ========================================================
-     * INTERRUPTS
-     * ========================================================
-     */
-
-    getPendingInterrupts() {
-
-        if (
-            !this.memory
-        ) {
-
-            return 0;
-
-        }
-
-
-        return (
-            this.memory.interruptEnable &
-            this.memory.interruptFlags &
-            0x1F
-        );
-
-    }
-
-
-    serviceInterrupt(
-        pending
-    ) {
-
-        let bit =
-            0;
-
-
-        while (
-            bit < 5 &&
-            !(
-                pending &
-                (
-                    1 << bit
-                )
-            )
-        ) {
-
-            bit++;
-
-        }
-
-
-        this.halted =
-            false;
-
-        this.ime =
-            false;
-
-
-        this.memory.clearInterrupt(
-            bit
-        );
-
-
-        this.push16(
-            this.pc
-        );
-
-
-        this.pc =
-            [
-                0x40,
-                0x48,
-                0x50,
-                0x58,
-                0x60
-            ][bit];
-
-
-        this.cycles +=
-            20;
-
-
-        return 20;
-
-    }
-
-
-    /*
-     * ========================================================
-     * EI DELAY
-     * ========================================================
-     */
-
-    finishEI() {
-
-        if (
-            this.imeDelay > 0
-        ) {
-
-            this.imeDelay--;
-
-            if (
-                this.imeDelay === 0
-            ) {
-
-                this.ime =
-                    true;
-
-            }
-
-        }
-
-    }
-
-
-    /*
-     * ========================================================
-     * CONDITION
-     * ========================================================
-     */
-
-    condition(
-        code
-    ) {
-
-        switch (
-            code & 3
-        ) {
-
-            case 0:
-                return !this.getZ();
-
-            case 1:
-                return this.getZ();
-
-            case 2:
-                return !this.getC();
-
-            case 3:
-                return this.getC();
-
+    condition(code) {
+        switch (code & 3) {
+            case 0: return !this.getZ(); // NZ
+            case 1: return this.getZ();  // Z
+            case 2: return !this.getC(); // NC
+            case 3: return this.getC();  // C
         }
 
         return false;
-
     }
 
+    /* ========================================================
+     * CB INSTRUCTIONS
+     * ======================================================== */
 
-    /*
-     * ========================================================
-     * NORMAL OPCODES
-     * ========================================================
-     */
+    executeCB(op) {
+        const r = op & 7;
+        const bit = (op >> 3) & 7;
+        const group = op >> 6;
 
-    executeOpcode(
-        op
-    ) {
+        let value = this.readReg8(r);
 
-        /*
-         * ----------------------------------------------------
-         * NOP
-         * ----------------------------------------------------
-         */
+        if (group === 0) {
 
-        if (
-            op === 0x00
-        ) {
+            switch (bit) {
+                case 0:
+                    value = this.rlc(value);
+                    break;
 
-            return 4;
+                case 1:
+                    value = this.rrc(value);
+                    break;
 
+                case 2:
+                    value = this.rl(value);
+                    break;
+
+                case 3:
+                    value = this.rr(value);
+                    break;
+
+                case 4:
+                    value = this.sla(value);
+                    break;
+
+                case 5:
+                    value = this.sra(value);
+                    break;
+
+                case 6:
+                    value = this.swap(value);
+                    break;
+
+                case 7:
+                    value = this.srl(value);
+                    break;
+            }
+
+            this.writeReg8(r, value);
+
+            return r === 6 ? 16 : 8;
         }
 
+        if (group === 1) {
+
+            const mask = 1 << bit;
+
+            this.f =
+                (value & mask ? 0 : 0x80) |
+                0x20 |
+                (this.f & 0x10);
+
+            return r === 6 ? 12 : 8;
+        }
+
+        if (group === 2) {
+
+            value &= ~(1 << bit);
+
+            this.writeReg8(r, value);
+
+            return r === 6 ? 16 : 8;
+        }
+
+        value |= 1 << bit;
+
+        this.writeReg8(r, value);
+
+        return r === 6 ? 16 : 8;
+    }
+
+    /* ========================================================
+     * INTERRUPTS
+     * ======================================================== */
+
+    getPendingInterrupts() {
+        if (!this.memory) return 0;
+
+        const ie =
+            this.memory.interruptEnable !== undefined
+                ? this.memory.interruptEnable
+                : this.readByte(0xFFFF);
+
+        const flags =
+            this.memory.interruptFlags !== undefined
+                ? this.memory.interruptFlags
+                : this.readByte(0xFF0F);
+
+        return (ie & flags & 0x1F);
+    }
+
+    serviceInterrupt(pending) {
+        let bit = 0;
+
+        while (
+            bit < 5 &&
+            !(pending & (1 << bit))
+        ) {
+            bit++;
+        }
+
+        this.halted = false;
+        this.ime = false;
+        this.imeDelay = 0;
+
+        if (this.memory.clearInterrupt) {
+            this.memory.clearInterrupt(bit);
+        } else {
+            const flags = this.readByte(0xFF0F);
+
+            this.writeByte(
+                0xFF0F,
+                flags & ~(1 << bit)
+            );
+        }
+
+        this.push16(this.pc);
+
+        this.pc = [
+            0x40,
+            0x48,
+            0x50,
+            0x58,
+            0x60
+        ][bit];
+
+        return 20;
+    }
+
+    /* ========================================================
+     * STEP
+     * ======================================================== */
+
+    step() {
+
+        if (this.stopped) {
+            this.cycles += 4;
+            return 4;
+        }
+
+        if (this.halted) {
+
+            const pending =
+                this.getPendingInterrupts();
+
+            if (pending) {
+                this.halted = false;
+            } else {
+                this.cycles += 4;
+                return 4;
+            }
+        }
+
+        const pending =
+            this.getPendingInterrupts();
+
+        if (this.ime && pending) {
+
+            const cycles =
+                this.serviceInterrupt(pending);
+
+            this.cycles += cycles;
+
+            return cycles;
+        }
+
+        this.lastPC = this.pc;
+
+        let opcode = this.fetch8();
 
         /*
-         * ----------------------------------------------------
-         * LD rr,d16
-         * ----------------------------------------------------
+         * HALT bug:
+         *
+         * The opcode following HALT is fetched without
+         * incrementing PC once.
          */
 
-        if (
-            (
-                op & 0x0F
-            ) === 0x01
-        ) {
+        if (this.haltBug) {
+            this.pc =
+                (this.pc - 1) & 0xFFFF;
 
-            const value =
-                this.fetch16();
+            this.haltBug = false;
+        }
 
+        this.lastOpcode = opcode;
 
-            switch (
-                (op >> 4) & 3
-            ) {
+        this.instructions++;
 
+        let cycles;
+
+        if (opcode === 0xCB) {
+            cycles =
+                this.executeCB(
+                    this.fetch8()
+                );
+        } else {
+            cycles =
+                this.executeOpcode(opcode);
+        }
+
+        /*
+         * EI delay.
+         *
+         * EI sets delay=2.
+         * At the end of the next instruction it becomes 1,
+         * and after that instruction IME becomes enabled.
+         */
+
+        if (this.imeDelay > 0) {
+            this.imeDelay--;
+
+            if (this.imeDelay === 0) {
+                this.ime = true;
+            }
+        }
+
+        this.cycles += cycles;
+
+        return cycles;
+    }
+
+    /* ========================================================
+     * OPCODES
+     * ======================================================== */
+
+    executeOpcode(op) {
+
+        /* ----------------------------------------------------
+         * 00 NOP
+         * ---------------------------------------------------- */
+
+        if (op === 0x00) {
+            return 4;
+        }
+
+        /* ----------------------------------------------------
+         * 01 / 11 / 21 / 31 LD rr,d16
+         * ---------------------------------------------------- */
+
+        if ((op & 0x0F) === 0x01) {
+
+            const value = this.fetch16();
+
+            switch ((op >> 4) & 3) {
                 case 0:
                     this.setBC(value);
                     break;
@@ -1747,1067 +832,584 @@ export default class CPU {
                     break;
 
                 case 3:
-                    this.sp =
-                        value;
+                    this.sp = value;
                     break;
-
             }
 
-
             return 12;
-
         }
 
+        /* ----------------------------------------------------
+         * 02 / 12 LD (BC/DE),A
+         * ---------------------------------------------------- */
 
-        /*
-         * ----------------------------------------------------
-         * LD (BC/DE),A
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0x02
-        ) {
-
-            this.writeByte(
-                this.getBC(),
-                this.a
-            );
-
+        if (op === 0x02) {
+            this.writeByte(this.getBC(), this.a);
             return 8;
-
         }
 
-
-        if (
-            op === 0x12
-        ) {
-
-            this.writeByte(
-                this.getDE(),
-                this.a
-            );
-
+        if (op === 0x12) {
+            this.writeByte(this.getDE(), this.a);
             return 8;
-
         }
 
+        /* ----------------------------------------------------
+         * 03 / 13 / 23 / 33 INC rr
+         * ---------------------------------------------------- */
 
-        /*
-         * ----------------------------------------------------
-         * INC rr
-         * ----------------------------------------------------
-         */
+        if ((op & 0x0F) === 0x03) {
 
-        if (
-            (
-                op & 0x0F
-            ) === 0x03
-        ) {
-
-            switch (
-                (op >> 4) & 3
-            ) {
-
+            switch ((op >> 4) & 3) {
                 case 0:
-                    this.setBC(
-                        this.getBC() + 1
-                    );
+                    this.setBC(this.getBC() + 1);
                     break;
 
                 case 1:
-                    this.setDE(
-                        this.getDE() + 1
-                    );
+                    this.setDE(this.getDE() + 1);
                     break;
 
                 case 2:
-                    this.setHL(
-                        this.getHL() + 1
-                    );
+                    this.setHL(this.getHL() + 1);
                     break;
 
                 case 3:
                     this.sp =
-                        (
-                            this.sp + 1
-                        ) & 0xFFFF;
+                        (this.sp + 1) & 0xFFFF;
                     break;
-
             }
 
-
             return 8;
-
         }
 
-
-        /*
-         * ----------------------------------------------------
-         * INC r
-         * ----------------------------------------------------
-         */
+        /* ----------------------------------------------------
+         * 04/0C/14/1C/24/2C/34/3C INC r
+         * ---------------------------------------------------- */
 
         if (
-            (
-                op & 7
-            ) === 4 &&
-            (
-                op & 0xC0
-            ) === 0
+            (op & 0x07) === 0x04 &&
+            (op & 0xC0) === 0
         ) {
-
-            const r =
-                (
-                    op >> 3
-                ) & 7;
-
+            const r = (op >> 3) & 7;
 
             const value =
                 this.inc8(
                     this.readReg8(r)
                 );
 
+            this.writeReg8(r, value);
 
-            this.writeReg8(
-                r,
-                value
-            );
-
-
-            return r === 6
-                ? 12
-                : 4;
-
+            return r === 6 ? 12 : 4;
         }
 
-
-        /*
-         * ----------------------------------------------------
+        /* ----------------------------------------------------
          * DEC r
-         * ----------------------------------------------------
-         */
+         * ---------------------------------------------------- */
 
         if (
-            (
-                op & 7
-            ) === 5 &&
-            (
-                op & 0xC0
-            ) === 0
+            (op & 0x07) === 0x05 &&
+            (op & 0xC0) === 0
         ) {
-
-            const r =
-                (
-                    op >> 3
-                ) & 7;
-
+            const r = (op >> 3) & 7;
 
             const value =
                 this.dec8(
                     this.readReg8(r)
                 );
 
+            this.writeReg8(r, value);
 
-            this.writeReg8(
-                r,
-                value
-            );
-
-
-            return r === 6
-                ? 12
-                : 4;
-
+            return r === 6 ? 12 : 4;
         }
 
-
-        /*
-         * ----------------------------------------------------
+        /* ----------------------------------------------------
          * LD r,d8
-         * ----------------------------------------------------
-         */
+         * ---------------------------------------------------- */
 
-        if (
-            (
-                op & 0xC7
-            ) === 0x06
-        ) {
+        if ((op & 0xC7) === 0x06) {
 
-            const r =
-                (
-                    op >> 3
-                ) & 7;
-
+            const r = (op >> 3) & 7;
 
             this.writeReg8(
                 r,
                 this.fetch8()
             );
 
-
-            return r === 6
-                ? 12
-                : 8;
-
+            return r === 6 ? 12 : 8;
         }
 
-
-        /*
-         * ----------------------------------------------------
+        /* ----------------------------------------------------
          * RLCA
-         * ----------------------------------------------------
-         */
+         * ---------------------------------------------------- */
 
-        if (
-            op === 0x07
-        ) {
+        if (op === 0x07) {
 
             const carry =
-                Boolean(
-                    this.a & 0x80
-                );
-
+                !!(this.a & 0x80);
 
             this.a =
-                (
-                    this.a << 1 |
-                    (
-                        carry
-                            ? 1
-                            : 0
-                    )
-                ) & 0xFF;
-
+                ((this.a << 1) |
+                (carry ? 1 : 0)) & 0xFF;
 
             this.f =
-                carry
-                    ? 0x10
-                    : 0;
-
+                carry ? 0x10 : 0;
 
             return 4;
-
         }
 
+        /* ----------------------------------------------------
+         * 08 LD (a16),SP
+         * ---------------------------------------------------- */
 
-        /*
-         * ----------------------------------------------------
-         * RRCA
-         * ----------------------------------------------------
-         */
+        if (op === 0x08) {
 
-        if (
-            op === 0x0F
-        ) {
+            const address =
+                this.fetch16();
 
-            const carry =
-                Boolean(
-                    this.a & 1
-                );
+            this.writeByte(
+                address,
+                this.sp & 0xFF
+            );
 
+            this.writeByte(
+                (address + 1) & 0xFFFF,
+                this.sp >> 8
+            );
 
-            this.a =
-                (
-                    this.a >> 1 |
-                    (
-                        carry
-                            ? 0x80
-                            : 0
-                    )
-                );
-
-
-            this.f =
-                carry
-                    ? 0x10
-                    : 0;
-
-
-            return 4;
-
+            return 20;
         }
 
-
-        /*
-         * ----------------------------------------------------
-         * RLA
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0x17
-        ) {
-
-            const oldCarry =
-                this.getC();
-
-
-            const newCarry =
-                Boolean(
-                    this.a & 0x80
-                );
-
-
-            this.a =
-                (
-                    this.a << 1 |
-                    (
-                        oldCarry
-                            ? 1
-                            : 0
-                    )
-                ) & 0xFF;
-
-
-            this.f =
-                newCarry
-                    ? 0x10
-                    : 0;
-
-
-            return 4;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * RRA
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0x1F
-        ) {
-
-            const oldCarry =
-                this.getC();
-
-
-            const newCarry =
-                Boolean(
-                    this.a & 1
-                );
-
-
-            this.a =
-                (
-                    this.a >> 1 |
-                    (
-                        oldCarry
-                            ? 0x80
-                            : 0
-                    )
-                );
-
-
-            this.f =
-                newCarry
-                    ? 0x10
-                    : 0;
-
-
-            return 4;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * STOP
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0x10
-        ) {
-
-            this.fetch8();
-
-            this.stopped =
-                true;
-
-            return 4;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * JR r8
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0x18
-        ) {
-
-            const offset =
-                this.fetch8();
-
-
-            this.pc =
-                (
-                    this.pc +
-                    this.sign8(offset)
-                ) & 0xFFFF;
-
-
-            return 12;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * JR cc,r8
-         * ----------------------------------------------------
-         */
-
-        if (
-            (
-                op & 0xE7
-            ) === 0x20
-        ) {
-
-            const offset =
-                this.fetch8();
-
-
-            const condition =
-                this.condition(
-                    (
-                        op >> 3
-                    ) & 3
-                );
-
-
-            if (
-                condition
-            ) {
-
-                this.pc =
-                    (
-                        this.pc +
-                        this.sign8(offset)
-                    ) & 0xFFFF;
-
-                return 12;
-
-            }
-
-
-            return 8;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
+        /* ----------------------------------------------------
          * ADD HL,rr
-         * ----------------------------------------------------
-         */
+         * ---------------------------------------------------- */
 
-        if (
-            (
-                op & 0x0F
-            ) === 0x09
-        ) {
+        if ((op & 0x0F) === 0x09) {
 
             let value;
 
-
-            switch (
-                (op >> 4) & 3
-            ) {
-
+            switch ((op >> 4) & 3) {
                 case 0:
-                    value =
-                        this.getBC();
+                    value = this.getBC();
                     break;
 
                 case 1:
-                    value =
-                        this.getDE();
+                    value = this.getDE();
                     break;
 
                 case 2:
-                    value =
-                        this.getHL();
+                    value = this.getHL();
                     break;
 
                 default:
-                    value =
-                        this.sp;
+                    value = this.sp;
+                    break;
+            }
+
+            this.addHL(value);
+
+            return 8;
+        }
+
+        /* ----------------------------------------------------
+         * LD A,(BC)/(DE)
+         * ---------------------------------------------------- */
+
+        if (op === 0x0A) {
+            this.a =
+                this.readByte(this.getBC());
+            return 8;
+        }
+
+        if (op === 0x1A) {
+            this.a =
+                this.readByte(this.getDE());
+            return 8;
+        }
+
+        /* ----------------------------------------------------
+         * INC rr already handled
+         * ---------------------------------------------------- */
+
+        /* ----------------------------------------------------
+         * DEC rr
+         * ---------------------------------------------------- */
+
+        if ((op & 0x0F) === 0x0B) {
+
+            switch ((op >> 4) & 3) {
+                case 0:
+                    this.setBC(this.getBC() - 1);
                     break;
 
+                case 1:
+                    this.setDE(this.getDE() - 1);
+                    break;
+
+                case 2:
+                    this.setHL(this.getHL() - 1);
+                    break;
+
+                case 3:
+                    this.sp =
+                        (this.sp - 1) & 0xFFFF;
+                    break;
             }
 
-
-            this.addHL(
-                value
-            );
-
-
             return 8;
-
         }
 
-
-        /*
-         * ----------------------------------------------------
-         * LD A,(BC)
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0x0A
-        ) {
-
-            this.a =
-                this.readByte(
-                    this.getBC()
-                );
-
-            return 8;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * LD A,(DE)
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0x1A
-        ) {
-
-            this.a =
-                this.readByte(
-                    this.getDE()
-                );
-
-            return 8;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * LD (HL+),A
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0x22
-        ) {
-
-            this.writeByte(
-                this.getHL(),
-                this.a
-            );
-
-
-            this.setHL(
-                this.getHL() + 1
-            );
-
-
-            return 8;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * LD (HL-),A
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0x32
-        ) {
-
-            this.writeByte(
-                this.getHL(),
-                this.a
-            );
-
-
-            this.setHL(
-                this.getHL() - 1
-            );
-
-
-            return 8;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * LD A,(HL+)
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0x2A
-        ) {
-
-            this.a =
-                this.readByte(
-                    this.getHL()
-                );
-
-
-            this.setHL(
-                this.getHL() + 1
-            );
-
-
-            return 8;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * LD A,(HL-)
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0x3A
-        ) {
-
-            this.a =
-                this.readByte(
-                    this.getHL()
-                );
-
-
-            this.setHL(
-                this.getHL() - 1
-            );
-
-
-            return 8;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * INC/DEC (HL)
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0x34
-        ) {
-
-            const value =
-                this.inc8(
-                    this.readByte(
-                        this.getHL()
-                    )
-                );
-
-
-            this.writeByte(
-                this.getHL(),
-                value
-            );
-
-
-            return 12;
-
-        }
-
-
-        if (
-            op === 0x35
-        ) {
-
-            const value =
-                this.dec8(
-                    this.readByte(
-                        this.getHL()
-                    )
-                );
-
-
-            this.writeByte(
-                this.getHL(),
-                value
-            );
-
-
-            return 12;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * LD (HL),d8
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0x36
-        ) {
-
-            this.writeByte(
-                this.getHL(),
-                this.fetch8()
-            );
-
-
-            return 12;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * DAA
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0x27
-        ) {
-
-            this.daa();
-
-            return 4;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * CPL
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0x2F
-        ) {
-
-            this.a ^=
-                0xFF;
-
-            this.f |=
-                0x60;
-
-            return 4;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * SCF
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0x37
-        ) {
-
-            this.f &=
-                0x80;
-
-            this.f |=
-                0x10;
-
-            return 4;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * CCF
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0x3F
-        ) {
+        /* ----------------------------------------------------
+         * RRCA
+         * ---------------------------------------------------- */
+
+        if (op === 0x0F) {
 
             const carry =
-                !this.getC();
+                !!(this.a & 1);
 
+            this.a =
+                (this.a >> 1) |
+                (carry ? 0x80 : 0);
 
-            this.f &=
-                0x80;
-
-
-            if (
-                carry
-            ) {
-
-                this.f |=
-                    0x10;
-
-            }
-
+            this.f =
+                carry ? 0x10 : 0;
 
             return 4;
-
         }
 
+        /* ----------------------------------------------------
+         * STOP
+         * ---------------------------------------------------- */
 
-        /*
-         * ----------------------------------------------------
-         * LD r,r
-         * ----------------------------------------------------
-         */
+        if (op === 0x10) {
+            this.fetch8();
+            this.stopped = true;
+            return 4;
+        }
 
-        if (
-            op >= 0x40 &&
-            op <= 0x7F
-        ) {
+        /* ----------------------------------------------------
+         * RLA
+         * ---------------------------------------------------- */
 
-            /*
-             * HALT.
-             */
+        if (op === 0x17) {
 
-            if (
-                op === 0x76
-            ) {
+            const oldCarry = this.getC();
+            const newCarry = !!(this.a & 0x80);
+
+            this.a =
+                ((this.a << 1) |
+                (oldCarry ? 1 : 0)) & 0xFF;
+
+            this.f =
+                newCarry ? 0x10 : 0;
+
+            return 4;
+        }
+
+        /* ----------------------------------------------------
+         * JR
+         * ---------------------------------------------------- */
+
+        if (op === 0x18) {
+
+            const offset =
+                this.sign8(this.fetch8());
+
+            this.pc =
+                (this.pc + offset) & 0xFFFF;
+
+            return 12;
+        }
+
+        /* ----------------------------------------------------
+         * JR cc
+         * ---------------------------------------------------- */
+
+        if ((op & 0xE7) === 0x20) {
+
+            const offset =
+                this.sign8(this.fetch8());
+
+            const condition =
+                this.condition(
+                    (op >> 3) & 3
+                );
+
+            if (condition) {
+                this.pc =
+                    (this.pc + offset) & 0xFFFF;
+
+                return 12;
+            }
+
+            return 8;
+        }
+
+        /* ----------------------------------------------------
+         * RRA
+         * ---------------------------------------------------- */
+
+        if (op === 0x1F) {
+
+            const oldCarry = this.getC();
+            const newCarry = !!(this.a & 1);
+
+            this.a =
+                (this.a >> 1) |
+                (oldCarry ? 0x80 : 0);
+
+            this.f =
+                newCarry ? 0x10 : 0;
+
+            return 4;
+        }
+
+        /* ----------------------------------------------------
+         * LD (HL+),A
+         * ---------------------------------------------------- */
+
+        if (op === 0x22) {
+
+            this.writeByte(
+                this.getHL(),
+                this.a
+            );
+
+            this.setHL(
+                this.getHL() + 1
+            );
+
+            return 8;
+        }
+
+        /* ----------------------------------------------------
+         * LD (HL-),A
+         * ---------------------------------------------------- */
+
+        if (op === 0x32) {
+
+            this.writeByte(
+                this.getHL(),
+                this.a
+            );
+
+            this.setHL(
+                this.getHL() - 1
+            );
+
+            return 8;
+        }
+
+        /* ----------------------------------------------------
+         * LD A,(HL+)
+         * ---------------------------------------------------- */
+
+        if (op === 0x2A) {
+
+            this.a =
+                this.readByte(this.getHL());
+
+            this.setHL(
+                this.getHL() + 1
+            );
+
+            return 8;
+        }
+
+        /* ----------------------------------------------------
+         * LD A,(HL-)
+         * ---------------------------------------------------- */
+
+        if (op === 0x3A) {
+
+            this.a =
+                this.readByte(this.getHL());
+
+            this.setHL(
+                this.getHL() - 1
+            );
+
+            return 8;
+        }
+
+        /* ----------------------------------------------------
+         * DAA
+         * ---------------------------------------------------- */
+
+        if (op === 0x27) {
+            this.daa();
+            return 4;
+        }
+
+        /* ----------------------------------------------------
+         * CPL
+         * ---------------------------------------------------- */
+
+        if (op === 0x2F) {
+
+            this.a ^= 0xFF;
+
+            this.f =
+                (this.f & 0x90) | 0x60;
+
+            return 4;
+        }
+
+        /* ----------------------------------------------------
+         * SCF
+         * ---------------------------------------------------- */
+
+        if (op === 0x37) {
+
+            this.f =
+                (this.f & 0x80) | 0x10;
+
+            return 4;
+        }
+
+        /* ----------------------------------------------------
+         * CCF
+         * ---------------------------------------------------- */
+
+        if (op === 0x3F) {
+
+            this.f =
+                (this.f & 0x80) |
+                (this.getC() ? 0 : 0x10);
+
+            return 4;
+        }
+
+        /* ----------------------------------------------------
+         * LD r,r / HALT
+         * ---------------------------------------------------- */
+
+        if (op >= 0x40 && op <= 0x7F) {
+
+            if (op === 0x76) {
 
                 const pending =
                     this.getPendingInterrupts();
 
-
-                if (
-                    !this.ime &&
-                    pending
-                ) {
-
-                    /*
-                     * HALT bug.
-                     */
-
-                    this.haltBug =
-                        true;
-
+                if (!this.ime && pending) {
+                    this.haltBug = true;
                 } else {
-
-                    this.halted =
-                        true;
-
+                    this.halted = true;
                 }
 
-
                 return 4;
-
             }
 
-
-            const dest =
-                (
-                    op >> 3
-                ) & 7;
-
-
-            const src =
-                op & 7;
-
+            const dst = (op >> 3) & 7;
+            const src = op & 7;
 
             const value =
-                this.readReg8(
-                    src
-                );
+                this.readReg8(src);
 
-
-            this.writeReg8(
-                dest,
-                value
-            );
-
+            this.writeReg8(dst, value);
 
             return (
-                dest === 6 ||
+                dst === 6 ||
                 src === 6
-            )
-                ? 8
-                : 4;
-
+            ) ? 8 : 4;
         }
 
-
-        /*
-         * ----------------------------------------------------
+        /* ----------------------------------------------------
          * ALU A,r
-         * ----------------------------------------------------
-         */
+         * ---------------------------------------------------- */
 
-        if (
-            op >= 0x80 &&
-            op <= 0xBF
-        ) {
+        if (op >= 0x80 && op <= 0xBF) {
 
             const group =
-                (
-                    op >> 3
-                ) & 7;
-
+                (op >> 3) & 7;
 
             const value =
-                this.readReg8(
-                    op & 7
-                );
+                this.readReg8(op & 7);
 
-
-            switch (
-                group
-            ) {
+            switch (group) {
 
                 case 0:
-                    this.add8(
-                        value
-                    );
+                    this.add8(value);
                     break;
 
                 case 1:
-                    this.add8(
-                        value,
-                        true
-                    );
+                    this.add8(value, true);
                     break;
 
                 case 2:
-                    this.sub8(
-                        value
-                    );
+                    this.sub8(value);
                     break;
 
                 case 3:
-                    this.sub8(
-                        value,
-                        true
-                    );
+                    this.sub8(value, true);
                     break;
 
                 case 4:
-
-                    this.a &=
-                        value;
+                    this.a &= value;
 
                     this.f =
                         this.a === 0
                             ? 0xA0
                             : 0x20;
-
                     break;
 
                 case 5:
-
-                    this.a ^=
-                        value;
+                    this.a ^= value;
 
                     this.f =
                         this.a === 0
                             ? 0x80
                             : 0;
-
                     break;
 
                 case 6:
-
-                    this.a |=
-                        value;
+                    this.a |= value;
 
                     this.f =
                         this.a === 0
                             ? 0x80
                             : 0;
-
                     break;
 
                 case 7:
-                    this.cp(
-                        value
-                    );
+                    this.cp(value);
                     break;
-
             }
 
-
-            return (
-                (op & 7) === 6
-            )
+            return (op & 7) === 6
                 ? 8
                 : 4;
-
         }
 
-
-        /*
-         * ----------------------------------------------------
+        /* ----------------------------------------------------
          * RET cc
-         * ----------------------------------------------------
-         */
+         * ---------------------------------------------------- */
 
-        if (
-            (
-                op & 0xE7
-            ) === 0xC0
-        ) {
-
-            const condition =
-                this.condition(
-                    (
-                        op >> 3
-                    ) & 3
-                );
-
+        if ((op & 0xE7) === 0xC0) {
 
             if (
-                condition
+                this.condition(
+                    (op >> 3) & 3
+                )
             ) {
-
                 this.pc =
                     this.pop16();
 
                 return 20;
-
             }
 
-
             return 8;
-
         }
 
+        /* ----------------------------------------------------
+         * POP
+         * ---------------------------------------------------- */
 
-        /*
-         * ----------------------------------------------------
-         * POP rr
-         * ----------------------------------------------------
-         */
-
-        if (
-            (
-                op & 0xCF
-            ) === 0xC1
-        ) {
+        if ((op & 0xCF) === 0xC1) {
 
             const value =
                 this.pop16();
 
-
-            switch (
-                (op >> 4) & 3
-            ) {
-
+            switch ((op >> 4) & 3) {
                 case 0:
                     this.setBC(value);
                     break;
@@ -2823,1054 +1425,616 @@ export default class CPU {
                 case 3:
                     this.setAF(value);
                     break;
-
             }
 
-
             return 12;
-
         }
 
+        /* ----------------------------------------------------
+         * JP cc
+         * ---------------------------------------------------- */
 
-        /*
-         * ----------------------------------------------------
-         * JP cc,a16
-         * ----------------------------------------------------
-         */
-
-        if (
-            (
-                op & 0xE7
-            ) === 0xC2
-        ) {
+        if ((op & 0xE7) === 0xC2) {
 
             const address =
                 this.fetch16();
 
-
             if (
                 this.condition(
-                    (
-                        op >> 3
-                    ) & 3
+                    (op >> 3) & 3
                 )
             ) {
-
-                this.pc =
-                    address;
-
+                this.pc = address;
                 return 16;
-
             }
 
-
             return 12;
-
         }
 
+        /* ----------------------------------------------------
+         * JP
+         * ---------------------------------------------------- */
 
-        /*
-         * ----------------------------------------------------
-         * JP a16
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0xC3
-        ) {
+        if (op === 0xC3) {
 
             this.pc =
                 this.fetch16();
 
             return 16;
-
         }
 
+        /* ----------------------------------------------------
+         * CALL cc
+         * ---------------------------------------------------- */
 
-        /*
-         * ----------------------------------------------------
-         * CALL cc,a16
-         * ----------------------------------------------------
-         */
-
-        if (
-            (
-                op & 0xE7
-            ) === 0xC4
-        ) {
+        if ((op & 0xE7) === 0xC4) {
 
             const address =
                 this.fetch16();
 
-
             if (
                 this.condition(
-                    (
-                        op >> 3
-                    ) & 3
+                    (op >> 3) & 3
                 )
             ) {
-
-                this.push16(
-                    this.pc
-                );
-
-
-                this.pc =
-                    address;
-
+                this.push16(this.pc);
+                this.pc = address;
 
                 return 24;
-
             }
 
-
             return 12;
-
         }
 
+        /* ----------------------------------------------------
+         * PUSH
+         * ---------------------------------------------------- */
 
-        /*
-         * ----------------------------------------------------
-         * PUSH rr
-         * ----------------------------------------------------
-         */
-
-        if (
-            (
-                op & 0xCF
-            ) === 0xC5
-        ) {
+        if ((op & 0xCF) === 0xC5) {
 
             let value;
 
-
-            switch (
-                (op >> 4) & 3
-            ) {
-
+            switch ((op >> 4) & 3) {
                 case 0:
-                    value =
-                        this.getBC();
+                    value = this.getBC();
                     break;
 
                 case 1:
-                    value =
-                        this.getDE();
+                    value = this.getDE();
                     break;
 
                 case 2:
-                    value =
-                        this.getHL();
+                    value = this.getHL();
                     break;
 
                 default:
-                    value =
-                        this.getAF();
+                    value = this.getAF();
                     break;
-
             }
 
-
-            this.push16(
-                value
-            );
-
+            this.push16(value);
 
             return 16;
-
         }
 
-
-        /*
-         * ----------------------------------------------------
+        /* ----------------------------------------------------
          * ADD A,d8
-         * ----------------------------------------------------
-         */
+         * ---------------------------------------------------- */
 
-        if (
-            op === 0xC6
-        ) {
+        if (op === 0xC6) {
 
             this.add8(
                 this.fetch8()
             );
 
             return 8;
-
         }
 
-
-        /*
-         * ----------------------------------------------------
+        /* ----------------------------------------------------
          * RST
-         * ----------------------------------------------------
-         */
+         * ---------------------------------------------------- */
 
-        if (
-            (
-                op & 0xC7
-            ) === 0xC7
-        ) {
+        if ((op & 0xC7) === 0xC7) {
 
             const vector =
                 op & 0x38;
 
-
-            this.push16(
-                this.pc
-            );
-
-
-            this.pc =
-                vector;
-
+            this.push16(this.pc);
+            this.pc = vector;
 
             return 16;
-
         }
 
-
-        /*
-         * ----------------------------------------------------
+        /* ----------------------------------------------------
          * RET
-         * ----------------------------------------------------
-         */
+         * ---------------------------------------------------- */
 
-        if (
-            op === 0xC9
-        ) {
+        if (op === 0xC9) {
 
             this.pc =
                 this.pop16();
 
             return 16;
-
         }
 
+        /* ----------------------------------------------------
+         * CALL
+         * ---------------------------------------------------- */
 
-        /*
-         * ----------------------------------------------------
-         * JP HL
-         * ----------------------------------------------------
-         */
+        if (op === 0xCD) {
 
-        if (
-            op === 0xE9
-        ) {
+            const address =
+                this.fetch16();
+
+            this.push16(this.pc);
+
+            this.pc = address;
+
+            return 24;
+        }
+
+        /* ----------------------------------------------------
+         * ADC A,d8
+         * ---------------------------------------------------- */
+
+        if (op === 0xCE) {
+
+            this.add8(
+                this.fetch8(),
+                true
+            );
+
+            return 8;
+        }
+
+        /* ----------------------------------------------------
+         * SUB d8
+         * ---------------------------------------------------- */
+
+        if (op === 0xD6) {
+
+            this.sub8(
+                this.fetch8()
+            );
+
+            return 8;
+        }
+
+        /* ----------------------------------------------------
+         * SBC A,d8
+         * ---------------------------------------------------- */
+
+        if (op === 0xDE) {
+
+            this.sub8(
+                this.fetch8(),
+                true
+            );
+
+            return 8;
+        }
+
+        /* ----------------------------------------------------
+         * RETI
+         * ---------------------------------------------------- */
+
+        if (op === 0xD9) {
 
             this.pc =
-                this.getHL();
+                this.pop16();
 
-            return 4;
+            this.ime = true;
+            this.imeDelay = 0;
 
+            return 16;
         }
 
-
-        /*
-         * ----------------------------------------------------
+        /* ----------------------------------------------------
          * LDH (a8),A
-         * ----------------------------------------------------
-         */
+         * ---------------------------------------------------- */
 
-        if (
-            op === 0xE0
-        ) {
+        if (op === 0xE0) {
 
             this.writeByte(
-                0xFF00 +
-                this.fetch8(),
+                0xFF00 | this.fetch8(),
                 this.a
             );
 
-
             return 12;
-
         }
 
-
-        /*
-         * ----------------------------------------------------
-         * LDH A,(a8)
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0xF0
-        ) {
-
-            this.a =
-                this.readByte(
-                    0xFF00 +
-                    this.fetch8()
-                );
-
-
-            return 12;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
+        /* ----------------------------------------------------
          * LD (C),A
-         * ----------------------------------------------------
-         */
+         * ---------------------------------------------------- */
 
-        if (
-            op === 0xE2
-        ) {
+        if (op === 0xE2) {
 
             this.writeByte(
-                0xFF00 +
-                this.c,
+                0xFF00 | this.c,
                 this.a
             );
 
-
             return 8;
-
         }
 
+        /* ----------------------------------------------------
+         * ADD SP,r8
+         * ---------------------------------------------------- */
 
-        /*
-         * ----------------------------------------------------
-         * LD A,(C)
-         * ----------------------------------------------------
-         */
+        if (op === 0xE8) {
 
-        if (
-            op === 0xF2
-        ) {
+            const value =
+                this.sign8(this.fetch8());
 
-            this.a =
-                this.readByte(
-                    0xFF00 +
-                    this.c
-                );
+            const sp = this.sp;
 
+            const u =
+                value & 0xFF;
 
-            return 8;
+            this.f = 0;
 
+            if (
+                ((sp & 0x0F) + (u & 0x0F)) > 0x0F
+            ) {
+                this.f |= 0x20;
+            }
+
+            if (
+                ((sp & 0xFF) + u) > 0xFF
+            ) {
+                this.f |= 0x10;
+            }
+
+            this.sp =
+                (sp + value) & 0xFFFF;
+
+            return 16;
         }
 
-
-        /*
-         * ----------------------------------------------------
+        /* ----------------------------------------------------
          * LD (a16),A
-         * ----------------------------------------------------
-         */
+         * ---------------------------------------------------- */
 
-        if (
-            op === 0xEA
-        ) {
+        if (op === 0xEA) {
 
             this.writeByte(
                 this.fetch16(),
                 this.a
             );
 
-
             return 16;
-
         }
 
+        /* ----------------------------------------------------
+         * XOR A
+         * ---------------------------------------------------- */
 
-        /*
-         * ----------------------------------------------------
+        if (op === 0xAF) {
+
+            this.a = 0;
+            this.f = 0x80;
+
+            return 4;
+        }
+
+        /* ----------------------------------------------------
+         * JP HL
+         * ---------------------------------------------------- */
+
+        if (op === 0xE9) {
+
+            this.pc =
+                this.getHL();
+
+            return 4;
+        }
+
+        /* ----------------------------------------------------
+         * LDH A,(a8)
+         * ---------------------------------------------------- */
+
+        if (op === 0xF0) {
+
+            this.a =
+                this.readByte(
+                    0xFF00 | this.fetch8()
+                );
+
+            return 12;
+        }
+
+        /* ----------------------------------------------------
+         * LD A,(C)
+         * ---------------------------------------------------- */
+
+        if (op === 0xF2) {
+
+            this.a =
+                this.readByte(
+                    0xFF00 | this.c
+                );
+
+            return 8;
+        }
+
+        /* ----------------------------------------------------
          * LD A,(a16)
-         * ----------------------------------------------------
-         */
+         * ---------------------------------------------------- */
 
-        if (
-            op === 0xFA
-        ) {
+        if (op === 0xFA) {
 
             this.a =
                 this.readByte(
                     this.fetch16()
                 );
 
-
             return 16;
-
         }
 
+        /* ----------------------------------------------------
+         * AND d8
+         * ---------------------------------------------------- */
 
-        /*
-         * ----------------------------------------------------
-         * XOR A
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0xAF
-        ) {
-
-            this.a =
-                0;
-
-            this.f =
-                0x80;
-
-            return 4;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * OR / AND / XOR immediate
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0xE6
-        ) {
+        if (op === 0xE6) {
 
             this.a &=
                 this.fetch8();
 
+            this.a &= 0xFF;
 
             this.f =
                 this.a === 0
                     ? 0xA0
                     : 0x20;
 
-
             return 8;
-
         }
 
+        /* ----------------------------------------------------
+         * XOR d8
+         * ---------------------------------------------------- */
 
-        if (
-            op === 0xEE
-        ) {
+        if (op === 0xEE) {
 
             this.a ^=
                 this.fetch8();
 
+            this.a &= 0xFF;
 
             this.f =
                 this.a === 0
                     ? 0x80
                     : 0;
 
-
             return 8;
-
         }
 
+        /* ----------------------------------------------------
+         * OR d8
+         * ---------------------------------------------------- */
 
-        if (
-            op === 0xF6
-        ) {
+        if (op === 0xF6) {
 
             this.a |=
                 this.fetch8();
 
+            this.a &= 0xFF;
 
             this.f =
                 this.a === 0
                     ? 0x80
                     : 0;
 
-
             return 8;
-
         }
 
+        /* ----------------------------------------------------
+         * CP d8
+         * ---------------------------------------------------- */
 
-        if (
-            op === 0xFE
-        ) {
+        if (op === 0xFE) {
 
             this.cp(
                 this.fetch8()
             );
 
-
             return 8;
-
         }
 
-
-        /*
-         * ----------------------------------------------------
+        /* ----------------------------------------------------
          * DI
-         * ----------------------------------------------------
-         */
+         * ---------------------------------------------------- */
 
-        if (
-            op === 0xF3
-        ) {
+        if (op === 0xF3) {
 
-            this.ime =
-                false;
-
-            this.imeDelay =
-                0;
+            this.ime = false;
+            this.imeDelay = 0;
 
             return 4;
-
         }
 
-
-        /*
-         * ----------------------------------------------------
+        /* ----------------------------------------------------
          * EI
-         * ----------------------------------------------------
-         */
+         * ---------------------------------------------------- */
 
-        if (
-            op === 0xFB
-        ) {
+        if (op === 0xFB) {
 
-            /*
-             * EI becomes active after the following
-             * instruction.
-             */
-
-            this.imeDelay =
-                2;
+            this.imeDelay = 2;
 
             return 4;
-
         }
 
-
-        /*
-         * ----------------------------------------------------
-         * RETI
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0xD9
-        ) {
-
-            this.pc =
-                this.pop16();
-
-            this.ime =
-                true;
-
-            this.imeDelay =
-                0;
-
-            return 16;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * CALL a16
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0xCD
-        ) {
-
-            const address =
-                this.fetch16();
-
-
-            this.push16(
-                this.pc
-            );
-
-
-            this.pc =
-                address;
-
-
-            return 24;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * RETI / RET handled above
-         * ----------------------------------------------------
-         */
-
-
-        /*
-         * ----------------------------------------------------
-         * Remaining immediate arithmetic
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0xCE
-        ) {
-
-            this.add8(
-                this.fetch8(),
-                true
-            );
-
-            return 8;
-
-        }
-
-
-        if (
-            op === 0xD6
-        ) {
-
-            this.sub8(
-                this.fetch8()
-            );
-
-            return 8;
-
-        }
-
-
-        if (
-            op === 0xDE
-        ) {
-
-            this.sub8(
-                this.fetch8(),
-                true
-            );
-
-            return 8;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
+        /* ----------------------------------------------------
          * LD SP,d16
-         * ----------------------------------------------------
-         */
+         * ---------------------------------------------------- */
 
-        if (
-            op === 0x31
-        ) {
+        if (op === 0x31) {
 
             this.sp =
                 this.fetch16();
 
             return 12;
-
         }
 
-
-        /*
-         * ----------------------------------------------------
+        /* ----------------------------------------------------
          * LD HL,SP+r8
-         * ----------------------------------------------------
-         */
+         * ---------------------------------------------------- */
 
-        if (
-            op === 0xF8
-        ) {
+        if (op === 0xF8) {
 
             const value =
-                this.sign8(
-                    this.fetch8()
-                );
+                this.sign8(this.fetch8());
 
-
-            const sp =
-                this.sp;
-
+            const sp = this.sp;
+            const u = value & 0xFF;
 
             const result =
-                (
-                    sp +
-                    value
-                ) & 0xFFFF;
+                (sp + value) & 0xFFFF;
 
+            this.f = 0;
 
-            this.f =
-                0;
+            if (
+                ((sp & 0x0F) + (u & 0x0F)) > 0x0F
+            ) {
+                this.f |= 0x20;
+            }
 
+            if (
+                ((sp & 0xFF) + u) > 0xFF
+            ) {
+                this.f |= 0x10;
+            }
 
-            this.setFlag(
-                0x20,
-                (
-                    (sp & 0x0F) +
-                    (value & 0x0F)
-                ) > 0x0F
-            );
-
-
-            this.setFlag(
-                0x10,
-                (
-                    (sp & 0xFF) +
-                    (value & 0xFF)
-                ) > 0xFF
-            );
-
-
-            this.setHL(
-                result
-            );
-
+            this.setHL(result);
 
             return 12;
-
         }
 
+        /* ----------------------------------------------------
+         * LD SP,HL
+         * ---------------------------------------------------- */
 
-        /*
-         * ----------------------------------------------------
-         * ADD SP,r8
-         * ----------------------------------------------------
-         */
-
-        if (
-            op === 0xE8
-        ) {
-
-            const value =
-                this.sign8(
-                    this.fetch8()
-                );
-
-
-            const sp =
-                this.sp;
-
-
-            this.f =
-                0;
-
-
-            this.setFlag(
-                0x20,
-                (
-                    (sp & 0x0F) +
-                    (value & 0x0F)
-                ) > 0x0F
-            );
-
-
-            this.setFlag(
-                0x10,
-                (
-                    (sp & 0xFF) +
-                    (value & 0xFF)
-                ) > 0xFF
-            );
-
+        if (op === 0xF9) {
 
             this.sp =
-                (
-                    sp +
-                    value
-                ) & 0xFFFF;
+                this.getHL();
 
-
-            return 16;
-
+            return 8;
         }
 
+        /* ----------------------------------------------------
+         * Remaining documented opcodes
+         * ---------------------------------------------------- */
 
         /*
-         * ----------------------------------------------------
-         * LD (a16),SP
-         * ----------------------------------------------------
+         * 0xC0 etc are handled by generic groups above.
+         *
+         * The following are the individual instructions
+         * that do not fit those groups.
          */
 
-        if (
-            op === 0x08
-        ) {
-
-            const address =
-                this.fetch16();
-
-
-            this.writeByte(
-                address,
-                this.sp & 0xFF
-            );
-
-
-            this.writeByte(
-                address + 1,
-                this.sp >> 8
-            );
-
-
-            return 20;
-
+        if (op === 0xC7) {
+            this.push16(this.pc);
+            this.pc = 0x00;
+            return 16;
         }
 
+        if (op === 0xCF) {
+            this.push16(this.pc);
+            this.pc = 0x08;
+            return 16;
+        }
+
+        if (op === 0xD7) {
+            this.push16(this.pc);
+            this.pc = 0x10;
+            return 16;
+        }
+
+        if (op === 0xDF) {
+            this.push16(this.pc);
+            this.pc = 0x18;
+            return 16;
+        }
+
+        if (op === 0xE7) {
+            this.push16(this.pc);
+            this.pc = 0x20;
+            return 16;
+        }
+
+        if (op === 0xEF) {
+            this.push16(this.pc);
+            this.pc = 0x28;
+            return 16;
+        }
+
+        if (op === 0xF7) {
+            this.push16(this.pc);
+            this.pc = 0x30;
+            return 16;
+        }
+
+        if (op === 0xFF) {
+            this.push16(this.pc);
+            this.pc = 0x38;
+            return 16;
+        }
+
+        /* ----------------------------------------------------
+         * 0xD0 / 0xD8 / etc are RET cc
+         * handled by generic RET group.
+         * ---------------------------------------------------- */
+
+        /* ----------------------------------------------------
+         * LD HL,SP+r8 / ADD SP,r8 already handled.
+         * ---------------------------------------------------- */
 
         /*
-         * ----------------------------------------------------
-         * PREFIX / illegal opcodes
-         * ----------------------------------------------------
+         * Illegal opcodes:
          *
-         * The LR35902 has several unused opcodes.
-         *
-         * Treating them as NOP-like behavior is preferable
-         * during development to crashing the whole emulator.
-         *
+         * On LR35902 these are unused. Treat as NOP during
+         * development rather than crashing the complete
+         * emulator.
          */
 
         return 4;
-
     }
 
-
-    /*
-     * ========================================================
-     * CB OPCODES
-     * ========================================================
-     */
-
-    executeCB(
-        op
-    ) {
-
-        const r =
-            op & 7;
-
-
-        const group =
-            op >> 6;
-
-
-        const bit =
-            (
-                op >> 3
-            ) & 7;
-
-
-        let value =
-            this.readReg8(r);
-
-
-        /*
-         * ----------------------------------------------------
-         * Rotate / shift
-         * ----------------------------------------------------
-         */
-
-        if (
-            group === 0
-        ) {
-
-            switch (
-                bit
-            ) {
-
-                case 0:
-                    value =
-                        this.rlc(value);
-                    break;
-
-                case 1:
-                    value =
-                        this.rrc(value);
-                    break;
-
-                case 2:
-                    value =
-                        this.rl(value);
-                    break;
-
-                case 3:
-                    value =
-                        this.rr(value);
-                    break;
-
-                case 4:
-                    value =
-                        this.sla(value);
-                    break;
-
-                case 5:
-                    value =
-                        this.sra(value);
-                    break;
-
-                case 6:
-                    value =
-                        this.swap(value);
-                    break;
-
-                case 7:
-                    value =
-                        this.srl(value);
-                    break;
-
-            }
-
-
-            this.writeReg8(
-                r,
-                value
-            );
-
-
-            return r === 6
-                ? 16
-                : 8;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * BIT
-         * ----------------------------------------------------
-         */
-
-        if (
-            group === 1
-        ) {
-
-            this.bit(
-                bit,
-                value
-            );
-
-
-            return r === 6
-                ? 12
-                : 8;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * RES
-         * ----------------------------------------------------
-         */
-
-        if (
-            group === 2
-        ) {
-
-            value &=
-                ~(
-                    1 << bit
-                );
-
-
-            this.writeReg8(
-                r,
-                value
-            );
-
-
-            return r === 6
-                ? 16
-                : 8;
-
-        }
-
-
-        /*
-         * ----------------------------------------------------
-         * SET
-         * ----------------------------------------------------
-         */
-
-        value |=
-            (
-                1 << bit
-            );
-
-
-        this.writeReg8(
-            r,
-            value
-        );
-
-
-        return r === 6
-            ? 16
-            : 8;
-
-    }
-
-
-    /*
-     * ========================================================
-     * SIGNED 8-BIT
-     * ========================================================
-     */
-
-    sign8(
-        value
-    ) {
-
-        value &=
-            0xFF;
-
-
-        return value & 0x80
-            ? value - 0x100
-            : value;
-
-    }
-
-
-    /*
-     * ========================================================
-     * DEBUG STATE
-     * ========================================================
-     */
+    /* ========================================================
+     * DEBUG / STATE
+     * ======================================================== */
 
     getState() {
-
         return {
+            af: this.getAF(),
+            bc: this.getBC(),
+            de: this.getDE(),
+            hl: this.getHL(),
 
-            af:
-                this.getAF(),
+            sp: this.sp,
+            pc: this.pc,
 
-            bc:
-                this.getBC(),
+            a: this.a,
+            f: this.f,
 
-            de:
-                this.getDE(),
+            b: this.b,
+            c: this.c,
+            d: this.d,
+            e: this.e,
+            h: this.h,
+            l: this.l,
 
-            hl:
-                this.getHL(),
+            ime: this.ime,
+            halted: this.halted,
+            stopped: this.stopped,
+            haltBug: this.haltBug,
 
-            sp:
-                this.sp,
+            lastOpcode: this.lastOpcode,
+            lastPC: this.lastPC,
 
-            pc:
-                this.pc,
-
-            ime:
-                this.ime,
-
-            halted:
-                this.halted,
-
-            stopped:
-                this.stopped,
-
-            lastOpcode:
-                this.lastOpcode,
-
-            lastPC:
-                this.lastPC,
-
-            cycles:
-                this.cycles,
-
-            instructions:
-                this.instructions
-
+            cycles: this.cycles,
+            instructions: this.instructions
         };
-
     }
-
 }
