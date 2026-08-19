@@ -4,38 +4,19 @@
  * ppu.js
  * ============================================================
  *
- * DMG PPU / LCD Controller
+ * Nintendo Game Boy DMG PPU / LCD
  *
- * Rozdzielczość:
- *   160 x 144
+ * 160 x 144
+ * 4 shades
  *
- * VRAM:
- *   8000-9FFF
+ * Timing:
  *
- * OAM:
- *   FE00-FE9F
+ * Mode 2 = 80 cycles
+ * Mode 3 = 172 cycles
+ * Mode 0 = 204 cycles
  *
- * LCD:
- *   FF40 LCDC
- *   FF41 STAT
- *   FF42 SCY
- *   FF43 SCX
- *   FF44 LY
- *   FF45 LYC
- *   FF47 BGP
- *   FF48 OBP0
- *   FF49 OBP1
- *   FF4A WY
- *   FF4B WX
- *
- * Timing DMG:
- *   Mode 2 = 80 dots
- *   Mode 3 = 172 dots + variable
- *   Mode 0 = reszta linii
- *   Mode 1 = VBlank
- *
- * CPU/PPU clock:
- *   4.194304 MHz
+ * 456 cycles / scanline
+ * 154 scanlines / frame
  *
  * ============================================================
  */
@@ -45,119 +26,134 @@ export default class PPU {
     constructor(memory = null) {
 
         this.memory = memory;
+        this.cpu = null;
 
         this.canvas = null;
         this.context = null;
 
+        /*
+         * Display
+         */
         this.WIDTH = 160;
         this.HEIGHT = 144;
 
+        /*
+         * Timing
+         */
         this.DOTS_PER_LINE = 456;
         this.VISIBLE_LINES = 144;
         this.TOTAL_LINES = 154;
 
         /*
-         * PPU mode:
-         *
-         * 0 HBlank
-         * 1 VBlank
-         * 2 OAM
-         * 3 Pixel transfer
+         * PPU timing state
          */
-
         this.mode = 2;
-
         this.lineCycles = 0;
         this.ly = 0;
 
-        this.frameCount = 0;
+        /*
+         * Frame state
+         */
         this.frameReady = false;
+        this.frameCount = 0;
 
         /*
-         * VRAM/OAM są podłączane z Memory.
+         * Shared memory.
+         *
+         * memory.connectPPU() replaces these
+         * with the actual Memory Bus buffers.
          */
-
-        this.vram = null;
-        this.oam = null;
+        this.vram = new Uint8Array(0x2000);
+        this.oam = new Uint8Array(0xA0);
 
         /*
-         * Callback do IF.
+         * PPU registers.
+         *
+         * IMPORTANT:
+         *
+         * These are stored locally.
+         * We NEVER call memory.writeByte()
+         * from writeRegister().
+         *
+         * This prevents:
+         *
+         * PPU -> Memory -> PPU -> Memory
          */
+        this.lcdc = 0x91;
+        this.stat = 0x85;
 
-        this.interruptCallback = null;
+        this.scy = 0x00;
+        this.scx = 0x00;
+
+        this.lyc = 0x00;
+
+        this.bgp = 0xFC;
+        this.obp0 = 0xFF;
+        this.obp1 = 0xFF;
+
+        this.wy = 0x00;
+        this.wx = 0x00;
 
         /*
-         * Framebuffer przechowuje wartości 0-3.
+         * Window line counter.
          */
-
-        this.frameBuffer = new Uint8Array(
-            this.WIDTH * this.HEIGHT
-        );
+        this.windowLine = 0;
+        this.windowStarted = false;
 
         /*
-         * Canvas RGBA.
+         * Framebuffer.
+         *
+         * 0..3 = Game Boy shade.
          */
-
-        this.rgbaBuffer = new Uint8ClampedArray(
-            this.WIDTH *
-            this.HEIGHT *
-            4
-        );
+        this.frameBuffer =
+            new Uint8Array(
+                this.WIDTH * this.HEIGHT
+            );
 
         /*
-         * Klasyczna paleta DMG.
+         * RGBA buffer.
          */
+        this.rgbaBuffer =
+            new Uint8ClampedArray(
+                this.WIDTH *
+                this.HEIGHT *
+                4
+            );
 
+        /*
+         * DMG palette.
+         */
         this.palette = [
+
             [224, 248, 208],
+
             [136, 192, 112],
+
             [52, 104, 86],
+
             [8, 24, 32]
+
         ];
 
         /*
-         * Poprzedni stan STAT.
-         * Używany do edge-triggered STAT IRQ.
+         * Debug.
          */
-
-        this.statSignal = false;
-
         this.debug = false;
 
+        /*
+         * Interrupt callback.
+         */
+        this.interruptCallback = null;
+
+        /*
+         * Last STAT condition.
+         */
+        this.lastStatSignal = false;
+
+        /*
+         * Reset.
+         */
         this.reset();
-    }
-
-
-    /*
-     * ========================================================
-     * CONNECT MEMORY
-     * ========================================================
-     */
-
-    connectMemory(memory) {
-
-        this.memory = memory;
-
-        if (memory) {
-
-            if (memory.vram) {
-                this.vram = memory.vram;
-            }
-
-            if (memory.oam) {
-                this.oam = memory.oam;
-            }
-
-            if (
-                typeof memory.connectPPU === "function" &&
-                memory.ppu !== this
-            ) {
-                /*
-                 * Nie wywołujemy tutaj connectPPU(),
-                 * aby uniknąć rekurencji.
-                 */
-            }
-        }
     }
 
 
@@ -170,16 +166,13 @@ export default class PPU {
     connect(components = {}) {
 
         if (components.memory) {
-            this.connectMemory(
-                components.memory
-            );
+            this.memory = components.memory;
         }
 
-        if (components.canvas) {
-            this.attachCanvas(
-                components.canvas
-            );
+        if (components.cpu) {
+            this.cpu = components.cpu;
         }
+
     }
 
 
@@ -195,37 +188,34 @@ export default class PPU {
             typeof callback === "function"
                 ? callback
                 : null;
+
     }
 
 
     requestInterrupt(bit) {
 
-        if (this.interruptCallback) {
+        /*
+         * Prefer Memory Bus interrupt system.
+         */
+        if (
+            this.memory &&
+            typeof this.memory.requestInterrupt === "function"
+        ) {
 
-            this.interruptCallback(
-                bit
-            );
-
+            this.memory.requestInterrupt(bit);
             return;
+
         }
 
         /*
-         * Fallback — jeżeli PPU nie jest podłączone
-         * przez callback, ustawiamy IF bezpośrednio.
+         * Fallback callback.
          */
+        if (this.interruptCallback) {
 
-        if (this.memory) {
+            this.interruptCallback(bit);
 
-            const value =
-                this.memory.readByte(
-                    0xFF0F
-                );
-
-            this.memory.writeByte(
-                0xFF0F,
-                value | (1 << bit)
-            );
         }
+
     }
 
 
@@ -242,8 +232,8 @@ export default class PPU {
         if (!canvas) {
 
             this.context = null;
-
             return;
+
         }
 
         canvas.width = this.WIDTH;
@@ -259,238 +249,22 @@ export default class PPU {
 
         if (this.context) {
 
-            this.context.imageSmoothingEnabled =
-                false;
+            this.context.imageSmoothingEnabled = false;
 
-            this.context.imageSmoothingEnabled =
-                false;
         }
 
         this.render();
+
     }
 
 
     /*
-     * ========================================================
-     * MEMORY HELPERS
-     * ========================================================
+     * Alias used by some emulator versions.
      */
+    connectCanvas(canvas) {
 
-    readMemory(address) {
+        this.attachCanvas(canvas);
 
-        address &= 0xFFFF;
-
-        /*
-         * Najpierw bezpośredni VRAM.
-         */
-
-        if (
-            address >= 0x8000 &&
-            address <= 0x9FFF &&
-            this.vram
-        ) {
-
-            return this.vram[
-                address - 0x8000
-            ] & 0xFF;
-        }
-
-        /*
-         * OAM.
-         */
-
-        if (
-            address >= 0xFE00 &&
-            address <= 0xFE9F &&
-            this.oam
-        ) {
-
-            return this.oam[
-                address - 0xFE00
-            ] & 0xFF;
-        }
-
-        /*
-         * Memory.js.
-         */
-
-        if (
-            this.memory &&
-            typeof this.memory.readByte === "function"
-        ) {
-
-            return this.memory.readByte(
-                address
-            ) & 0xFF;
-        }
-
-        /*
-         * Kompatybilność ze starszą wersją Memory.
-         */
-
-        if (
-            this.memory &&
-            typeof this.memory.read8 === "function"
-        ) {
-
-            return this.memory.read8(
-                address
-            ) & 0xFF;
-        }
-
-        return 0xFF;
-    }
-
-
-    writeMemory(address, value) {
-
-        address &= 0xFFFF;
-        value &= 0xFF;
-
-        if (
-            this.memory &&
-            typeof this.memory.writeByte === "function"
-        ) {
-
-            this.memory.writeByte(
-                address,
-                value
-            );
-
-            return;
-        }
-
-        if (
-            this.memory &&
-            typeof this.memory.write8 === "function"
-        ) {
-
-            this.memory.write8(
-                address,
-                value
-            );
-        }
-    }
-
-
-    /*
-     * ========================================================
-     * REGISTER ACCESS
-     * ========================================================
-     */
-
-    readRegister(address) {
-
-        address &= 0xFFFF;
-
-        switch (address) {
-
-            case 0xFF40:
-                return this.readMemory(address);
-
-            case 0xFF41:
-                return (
-                    this.readMemory(address) |
-                    0x80
-                );
-
-            case 0xFF42:
-            case 0xFF43:
-            case 0xFF44:
-            case 0xFF45:
-            case 0xFF47:
-            case 0xFF48:
-            case 0xFF49:
-            case 0xFF4A:
-            case 0xFF4B:
-                return this.readMemory(address);
-
-            default:
-                return 0xFF;
-        }
-    }
-
-
-    writeRegister(address, value) {
-
-        address &= 0xFFFF;
-        value &= 0xFF;
-
-        /*
-         * FF44 LY jest read-only.
-         */
-
-        if (address === 0xFF44) {
-            return;
-        }
-
-        if (address === 0xFF41) {
-
-            /*
-             * STAT:
-             * b7 = 1
-             * b6-b3 = interrupt enable
-             * b2 = coincidence
-             * b1-b0 = mode
-             *
-             * CPU może zapisywać b6-b3.
-             */
-
-            const old =
-                this.readMemory(0xFF41);
-
-            const next =
-                (
-                    value &
-                    0x78
-                ) |
-                (
-                    old &
-                    0x07
-                ) |
-                0x80;
-
-            this.writeMemory(
-                0xFF41,
-                next
-            );
-
-            this.updateSTAT();
-
-            return;
-        }
-
-        this.writeMemory(
-            address,
-            value
-        );
-
-        /*
-         * LCDC OFF.
-         */
-
-        if (address === 0xFF40) {
-
-            if (!(value & 0x80)) {
-
-                this.mode = 0;
-                this.lineCycles = 0;
-                this.ly = 0;
-
-                this.writeLY(0);
-
-                this.clearFrame();
-            }
-        }
-
-        /*
-         * LYC zmienione.
-         */
-
-        if (address === 0xFF45) {
-
-            this.updateSTAT();
-        }
     }
 
 
@@ -503,105 +277,352 @@ export default class PPU {
     reset() {
 
         this.mode = 2;
-
         this.lineCycles = 0;
-
         this.ly = 0;
 
+        this.frameReady = false;
         this.frameCount = 0;
 
-        this.frameReady = false;
+        this.windowLine = 0;
+        this.windowStarted = false;
 
-        this.statSignal = false;
+        this.lastStatSignal = false;
+
+        this.lcdc = 0x91;
+        this.stat = 0x85;
+
+        this.scy = 0x00;
+        this.scx = 0x00;
+
+        this.lyc = 0x00;
+
+        this.bgp = 0xFC;
+        this.obp0 = 0xFF;
+        this.obp1 = 0xFF;
+
+        this.wy = 0x00;
+        this.wx = 0x00;
 
         this.frameBuffer.fill(0);
-
         this.rgbaBuffer.fill(0);
 
-        /*
-         * Memory może być jeszcze niepodłączone.
-         */
-
-        if (this.memory) {
-
-            /*
-             * Nie zapisujemy FF44 przez writeRegister,
-             * ponieważ LY jest read-only.
-             */
-
-            this.writeMemory(
-                0xFF40,
-                0x91
-            );
-
-            this.writeMemory(
-                0xFF41,
-                0x85
-            );
-
-            this.writeMemory(
-                0xFF42,
-                0x00
-            );
-
-            this.writeMemory(
-                0xFF43,
-                0x00
-            );
-
-            this.writeMemory(
-                0xFF44,
-                0x00
-            );
-
-            this.writeMemory(
-                0xFF45,
-                0x00
-            );
-
-            this.writeMemory(
-                0xFF47,
-                0xFC
-            );
-
-            this.writeMemory(
-                0xFF48,
-                0xFF
-            );
-
-            this.writeMemory(
-                0xFF49,
-                0xFF
-            );
-
-            this.writeMemory(
-                0xFF4A,
-                0x00
-            );
-
-            this.writeMemory(
-                0xFF4B,
-                0x00
-            );
-        }
+        this.updateSTAT();
 
         this.clearFrame();
+
     }
 
 
     /*
      * ========================================================
-     * LCD
+     * REGISTER READ
+     * ========================================================
+     *
+     * IMPORTANT:
+     *
+     * PPU registers are read locally.
+     * This avoids Memory -> PPU -> Memory recursion.
+     *
      * ========================================================
      */
 
-    lcdEnabled() {
+    readRegister(address) {
 
-        return (
-            this.readMemory(
-                0xFF40
-            ) & 0x80
-        ) !== 0;
+        address &= 0xFFFF;
+
+        switch (address) {
+
+            case 0xFF40:
+                return this.lcdc;
+
+            case 0xFF41:
+
+                return (
+                    0x80 |
+                    (this.stat & 0x78) |
+                    (this.mode & 0x03)
+                );
+
+            case 0xFF42:
+                return this.scy;
+
+            case 0xFF43:
+                return this.scx;
+
+            case 0xFF44:
+                return this.ly;
+
+            case 0xFF45:
+                return this.lyc;
+
+            case 0xFF47:
+                return this.bgp;
+
+            case 0xFF48:
+                return this.obp0;
+
+            case 0xFF49:
+                return this.obp1;
+
+            case 0xFF4A:
+                return this.wy;
+
+            case 0xFF4B:
+                return this.wx;
+
+            default:
+                return 0xFF;
+
+        }
+
+    }
+
+
+    /*
+     * ========================================================
+     * REGISTER WRITE
+     * ========================================================
+     *
+     * NEVER writes back into MemoryBus.
+     *
+     * ========================================================
+     */
+
+    writeRegister(address, value) {
+
+        address &= 0xFFFF;
+        value &= 0xFF;
+
+        switch (address) {
+
+            case 0xFF40:
+
+                this.writeLCDC(value);
+
+                break;
+
+            case 0xFF41:
+
+                /*
+                 * CPU can write STAT bits 3-6.
+                 * Mode and coincidence are PPU controlled.
+                 */
+                this.stat =
+                    (
+                        this.stat &
+                        0x07
+                    ) |
+                    (
+                        value &
+                        0x78
+                    );
+
+                this.stat |= 0x80;
+
+                this.updateSTAT();
+
+                break;
+
+            case 0xFF42:
+
+                this.scy = value;
+
+                break;
+
+            case 0xFF43:
+
+                this.scx = value;
+
+                break;
+
+            case 0xFF44:
+
+                /*
+                 * LY is effectively read-only for CPU.
+                 *
+                 * Do nothing.
+                 */
+                break;
+
+            case 0xFF45:
+
+                this.lyc = value;
+
+                this.updateLYC();
+
+                break;
+
+            case 0xFF47:
+
+                this.bgp = value;
+
+                break;
+
+            case 0xFF48:
+
+                this.obp0 = value;
+
+                break;
+
+            case 0xFF49:
+
+                this.obp1 = value;
+
+                break;
+
+            case 0xFF4A:
+
+                this.wy = value;
+
+                break;
+
+            case 0xFF4B:
+
+                this.wx = value;
+
+                break;
+
+        }
+
+    }
+
+
+    /*
+     * ========================================================
+     * LCDC
+     * ========================================================
+     */
+
+    writeLCDC(value) {
+
+        const oldEnabled =
+            (this.lcdc & 0x80) !== 0;
+
+        const newEnabled =
+            (value & 0x80) !== 0;
+
+        this.lcdc = value;
+
+        /*
+         * LCD disabled.
+         */
+        if (!newEnabled) {
+
+            this.mode = 0;
+            this.lineCycles = 0;
+            this.ly = 0;
+
+            this.windowLine = 0;
+            this.windowStarted = false;
+
+            this.updateSTAT();
+
+            this.clearFrame();
+
+            return;
+
+        }
+
+        /*
+         * LCD was just enabled.
+         */
+        if (!oldEnabled && newEnabled) {
+
+            this.mode = 2;
+            this.lineCycles = 0;
+            this.ly = 0;
+
+            this.windowLine = 0;
+            this.windowStarted = false;
+
+            this.updateSTAT();
+
+        }
+
+    }
+
+
+    /*
+     * ========================================================
+     * SIMPLE MEMORY ACCESS
+     * ========================================================
+     *
+     * Used for VRAM/OAM and registers.
+     *
+     * Avoids MemoryBus recursion.
+     * ========================================================
+     */
+
+    read8(address) {
+
+        address &= 0xFFFF;
+
+        /*
+         * VRAM
+         */
+        if (
+            address >= 0x8000 &&
+            address <= 0x9FFF
+        ) {
+
+            return this.vram[
+                address - 0x8000
+            ] & 0xFF;
+
+        }
+
+        /*
+         * OAM
+         */
+        if (
+            address >= 0xFE00 &&
+            address <= 0xFE9F
+        ) {
+
+            return this.oam[
+                address - 0xFE00
+            ] & 0xFF;
+
+        }
+
+        /*
+         * PPU registers.
+         */
+        if (
+            address >= 0xFF40 &&
+            address <= 0xFF4B
+        ) {
+
+            return this.readRegister(address);
+
+        }
+
+        /*
+         * Other memory.
+         */
+        if (
+            this.memory &&
+            typeof this.memory.readByte === "function"
+        ) {
+
+            return this.memory.readByte(address) & 0xFF;
+
+        }
+
+        /*
+         * Compatibility with alternate Memory API.
+         */
+        if (
+            this.memory &&
+            typeof this.memory.read8 === "function"
+        ) {
+
+            return this.memory.read8(address) & 0xFF;
+
+        }
+
+        return 0xFF;
+
     }
 
 
@@ -613,92 +634,106 @@ export default class PPU {
 
     step(cycles) {
 
-        cycles =
-            Number(cycles);
-
         if (
             !Number.isFinite(cycles) ||
             cycles <= 0
         ) {
+
             return;
+
         }
 
         /*
          * LCD disabled.
          */
-
         if (!this.lcdEnabled()) {
 
             this.mode = 0;
             this.lineCycles = 0;
             this.ly = 0;
 
-            this.writeLY(0);
-
             this.updateSTAT();
 
             return;
+
         }
 
-        while (cycles > 0) {
+        let remainingCycles =
+            Math.floor(cycles);
 
-            let target;
+        while (remainingCycles > 0) {
 
-            switch (this.mode) {
-
-                case 2:
-                    target = 80;
-                    break;
-
-                case 3:
-                    target = 252;
-                    break;
-
-                case 0:
-                case 1:
-                    target = 456;
-                    break;
-
-                default:
-                    this.mode = 2;
-                    this.lineCycles = 0;
-                    target = 80;
-                    break;
-            }
-
-            const remaining =
-                Math.max(
-                    1,
-                    target -
-                    this.lineCycles
-                );
+            const untilEnd =
+                this.cyclesUntilModeEnd();
 
             const amount =
                 Math.min(
-                    cycles,
-                    remaining
+                    remainingCycles,
+                    untilEnd
                 );
 
             this.lineCycles += amount;
-            cycles -= amount;
+            remainingCycles -= amount;
 
-            this.processTiming();
+            this.processMode();
+
         }
+
     }
 
 
     /*
      * ========================================================
-     * TIMING
+     * CYCLES UNTIL MODE END
      * ========================================================
      */
 
-    processTiming() {
+    cyclesUntilModeEnd() {
+
+        switch (this.mode) {
+
+            case 2:
+
+                return Math.max(
+                    1,
+                    80 - this.lineCycles
+                );
+
+            case 3:
+
+                return Math.max(
+                    1,
+                    252 - this.lineCycles
+                );
+
+            case 0:
+            case 1:
+
+                return Math.max(
+                    1,
+                    456 - this.lineCycles
+                );
+
+            default:
+
+                return 1;
+
+        }
+
+    }
+
+
+    /*
+     * ========================================================
+     * PROCESS MODE
+     * ========================================================
+     */
+
+    processMode() {
 
         /*
-         * MODE 2 -> MODE 3
+         * MODE 2
          */
-
         if (
             this.mode === 2 &&
             this.lineCycles >= 80
@@ -709,13 +744,12 @@ export default class PPU {
             this.updateSTAT();
 
             return;
+
         }
 
-
         /*
-         * MODE 3 -> MODE 0
+         * MODE 3
          */
-
         if (
             this.mode === 3 &&
             this.lineCycles >= 252
@@ -726,6 +760,7 @@ export default class PPU {
                 this.renderScanline(
                     this.ly
                 );
+
             }
 
             this.mode = 0;
@@ -733,13 +768,12 @@ export default class PPU {
             this.updateSTAT();
 
             return;
+
         }
 
-
         /*
-         * MODE 0 -> następna linia.
+         * MODE 0
          */
-
         if (
             this.mode === 0 &&
             this.lineCycles >= 456
@@ -749,41 +783,42 @@ export default class PPU {
 
             this.ly++;
 
-            this.writeLY(
-                this.ly
-            );
-
             if (this.ly >= 144) {
-
-                /*
-                 * VBlank.
-                 */
 
                 this.mode = 1;
 
                 this.frameReady = true;
-
                 this.frameCount++;
 
+                /*
+                 * VBlank interrupt.
+                 */
                 this.requestInterrupt(0);
 
+                /*
+                 * Present frame.
+                 */
                 this.render();
 
             } else {
 
                 this.mode = 2;
+
             }
+
+            this.setLYInternal(
+                this.ly
+            );
 
             this.updateSTAT();
 
             return;
+
         }
 
-
         /*
-         * MODE 1 VBLANK
+         * MODE 1
          */
-
         if (
             this.mode === 1 &&
             this.lineCycles >= 456
@@ -797,48 +832,52 @@ export default class PPU {
 
                 this.ly = 0;
 
-                this.writeLY(0);
-
                 this.mode = 2;
 
-            } else {
+                this.windowLine = 0;
+                this.windowStarted = false;
 
-                this.writeLY(
-                    this.ly
-                );
             }
 
+            this.setLYInternal(
+                this.ly
+            );
+
             this.updateSTAT();
+
         }
+
     }
 
 
     /*
      * ========================================================
-     * LY
+     * LY INTERNAL
      * ========================================================
      */
 
-    writeLY(value) {
+    setLYInternal(value) {
 
-        /*
-         * Bezpośredni zapis, ponieważ FF44 jest read-only
-         * dla CPU.
-         */
-
-        if (
-            this.memory &&
-            this.memory.io
-        ) {
-
-            this.memory.io[
-                0x44
-            ] =
-                value & 0xFF;
-
-        }
+        this.ly =
+            value & 0xFF;
 
         this.updateLYC();
+
+    }
+
+
+    /*
+     * ========================================================
+     * LCD ENABLED
+     * ========================================================
+     */
+
+    lcdEnabled() {
+
+        return (
+            (this.lcdc & 0x80) !== 0
+        );
+
     }
 
 
@@ -850,98 +889,69 @@ export default class PPU {
 
     updateSTAT() {
 
-        if (!this.memory) {
-            return;
-        }
-
-        const old =
-            this.readMemory(
-                0xFF41
-            );
-
         let stat =
-            old &
-            0x78;
-
-        stat |=
-            this.mode & 3;
+            this.stat & 0x78;
 
         /*
-         * Coincidence flag.
+         * Coincidence.
          */
-
-        if (
-            this.ly ===
-            this.readMemory(
-                0xFF45
-            )
-        ) {
+        if (this.ly === this.lyc) {
 
             stat |= 0x04;
+
         }
 
         /*
-         * STAT bit 7.
+         * Mode.
          */
+        stat |=
+            this.mode & 0x03;
 
+        /*
+         * Bit 7.
+         */
         stat |= 0x80;
 
-        /*
-         * Zapisujemy bez przechodzenia przez
-         * writeRegister(), żeby nie robić pętli.
-         */
-
-        if (this.memory.io) {
-
-            this.memory.io[
-                0x41
-            ] =
-                stat & 0xFF;
-
-        }
+        this.stat = stat;
 
         /*
-         * STAT interrupt signal.
-         *
-         * Jest edge-triggered.
+         * STAT interrupt condition.
          */
-
-        const coincidence =
-            (
-                stat & 0x04
-            ) !== 0;
-
-        const mode0 =
-            this.mode === 0 &&
-            (stat & 0x08);
-
-        const mode1 =
-            this.mode === 1 &&
-            (stat & 0x10);
-
-        const mode2 =
-            this.mode === 2 &&
-            (stat & 0x20);
-
         const signal =
-            Boolean(
-                coincidence &&
-                (stat & 0x40)
-            ) ||
-            Boolean(mode0) ||
-            Boolean(mode1) ||
-            Boolean(mode2);
+            (
+                (
+                    this.mode === 0 &&
+                    (stat & 0x08)
+                ) ||
+                (
+                    this.mode === 1 &&
+                    (stat & 0x10)
+                ) ||
+                (
+                    this.mode === 2 &&
+                    (stat & 0x20)
+                ) ||
+                (
+                    (stat & 0x04) &&
+                    (stat & 0x40)
+                )
+            );
 
+        /*
+         * Edge-triggered behavior.
+         */
         if (
             signal &&
-            !this.statSignal
+            !this.lastStatSignal
         ) {
 
             this.requestInterrupt(1);
+
         }
 
-        this.statSignal =
-            signal;
+        this.lastStatSignal =
+            Boolean(signal);
+
     }
 
 
@@ -953,191 +963,200 @@ export default class PPU {
 
     updateLYC() {
 
-        if (!this.memory) {
-            return;
+        if (this.ly === this.lyc) {
+
+            this.stat |= 0x04;
+
+        } else {
+
+            this.stat &= ~0x04;
+
         }
 
-        const stat =
-            this.readMemory(
-                0xFF41
-            );
+        this.updateSTAT();
 
-        let next =
-            stat &
-            0x78;
-
-        next |=
-            this.mode & 3;
-
-        if (
-            this.ly ===
-            this.readMemory(
-                0xFF45
-            )
-        ) {
-
-            next |= 0x04;
-        }
-
-        next |= 0x80;
-
-        if (this.memory.io) {
-
-            this.memory.io[
-                0x41
-            ] =
-                next & 0xFF;
-        }
     }
 
 
     /*
      * ========================================================
-     * BACKGROUND
+     * RENDER SCANLINE
+     * ========================================================
+     */
+
+    renderScanline(line) {
+
+        /*
+         * Start with BG.
+         */
+        if (this.lcdc & 0x01) {
+
+            this.renderBackground(line);
+
+        } else {
+
+            this.fillLine(line, 0);
+
+        }
+
+        /*
+         * Window.
+         */
+        if (
+            (this.lcdc & 0x20) &&
+            this.ly >= this.wy
+        ) {
+
+            this.renderWindow(line);
+
+        }
+
+        /*
+         * Sprites.
+         */
+        if (this.lcdc & 0x02) {
+
+            this.renderSprites(line);
+
+        }
+
+    }
+
+
+    /*
+     * ========================================================
+     * TILE ADDRESS
+     * ========================================================
+     */
+
+    getTileAddress(tileNumber) {
+
+        /*
+         * 8000 unsigned addressing.
+         */
+        if (this.lcdc & 0x10) {
+
+            return (
+                0x8000 +
+                (
+                    tileNumber *
+                    16
+                )
+            );
+
+        }
+
+        /*
+         * 8800 signed addressing.
+         *
+         * Tile 0 = 9000.
+         */
+        const signed =
+            tileNumber < 128
+                ? tileNumber
+                : tileNumber - 256;
+
+        return (
+            0x9000 +
+            signed * 16
+        );
+
+    }
+
+
+    /*
+     * ========================================================
+     * RENDER BACKGROUND
      * ========================================================
      */
 
     renderBackground(line) {
 
-        const lcdc =
-            this.readMemory(
-                0xFF40
-            );
-
-        const scy =
-            this.readMemory(
-                0xFF42
-            );
-
-        const scx =
-            this.readMemory(
-                0xFF43
-            );
-
-        const bgp =
-            this.readMemory(
-                0xFF47
-            );
-
+        const scx = this.scx;
+        const scy = this.scy;
 
         /*
-         * Tile map.
+         * BG tile map.
+         *
+         * Bit 3:
+         * 0 = 9800
+         * 1 = 9C00
          */
-
-        const tileMap =
-            (lcdc & 0x08)
+        const mapBase =
+            (this.lcdc & 0x08)
                 ? 0x9C00
                 : 0x9800;
 
-
-        /*
-         * Tile addressing.
-         *
-         * bit 4 = 1 -> 8000
-         * bit 4 = 0 -> 8800 signed
-         */
-
-        const unsignedMode =
-            Boolean(
-                lcdc & 0x10
-            );
-
-
         const y =
             (
-                line +
-                scy
+                scy +
+                line
             ) & 0xFF;
 
         const tileY =
-            (
-                y >> 3
-            ) & 31;
+            (y >> 3) & 31;
 
-        const row =
+        const pixelY =
             y & 7;
-
 
         for (
             let x = 0;
-            x < 160;
+            x < this.WIDTH;
             x++
         ) {
 
-            const mapX =
+            const bgX =
                 (
-                    x +
-                    scx
+                    scx +
+                    x
                 ) & 0xFF;
 
             const tileX =
-                (
-                    mapX >> 3
-                ) & 31;
+                (bgX >> 3) & 31;
 
             const mapAddress =
-                tileMap +
+                mapBase +
                 tileY * 32 +
                 tileX;
 
-            const tile =
-                this.readMemory(
+            const tileNumber =
+                this.read8(
                     mapAddress
                 );
 
-            let tileAddress;
-
-            if (unsignedMode) {
-
-                tileAddress =
-                    0x8000 +
-                    tile * 16;
-
-            } else {
-
-                const signed =
-                    tile < 128
-                        ? tile
-                        : tile - 256;
-
-                tileAddress =
-                    0x9000 +
-                    signed * 16;
-            }
-
-            const address =
-                tileAddress +
-                row * 2;
-
-            const low =
-                this.readMemory(
-                    address
+            const tileAddress =
+                this.getTileAddress(
+                    tileNumber
                 );
 
+            const row =
+                tileAddress +
+                pixelY * 2;
+
+            const low =
+                this.read8(row);
+
             const high =
-                this.readMemory(
-                    address + 1
+                this.read8(
+                    row + 1
                 );
 
             const bit =
                 7 -
-                (
-                    mapX & 7
-                );
+                (bgX & 7);
 
             const color =
                 (
                     (low >> bit) & 1
                 ) |
                 (
-                    ((high >> bit) & 1)
-                    << 1
+                    ((high >> bit) & 1) << 1
                 );
 
             const shade =
-                this.paletteIndex(
+                this.mapPalette(
                     color,
-                    bgp
+                    this.bgp
                 );
 
             this.setPixel(
@@ -1145,157 +1164,135 @@ export default class PPU {
                 line,
                 shade
             );
+
         }
+
     }
 
 
     /*
      * ========================================================
-     * WINDOW
+     * RENDER WINDOW
      * ========================================================
      */
 
     renderWindow(line) {
 
-        const lcdc =
-            this.readMemory(
-                0xFF40
-            );
+        const wx = this.wx;
+        const wy = this.wy;
 
-        const wy =
-            this.readMemory(
-                0xFF4A
-            );
+        if (line < wy) {
 
-        const wx =
-            this.readMemory(
-                0xFF4B
-            );
-
-        if (
-            line < wy
-        ) {
             return;
+
         }
 
-        const screenX =
+        /*
+         * WX is screen X + 7.
+         */
+        const startX =
             wx - 7;
 
-        if (
-            screenX >= 160
-        ) {
+        if (startX >= this.WIDTH) {
+
             return;
+
         }
 
-        const tileMap =
-            (lcdc & 0x40)
+        /*
+         * Window starts.
+         */
+        if (!this.windowStarted) {
+
+            this.windowStarted = true;
+            this.windowLine = 0;
+
+        }
+
+        const mapBase =
+            (this.lcdc & 0x40)
                 ? 0x9C00
                 : 0x9800;
 
-        const unsignedMode =
-            Boolean(
-                lcdc & 0x10
-            );
-
-        const windowLine =
-            line - wy;
-
         const tileY =
-            (
-                windowLine >> 3
-            ) & 31;
+            (this.windowLine >> 3) & 31;
 
-        const row =
-            windowLine & 7;
-
-        const bgp =
-            this.readMemory(
-                0xFF47
-            );
+        const pixelY =
+            this.windowLine & 7;
 
         for (
-            let x = Math.max(0, screenX);
-            x < 160;
-            x++
+            let screenX =
+                Math.max(0, startX);
+
+            screenX < this.WIDTH;
+
+            screenX++
         ) {
 
-            const wxPixel =
-                x - screenX;
+            const windowX =
+                screenX -
+                startX;
 
             const tileX =
-                (
-                    wxPixel >> 3
-                ) & 31;
+                (windowX >> 3) & 31;
 
             const pixelX =
-                wxPixel & 7;
+                windowX & 7;
 
-            const tile =
-                this.readMemory(
-                    tileMap +
-                    tileY * 32 +
-                    tileX
+            const mapAddress =
+                mapBase +
+                tileY * 32 +
+                tileX;
+
+            const tileNumber =
+                this.read8(
+                    mapAddress
                 );
 
-            let tileAddress;
+            const tileAddress =
+                this.getTileAddress(
+                    tileNumber
+                );
 
-            if (unsignedMode) {
-
-                tileAddress =
-                    0x8000 +
-                    tile * 16;
-
-            } else {
-
-                const signed =
-                    tile < 128
-                        ? tile
-                        : tile - 256;
-
-                tileAddress =
-                    0x9000 +
-                    signed * 16;
-            }
-
-            const address =
+            const row =
                 tileAddress +
-                row * 2;
+                pixelY * 2;
 
             const low =
-                this.readMemory(
-                    address
-                );
+                this.read8(row);
 
             const high =
-                this.readMemory(
-                    address + 1
+                this.read8(
+                    row + 1
                 );
 
             const bit =
-                7 -
-                pixelX;
+                7 - pixelX;
 
             const color =
                 (
                     (low >> bit) & 1
                 ) |
                 (
-                    ((high >> bit) & 1)
-                    << 1
+                    ((high >> bit) & 1) << 1
                 );
 
             const shade =
-                this.paletteIndex(
+                this.mapPalette(
                     color,
-                    bgp
+                    this.bgp
                 );
 
             this.setPixel(
-                x,
+                screenX,
                 line,
                 shade
             );
+
         }
+
+        this.windowLine++;
+
     }
 
 
@@ -1307,28 +1304,17 @@ export default class PPU {
 
     renderSprites(line) {
 
-        const lcdc =
-            this.readMemory(
-                0xFF40
-            );
-
         const tall =
-            Boolean(
-                lcdc & 0x04
-            );
+            (this.lcdc & 0x04) !== 0;
 
         const height =
-            tall
-                ? 16
-                : 8;
+            tall ? 16 : 8;
 
         const sprites = [];
 
-
         /*
-         * OAM entries.
+         * Find up to 10 sprites on this line.
          */
-
         for (
             let i = 0;
             i < 40;
@@ -1340,22 +1326,22 @@ export default class PPU {
                 i * 4;
 
             const y =
-                this.readMemory(
-                    address
-                ) - 16;
+                this.read8(address) -
+                16;
 
             const x =
-                this.readMemory(
+                this.read8(
                     address + 1
-                ) - 8;
+                ) -
+                8;
 
             const tile =
-                this.readMemory(
+                this.read8(
                     address + 2
                 );
 
             const flags =
-                this.readMemory(
+                this.read8(
                     address + 3
                 );
 
@@ -1365,42 +1351,46 @@ export default class PPU {
             ) {
 
                 sprites.push({
+
                     index: i,
                     x,
                     y,
                     tile,
                     flags
+
                 });
 
-                if (
-                    sprites.length >= 10
-                ) {
-                    break;
-                }
             }
-        }
 
+            if (sprites.length >= 10) {
+
+                break;
+
+            }
+
+        }
 
         /*
          * DMG priority:
          *
-         * niższe X = wyższy priorytet
-         * przy tym samym X niższy OAM index.
+         * smaller X first,
+         * then smaller OAM index.
          *
-         * Rysujemy od najniższego priorytetu.
+         * Draw lower priority first.
          */
-
         sprites.sort(
             (a, b) => {
 
                 if (a.x !== b.x) {
+
                     return b.x - a.x;
+
                 }
 
                 return b.index - a.index;
+
             }
         );
-
 
         for (
             const sprite of sprites
@@ -1411,7 +1401,9 @@ export default class PPU {
                 line,
                 height
             );
+
         }
+
     }
 
 
@@ -1431,26 +1423,18 @@ export default class PPU {
             sprite.flags;
 
         const flipX =
-            Boolean(
-                flags & 0x20
-            );
+            (flags & 0x20) !== 0;
 
         const flipY =
-            Boolean(
-                flags & 0x40
-            );
+            (flags & 0x40) !== 0;
 
-        const behind =
-            Boolean(
-                flags & 0x80
-            );
+        const behindBG =
+            (flags & 0x80) !== 0;
 
         const palette =
-            (
-                flags & 0x10
-            )
-                ? this.readMemory(0xFF49)
-                : this.readMemory(0xFF48);
+            (flags & 0x10)
+                ? this.obp1
+                : this.obp0;
 
         let tile =
             sprite.tile;
@@ -1459,9 +1443,10 @@ export default class PPU {
          * 8x16:
          * bit 0 ignored.
          */
-
         if (height === 16) {
+
             tile &= 0xFE;
+
         }
 
         let row =
@@ -1474,8 +1459,12 @@ export default class PPU {
                 height -
                 1 -
                 row;
+
         }
 
+        /*
+         * Second tile in 8x16.
+         */
         if (
             height === 16 &&
             row >= 8
@@ -1483,94 +1472,102 @@ export default class PPU {
 
             tile++;
             row -= 8;
+
         }
 
-        const address =
+        const tileAddress =
             0x8000 +
-            tile * 16 +
+            tile * 16;
+
+        const address =
+            tileAddress +
             row * 2;
 
         const low =
-            this.readMemory(
-                address
-            );
+            this.read8(address);
 
         const high =
-            this.readMemory(
+            this.read8(
                 address + 1
             );
 
         for (
-            let px = 0;
-            px < 8;
-            px++
+            let pixel = 0;
+            pixel < 8;
+            pixel++
         ) {
 
-            const x =
+            const screenX =
                 sprite.x +
-                px;
+                pixel;
 
             if (
-                x < 0 ||
-                x >= 160
+                screenX < 0 ||
+                screenX >= this.WIDTH
             ) {
+
                 continue;
+
             }
 
             const bit =
                 flipX
-                    ? px
-                    : 7 - px;
+                    ? pixel
+                    : 7 - pixel;
 
             const color =
                 (
                     (low >> bit) & 1
                 ) |
                 (
-                    ((high >> bit) & 1)
-                    << 1
+                    ((high >> bit) & 1) << 1
                 );
 
             /*
-             * OBJ color 0 = transparent.
+             * Color 0 transparent.
              */
-
             if (color === 0) {
+
                 continue;
+
             }
 
             /*
-             * OBJ priority.
+             * OBJ behind BG.
              *
-             * Jeżeli BG ma kolor 1-3,
-             * sprite jest za nim.
+             * Our framebuffer stores the final
+             * shade, so shade 0 represents BG
+             * color 0 in this DMG implementation.
              */
+            if (behindBG) {
 
-            if (behind) {
-
-                const bg =
+                if (
                     this.getPixel(
-                        x,
+                        screenX,
                         line
-                    );
+                    ) !== 0
+                ) {
 
-                if (bg !== 0) {
                     continue;
+
                 }
+
             }
 
             const shade =
-                this.paletteIndex(
+                this.mapPalette(
                     color,
                     palette
                 );
 
             this.setPixel(
-                x,
+                screenX,
                 line,
                 shade
             );
+
         }
+
     }
 
 
@@ -1580,90 +1577,22 @@ export default class PPU {
      * ========================================================
      */
 
-    paletteIndex(
+    mapPalette(
         color,
         palette
     ) {
 
         return (
             palette >>
-            (
-                color * 2
-            )
+            (color * 2)
         ) & 3;
+
     }
 
 
     /*
      * ========================================================
-     * SCANLINE
-     * ========================================================
-     */
-
-    renderScanline(line) {
-
-        if (
-            line < 0 ||
-            line >= 144
-        ) {
-            return;
-        }
-
-        const lcdc =
-            this.readMemory(
-                0xFF40
-            );
-
-        /*
-         * BG / Window.
-         */
-
-        if (lcdc & 0x01) {
-
-            this.renderBackground(
-                line
-            );
-
-            /*
-             * Window.
-             */
-
-            if (lcdc & 0x20) {
-
-                this.renderWindow(
-                    line
-                );
-            }
-
-        } else {
-
-            /*
-             * Gdy BG/WIN wyłączone,
-             * wszystkie piksele są koloru 0.
-             */
-
-            this.fillLine(
-                line,
-                0
-            );
-        }
-
-        /*
-         * Sprites.
-         */
-
-        if (lcdc & 0x02) {
-
-            this.renderSprites(
-                line
-            );
-        }
-    }
-
-
-    /*
-     * ========================================================
-     * PIXELS
+     * FRAMEBUFFER
      * ========================================================
      */
 
@@ -1675,17 +1604,20 @@ export default class PPU {
 
         if (
             x < 0 ||
-            x >= 160 ||
+            x >= this.WIDTH ||
             y < 0 ||
-            y >= 144
+            y >= this.HEIGHT
         ) {
+
             return;
+
         }
 
         this.frameBuffer[
-            y * 160 + x
+            y * this.WIDTH + x
         ] =
             value & 3;
+
     }
 
 
@@ -1696,16 +1628,19 @@ export default class PPU {
 
         if (
             x < 0 ||
-            x >= 160 ||
+            x >= this.WIDTH ||
             y < 0 ||
-            y >= 144
+            y >= this.HEIGHT
         ) {
+
             return 0;
+
         }
 
         return this.frameBuffer[
-            y * 160 + x
+            y * this.WIDTH + x
         ] & 3;
+
     }
 
 
@@ -1716,25 +1651,57 @@ export default class PPU {
 
         if (
             y < 0 ||
-            y >= 144
+            y >= this.HEIGHT
         ) {
+
             return;
+
         }
 
         const start =
-            y * 160;
+            y * this.WIDTH;
 
         this.frameBuffer.fill(
             value & 3,
             start,
-            start + 160
+            start + this.WIDTH
         );
+
     }
 
 
     /*
      * ========================================================
-     * FRAME -> RGBA
+     * CLEAR FRAME
+     * ========================================================
+     */
+
+    clearFrame() {
+
+        this.frameBuffer.fill(0);
+
+        if (!this.context) {
+
+            return;
+
+        }
+
+        this.context.fillStyle =
+            "rgb(224,248,208)";
+
+        this.context.fillRect(
+            0,
+            0,
+            this.WIDTH,
+            this.HEIGHT
+        );
+
+    }
+
+
+    /*
+     * ========================================================
+     * RGBA
      * ========================================================
      */
 
@@ -1757,20 +1724,26 @@ export default class PPU {
 
             this.rgbaBuffer[
                 offset
-            ] = color[0];
+            ] =
+                color[0];
 
             this.rgbaBuffer[
                 offset + 1
-            ] = color[1];
+            ] =
+                color[1];
 
             this.rgbaBuffer[
                 offset + 2
-            ] = color[2];
+            ] =
+                color[2];
 
             this.rgbaBuffer[
                 offset + 3
-            ] = 255;
+            ] =
+                255;
+
         }
+
     }
 
 
@@ -1780,10 +1753,18 @@ export default class PPU {
      * ========================================================
      */
 
-    render() {
+    render(context = null) {
+
+        if (context) {
+
+            this.context = context;
+
+        }
 
         if (!this.context) {
+
             return;
+
         }
 
         this.updateRGBA();
@@ -1791,8 +1772,8 @@ export default class PPU {
         const image =
             new ImageData(
                 this.rgbaBuffer,
-                160,
-                144
+                this.WIDTH,
+                this.HEIGHT
             );
 
         this.context.putImageData(
@@ -1800,49 +1781,20 @@ export default class PPU {
             0,
             0
         );
+
     }
 
 
     /*
      * ========================================================
-     * CLEAR FRAME
-     * ========================================================
-     */
-
-    clearFrame() {
-
-        this.frameBuffer.fill(0);
-
-        this.updateRGBA();
-
-        if (!this.context) {
-            return;
-        }
-
-        const image =
-            new ImageData(
-                this.rgbaBuffer,
-                160,
-                144
-            );
-
-        this.context.putImageData(
-            image,
-            0,
-            0
-        );
-    }
-
-
-    /*
-     * ========================================================
-     * FRAMEBUFFER
+     * FRAMEBUFFER ACCESS
      * ========================================================
      */
 
     getFrameBuffer() {
 
         return this.frameBuffer;
+
     }
 
 
@@ -1851,12 +1803,20 @@ export default class PPU {
         this.updateRGBA();
 
         return this.rgbaBuffer;
+
     }
 
+
+    /*
+     * ========================================================
+     * FRAME READY
+     * ========================================================
+     */
 
     isFrameReady() {
 
         return this.frameReady;
+
     }
 
 
@@ -1868,6 +1828,7 @@ export default class PPU {
         this.frameReady = false;
 
         return ready;
+
     }
 
 
@@ -1900,35 +1861,37 @@ export default class PPU {
                 this.lcdEnabled(),
 
             lcdc:
-                this.readMemory(0xFF40),
+                this.lcdc,
 
             stat:
-                this.readMemory(0xFF41),
+                this.stat,
 
             scx:
-                this.readMemory(0xFF43),
+                this.scx,
 
             scy:
-                this.readMemory(0xFF42),
+                this.scy,
 
             lyc:
-                this.readMemory(0xFF45),
+                this.lyc,
 
             bgp:
-                this.readMemory(0xFF47),
+                this.bgp,
 
             obp0:
-                this.readMemory(0xFF48),
+                this.obp0,
 
             obp1:
-                this.readMemory(0xFF49),
-
-            wy:
-                this.readMemory(0xFF4A),
+                this.obp1,
 
             wx:
-                this.readMemory(0xFF4B)
+                this.wx,
+
+            wy:
+                this.wy
+
         };
+
     }
 
 
@@ -1942,6 +1905,7 @@ export default class PPU {
 
         this.debug =
             Boolean(enabled);
+
     }
 
 
@@ -1955,9 +1919,15 @@ export default class PPU {
 
         this.canvas = null;
         this.context = null;
+
         this.memory = null;
+        this.cpu = null;
+
         this.vram = null;
         this.oam = null;
+
         this.interruptCallback = null;
+
     }
+
 }
