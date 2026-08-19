@@ -3,93 +3,190 @@
  * WebBktx — Game Boy Emulator
  * emulator.js
  * ============================================================
+ *
+ * Main Game Boy DMG emulator controller.
+ *
+ * Components:
+ *
+ *   CPU
+ *   Memory
+ *   Cartridge
+ *   PPU
+ *   Timer
+ *   Input
+ *   Audio
+ *
+ * Display:
+ *
+ *   160 × 144
+ *
+ * CPU:
+ *
+ *   Sharp LR35902
+ *   4.194304 MHz
+ *
+ * ============================================================
  */
 
-import CPU from "./cpu.js";
 import GameBoyMemory from "./memory.js";
+import CPU from "./cpu.js";
 import PPU from "./ppu.js";
+import Cartridge from "./cartridge.js";
+
 import Timer from "./timer.js";
 import Input from "./input.js";
 import Audio from "./audio.js";
-import Cartridge from "./cartridge.js";
 
 
 export default class GameBoyEmulator {
 
     constructor(options = {}) {
 
-        this.canvas = options.canvas || null;
-
-        this.logCallback =
-            typeof options.log === "function"
-                ? options.log
-                : null;
-
         /*
          * ----------------------------------------------------
-         * Hardware
+         * OPTIONS
          * ----------------------------------------------------
          */
 
-        this.memory = new GameBoyMemory();
-        this.cartridge = new Cartridge();
-        this.cpu = new CPU();
-        this.ppu = new PPU();
-        this.timer = new Timer();
-        this.input = new Input();
-        this.audio = new Audio();
+        this.options =
+            options || {};
+
 
         /*
          * ----------------------------------------------------
-         * State
+         * CORE COMPONENTS
          * ----------------------------------------------------
          */
 
-        this.running = false;
-        this.paused = false;
-        this.romLoaded = false;
+        this.memory =
+            new GameBoyMemory();
 
-        this.frame = 0;
-        this.totalCycles = 0;
+        this.cpu =
+            new CPU();
 
-        this.animationFrame = null;
-        this.lastTimestamp = 0;
-        this.accumulator = 0;
+        this.ppu =
+            new PPU(this.memory);
+
+        this.timer =
+            new Timer();
+
+        this.input =
+            new Input();
+
+        this.audio =
+            new Audio();
+
+
+        this.cartridge =
+            null;
+
 
         /*
          * ----------------------------------------------------
-         * Game Boy timing
+         * STATE
          * ----------------------------------------------------
          */
 
-        this.CLOCK = 4194304;
+        this.running =
+            false;
 
-        this.FRAME_RATE = 59.7275;
+        this.paused =
+            true;
 
-        this.CYCLES_PER_FRAME =
-            Math.round(
-                this.CLOCK /
-                this.FRAME_RATE
-            );
+        this.started =
+            false;
 
-        this.MAX_CYCLES_PER_UPDATE =
-            200000;
+        this.destroyed =
+            false;
+
 
         /*
          * ----------------------------------------------------
-         * Connect everything
+         * TIMING
+         * ----------------------------------------------------
+         */
+
+        this.clock =
+            4194304;
+
+        this.fps =
+            59.73;
+
+        this.cycles =
+            0;
+
+        this.frame =
+            0;
+
+
+        /*
+         * ----------------------------------------------------
+         * LOOP
+         * ----------------------------------------------------
+         */
+
+        this.animationFrame =
+            null;
+
+        this.lastTime =
+            0;
+
+        this.accumulator =
+            0;
+
+        this.frameTime =
+            1000 /
+            this.fps;
+
+
+        /*
+         * ----------------------------------------------------
+         * CANVAS
+         * ----------------------------------------------------
+         */
+
+        this.canvas =
+            null;
+
+        this.context =
+            null;
+
+
+        /*
+         * ----------------------------------------------------
+         * DEBUG
+         * ----------------------------------------------------
+         */
+
+        this.logs =
+            [];
+
+        this.maxLogs =
+            200;
+
+
+        /*
+         * ----------------------------------------------------
+         * CONNECT COMPONENTS
          * ----------------------------------------------------
          */
 
         this.connectComponents();
 
-        if (this.canvas) {
-            this.attachCanvas(this.canvas);
-        }
+
+        /*
+         * ----------------------------------------------------
+         * INITIAL RESET
+         * ----------------------------------------------------
+         */
+
+        this.reset();
+
 
         this.log(
             "WebBktx Game Boy gotowy."
         );
+
     }
 
 
@@ -101,128 +198,121 @@ export default class GameBoyEmulator {
 
     log(message) {
 
-        console.log(
-            "[WebBktx]",
-            message
+        const text =
+            `[WebBktx] ${message}`;
+
+        this.logs.push(
+            {
+                time:
+                    new Date().toLocaleTimeString(),
+
+                message:
+                    text
+            }
         );
 
-        if (this.logCallback) {
-            this.logCallback(message);
+
+        if (
+            this.logs.length >
+            this.maxLogs
+        ) {
+
+            this.logs.shift();
+
         }
+
+
+        console.log(
+            text
+        );
+
+
+        if (
+            typeof this.options.onLog ===
+            "function"
+        ) {
+
+            this.options.onLog(
+                text
+            );
+
+        }
+
     }
 
 
     /*
      * ========================================================
-     * CONNECT
+     * CONNECT COMPONENTS
      * ========================================================
      */
 
     connectComponents() {
 
         /*
-         * Memory -> Cartridge
+         * MEMORY → CARTRIDGE
          */
 
-        if (
-            typeof this.memory.connectCartridge ===
-            "function"
-        ) {
-
-            this.memory.connectCartridge(
-                this.cartridge
-            );
-
-        }
+        this.memory.connectCartridge(
+            this.cartridge
+        );
 
 
         /*
-         * Memory -> PPU
+         * MEMORY → PPU
          */
 
-        if (
-            typeof this.memory.connectPPU ===
-            "function"
-        ) {
-
-            this.memory.connectPPU(
-                this.ppu
-            );
-
-        }
+        this.memory.connectPPU(
+            this.ppu
+        );
 
 
         /*
-         * Memory -> Timer
+         * MEMORY → TIMER
          */
 
-        if (
-            typeof this.memory.connectTimer ===
-            "function"
-        ) {
-
-            this.memory.connectTimer(
-                this.timer
-            );
-
-        }
+        this.memory.connectTimer(
+            this.timer
+        );
 
 
         /*
-         * Memory -> Input
+         * MEMORY → INPUT
          */
 
-        if (
-            typeof this.memory.connectInput ===
-            "function"
-        ) {
-
-            this.memory.connectInput(
-                this.input
-            );
-
-        }
+        this.memory.connectInput(
+            this.input
+        );
 
 
         /*
-         * Memory -> Audio
+         * MEMORY → AUDIO
          */
 
-        if (
-            typeof this.memory.connectAudio ===
-            "function"
-        ) {
-
-            this.memory.connectAudio(
-                this.audio
-            );
-
-        }
+        this.memory.connectAudio(
+            this.audio
+        );
 
 
         /*
          * PPU
-         *
-         * Adapter because Memory uses:
-         *
-         * readByte()
-         * writeByte()
          */
 
         if (
+            this.ppu &&
             typeof this.ppu.connect ===
             "function"
         ) {
 
-            this.ppu.connect({
+            this.ppu.connect(
+                {
+                    memory:
+                        this.memory,
 
-                memory:
-                    this.createPPUAdapter(),
-
-                cpu:
-                    this.cpu
-
-            });
+                    cpu:
+                        this.cpu
+                }
+            );
 
         }
 
@@ -238,67 +328,15 @@ export default class GameBoyEmulator {
 
     /*
      * ========================================================
-     * PPU ADAPTER
-     * ========================================================
-     */
-
-    createPPUAdapter() {
-
-        return {
-
-            read8:
-                address => {
-
-                    return this.memory.readByte(
-                        address
-                    );
-
-                },
-
-
-            write8:
-                (
-                    address,
-                    value
-                ) => {
-
-                    this.memory.writeByte(
-                        address,
-                        value
-                    );
-
-                }
-
-        };
-
-    }
-
-
-    /*
-     * ========================================================
-     * CPU CONNECTION
+     * CONNECT CPU
      * ========================================================
      */
 
     connectCPU() {
 
         if (
-            typeof this.cpu.connect ===
-            "function"
+            !this.cpu
         ) {
-
-            this.cpu.connect({
-
-                memory:
-                    this.memory,
-
-                bus:
-                    this.memory,
-
-                emulator:
-                    this
-
-            });
 
             return;
 
@@ -306,7 +344,8 @@ export default class GameBoyEmulator {
 
 
         /*
-         * Compatibility z prostszymi CPU.
+         * Most emulator CPU implementations
+         * expose a memory/bus property.
          */
 
         this.cpu.memory =
@@ -314,6 +353,57 @@ export default class GameBoyEmulator {
 
         this.cpu.bus =
             this.memory;
+
+
+        if (
+            typeof this.cpu.connectMemory ===
+            "function"
+        ) {
+
+            this.cpu.connectMemory(
+                this.memory
+            );
+
+        }
+
+
+        if (
+            typeof this.cpu.connectBus ===
+            "function"
+        ) {
+
+            this.cpu.connectBus(
+                this.memory
+            );
+
+        }
+
+
+        if (
+            typeof this.cpu.connect ===
+            "function"
+        ) {
+
+            this.cpu.connect(
+                {
+                    memory:
+                        this.memory,
+
+                    ppu:
+                        this.ppu,
+
+                    timer:
+                        this.timer,
+
+                    input:
+                        this.input,
+
+                    audio:
+                        this.audio
+                }
+            );
+
+        }
 
     }
 
@@ -324,12 +414,63 @@ export default class GameBoyEmulator {
      * ========================================================
      */
 
-    attachCanvas(canvas) {
+    attachCanvas(
+        canvas
+    ) {
 
         this.canvas =
             canvas;
 
+
         if (
+            !canvas
+        ) {
+
+            this.context =
+                null;
+
+            return;
+
+        }
+
+
+        /*
+         * Game Boy native resolution.
+         */
+
+        canvas.width =
+            160;
+
+        canvas.height =
+            144;
+
+
+        this.context =
+            canvas.getContext(
+                "2d",
+                {
+                    alpha:
+                        false
+                }
+            );
+
+
+        if (
+            this.context
+        ) {
+
+            this.context.imageSmoothingEnabled =
+                false;
+
+        }
+
+
+        /*
+         * Connect directly to PPU.
+         */
+
+        if (
+            this.ppu &&
             typeof this.ppu.attachCanvas ===
             "function"
         ) {
@@ -339,6 +480,7 @@ export default class GameBoyEmulator {
             );
 
         }
+
 
         this.log(
             "Canvas podłączony."
@@ -360,72 +502,7 @@ export default class GameBoyEmulator {
 
         try {
 
-            this.pause();
-
-
-            /*
-             * ------------------------------------------------
-             * Convert source -> Uint8Array
-             * ------------------------------------------------
-             */
-
-            let rom;
-
-
-            if (
-                source instanceof Uint8Array
-            ) {
-
-                rom =
-                    source;
-
-            }
-            else if (
-                source instanceof ArrayBuffer
-            ) {
-
-                rom =
-                    new Uint8Array(
-                        source
-                    );
-
-            }
-            else if (
-                typeof Blob !== "undefined" &&
-                source instanceof Blob
-            ) {
-
-                rom =
-                    new Uint8Array(
-                        await source.arrayBuffer()
-                    );
-
-            }
-            else {
-
-                throw new Error(
-                    "Nieobsługiwany typ ROM."
-                );
-
-            }
-
-
-            /*
-             * ------------------------------------------------
-             * Basic validation
-             * ------------------------------------------------
-             */
-
-            if (
-                rom.length <
-                0x150
-            ) {
-
-                throw new Error(
-                    "ROM jest za mały."
-                );
-
-            }
+            this.stop();
 
 
             this.log(
@@ -435,117 +512,73 @@ export default class GameBoyEmulator {
 
             /*
              * ------------------------------------------------
-             * Cartridge
+             * Convert source to Uint8Array
              * ------------------------------------------------
              */
 
-            let loaded =
-                false;
+            let data;
 
-
-            /*
-             * API #1
-             *
-             * cartridge.load(rom)
-             */
 
             if (
-                typeof this.cartridge.load ===
-                "function"
+                source instanceof
+                Uint8Array
             ) {
 
-                const result =
-                    this.cartridge.load(
-                        rom,
-                        filename
-                    );
+                data =
+                    source;
 
-
-                /*
-                 * load() może być async.
-                 */
-
-                if (
-                    result instanceof Promise
-                ) {
-
-                    await result;
-
-                }
-
-
-                loaded =
-                    true;
-
-            }
-
-
-            /*
-             * API #2
-             *
-             * cartridge.loadROM(rom)
-             */
-
-            else if (
-                typeof this.cartridge.loadROM ===
-                "function"
+            } else if (
+                source instanceof
+                ArrayBuffer
             ) {
 
-                const result =
-                    this.cartridge.loadROM(
-                        rom,
-                        filename
-                    );
-
-
-                if (
-                    result instanceof Promise
-                ) {
-
-                    await result;
-
-                }
-
-
-                loaded =
-                    true;
-
-            }
-
-
-            /*
-             * API #3
-             *
-             * Bezpośrednie podłączenie ROM.
-             *
-             * Przydatne dla prostego Cartridge.
-             */
-
-            else {
-
-                this.cartridge.rom =
+                data =
                     new Uint8Array(
-                        rom
+                        source
                     );
 
-                this.cartridge.romData =
-                    this.cartridge.rom;
+            } else if (
+                source instanceof
+                Blob
+            ) {
 
-                this.cartridge.filename =
-                    filename;
+                const buffer =
+                    await source.arrayBuffer();
 
-                loaded =
-                    true;
+                data =
+                    new Uint8Array(
+                        buffer
+                    );
+
+            } else if (
+                source instanceof
+                File
+            ) {
+
+                const buffer =
+                    await source.arrayBuffer();
+
+                data =
+                    new Uint8Array(
+                        buffer
+                    );
+
+            } else {
+
+                throw new Error(
+                    "Nieprawidłowe źródło ROM."
+                );
 
             }
 
 
             if (
-                !loaded
+                data.length <
+                0x150
             ) {
 
                 throw new Error(
-                    "Cartridge nie obsługuje ładowania ROM."
+                    "ROM jest za mały lub uszkodzony."
                 );
 
             }
@@ -553,17 +586,94 @@ export default class GameBoyEmulator {
 
             /*
              * ------------------------------------------------
-             * ROM loaded
+             * Cartridge
              * ------------------------------------------------
              */
 
-            this.romLoaded =
-                true;
+            let cartridge;
+
+
+            /*
+             * Support multiple Cartridge APIs.
+             */
+
+            if (
+                typeof Cartridge.fromROM ===
+                "function"
+            ) {
+
+                cartridge =
+                    await Cartridge.fromROM(
+                        data
+                    );
+
+            } else {
+
+                cartridge =
+                    new Cartridge(
+                        data
+                    );
+
+            }
+
+
+            if (
+                !cartridge
+            ) {
+
+                throw new Error(
+                    "Nie udało się utworzyć cartridge."
+                );
+
+            }
+
+
+            this.cartridge =
+                cartridge;
+
+
+            /*
+             * Connect cartridge to memory.
+             */
+
+            this.memory.connectCartridge(
+                cartridge
+            );
+
+
+            /*
+             * Some cartridge implementations
+             * expect ROM to be loaded separately.
+             */
+
+            if (
+                typeof cartridge.loadROM ===
+                "function"
+            ) {
+
+                await cartridge.loadROM(
+                    data
+                );
+
+            }
+
+
+            if (
+                typeof cartridge.load ===
+                "function" &&
+                !cartridge.rom
+            ) {
+
+                await cartridge.load(
+                    data
+                );
+
+            }
 
 
             /*
              * ------------------------------------------------
-             * Reset hardware
+             * RESET HARDWARE
              * ------------------------------------------------
              */
 
@@ -572,24 +682,17 @@ export default class GameBoyEmulator {
 
             /*
              * ------------------------------------------------
-             * ROM info
+             * Cartridge information
              * ------------------------------------------------
              */
 
-            const title =
-                this.getROMTitle();
+            const info =
+                this.getCartridgeInfo();
 
 
             this.log(
-                `ROM załadowany: ${title}`
+                `ROM załadowany: ${info.title}`
             );
-
-
-            /*
-             * Save
-             */
-
-            this.loadSave();
 
 
             this.log(
@@ -597,21 +700,11 @@ export default class GameBoyEmulator {
             );
 
 
-            return {
+            return true;
 
-                title:
-                    title,
-
-                size:
-                    rom.length,
-
-                filename:
-                    filename
-
-            };
-
-        }
-        catch (error) {
+        } catch (
+            error
+        ) {
 
             console.error(
                 "WebBktx ROM ERROR:",
@@ -619,22 +712,12 @@ export default class GameBoyEmulator {
             );
 
 
-            this.romLoaded =
-                false;
-
-
             this.log(
-                "Nie udało się załadować: " +
-                error.message
+                `Nie udało się załadować: ${error.message}`
             );
 
 
-            /*
-             * Bardzo ważne:
-             * nie połykamy błędu.
-             */
-
-            throw error;
+            return false;
 
         }
 
@@ -643,115 +726,27 @@ export default class GameBoyEmulator {
 
     /*
      * ========================================================
-     * ROM TITLE
+     * LOAD ROM FROM FILE INPUT
      * ========================================================
      */
 
-    getROMTitle() {
-
-        /*
-         * Cartridge API.
-         */
-
-        try {
-
-            if (
-                typeof this.cartridge.getTitle ===
-                "function"
-            ) {
-
-                const title =
-                    this.cartridge.getTitle();
-
-                if (
-                    title
-                ) {
-
-                    return title;
-
-                }
-
-            }
-
-        }
-        catch (_) {}
-
+    async loadROMFile(
+        file
+    ) {
 
         if (
-            this.cartridge.title
+            !file
         ) {
 
-            return this.cartridge.title;
+            return false;
 
         }
 
 
-        /*
-         * Fallback:
-         * odczyt z ROM.
-         */
-
-        const rom =
-            this.cartridge.rom ||
-            this.cartridge.romData;
-
-
-        if (
-            rom &&
-            rom.length >=
-            0x144
-        ) {
-
-            let title =
-                "";
-
-
-            for (
-                let i = 0x134;
-                i <= 0x143;
-                i++
-            ) {
-
-                const c =
-                    rom[i];
-
-
-                if (
-                    c === 0
-                ) {
-
-                    break;
-
-                }
-
-
-                if (
-                    c >= 32 &&
-                    c <= 126
-                ) {
-
-                    title +=
-                        String.fromCharCode(
-                            c
-                        );
-
-                }
-
-            }
-
-
-            if (
-                title.trim()
-            ) {
-
-                return title.trim();
-
-            }
-
-        }
-
-
-        return "GAME BOY";
+        return this.loadROM(
+            file,
+            file.name
+        );
 
     }
 
@@ -765,10 +760,18 @@ export default class GameBoyEmulator {
     resetHardware() {
 
         /*
-         * Memory FIRST.
+         * Stop execution first.
+         */
+
+        this.stop();
+
+
+        /*
+         * Memory.
          */
 
         if (
+            this.memory &&
             typeof this.memory.reset ===
             "function"
         ) {
@@ -779,24 +782,11 @@ export default class GameBoyEmulator {
 
 
         /*
-         * CPU.
-         */
-
-        if (
-            typeof this.cpu.reset ===
-            "function"
-        ) {
-
-            this.cpu.reset();
-
-        }
-
-
-        /*
          * Timer.
          */
 
         if (
+            this.timer &&
             typeof this.timer.reset ===
             "function"
         ) {
@@ -811,6 +801,7 @@ export default class GameBoyEmulator {
          */
 
         if (
+            this.input &&
             typeof this.input.reset ===
             "function"
         ) {
@@ -825,6 +816,7 @@ export default class GameBoyEmulator {
          */
 
         if (
+            this.audio &&
             typeof this.audio.reset ===
             "function"
         ) {
@@ -835,10 +827,11 @@ export default class GameBoyEmulator {
 
 
         /*
-         * PPU LAST.
+         * PPU.
          */
 
         if (
+            this.ppu &&
             typeof this.ppu.reset ===
             "function"
         ) {
@@ -849,20 +842,48 @@ export default class GameBoyEmulator {
 
 
         /*
-         * CPU needs Memory again.
+         * CPU.
          */
 
-        this.connectCPU();
+        if (
+            this.cpu
+        ) {
 
+            if (
+                typeof this.cpu.reset ===
+                "function"
+            ) {
+
+                this.cpu.reset();
+
+            } else {
+
+                /*
+                 * Fallback for CPUs without reset().
+                 */
+
+                this.tryCPUReset();
+
+            }
+
+        }
+
+
+        /*
+         * Counters.
+         */
+
+        this.cycles =
+            0;
 
         this.frame =
             0;
 
-        this.totalCycles =
-            0;
-
         this.accumulator =
             0;
+
+        this.started =
+            false;
 
 
         this.log(
@@ -880,33 +901,132 @@ export default class GameBoyEmulator {
 
     reset() {
 
-        const running =
-            this.running;
-
-
-        this.pause();
-
-
         this.resetHardware();
 
+    }
+
+
+    /*
+     * ========================================================
+     * CPU RESET FALLBACK
+     * ========================================================
+     */
+
+    tryCPUReset() {
 
         if (
-            this.ppu &&
-            typeof this.ppu.render ===
-            "function"
+            !this.cpu
         ) {
 
-            this.ppu.render();
+            return;
+
+        }
+
+
+        const cpu =
+            this.cpu;
+
+
+        /*
+         * Common register names.
+         */
+
+        if (
+            "pc" in cpu
+        ) {
+
+            cpu.pc =
+                0x0100;
 
         }
 
 
         if (
-            running &&
-            this.romLoaded
+            "sp" in cpu
         ) {
 
-            this.start();
+            cpu.sp =
+                0xFFFE;
+
+        }
+
+
+        if (
+            "a" in cpu
+        ) {
+
+            cpu.a =
+                0x01;
+
+        }
+
+
+        if (
+            "f" in cpu
+        ) {
+
+            cpu.f =
+                0xB0;
+
+        }
+
+
+        if (
+            "b" in cpu
+        ) {
+
+            cpu.b =
+                0x00;
+
+        }
+
+
+        if (
+            "c" in cpu
+        ) {
+
+            cpu.c =
+                0x13;
+
+        }
+
+
+        if (
+            "d" in cpu
+        ) {
+
+            cpu.d =
+                0x00;
+
+        }
+
+
+        if (
+            "e" in cpu
+        ) {
+
+            cpu.e =
+                0xD8;
+
+        }
+
+
+        if (
+            "h" in cpu
+        ) {
+
+            cpu.h =
+                0x01;
+
+        }
+
+
+        if (
+            "l" in cpu
+        ) {
+
+            cpu.l =
+                0x4D;
 
         }
 
@@ -922,14 +1042,23 @@ export default class GameBoyEmulator {
     start() {
 
         if (
-            !this.romLoaded
+            this.destroyed
+        ) {
+
+            return;
+
+        }
+
+
+        if (
+            !this.cartridge
         ) {
 
             this.log(
-                "Brak ROM."
+                "Brak ROM-u."
             );
 
-            return false;
+            return;
 
         }
 
@@ -938,7 +1067,7 @@ export default class GameBoyEmulator {
             this.running
         ) {
 
-            return true;
+            return;
 
         }
 
@@ -949,8 +1078,11 @@ export default class GameBoyEmulator {
         this.paused =
             false;
 
+        this.started =
+            true;
 
-        this.lastTimestamp =
+
+        this.lastTime =
             performance.now();
 
 
@@ -962,22 +1094,12 @@ export default class GameBoyEmulator {
             "Emulator uruchomiony."
         );
 
-
         this.log(
             "Emulator START."
         );
 
 
-        this.animationFrame =
-            requestAnimationFrame(
-                time =>
-                    this.loop(
-                        time
-                    )
-            );
-
-
-        return true;
+        this.scheduleFrame();
 
     }
 
@@ -989,6 +1111,13 @@ export default class GameBoyEmulator {
      */
 
     pause() {
+
+        this.running =
+            false;
+
+        this.paused =
+            true;
+
 
         if (
             this.animationFrame !==
@@ -1005,9 +1134,24 @@ export default class GameBoyEmulator {
         }
 
 
-        const wasRunning =
-            this.running;
+        this.log(
+            "Emulator zatrzymany."
+        );
 
+        this.log(
+            "Emulator PAUSE."
+        );
+
+    }
+
+
+    /*
+     * ========================================================
+     * STOP
+     * ========================================================
+     */
+
+    stop() {
 
         this.running =
             false;
@@ -1017,16 +1161,16 @@ export default class GameBoyEmulator {
 
 
         if (
-            wasRunning
+            this.animationFrame !==
+            null
         ) {
 
-            this.log(
-                "Emulator zatrzymany."
+            cancelAnimationFrame(
+                this.animationFrame
             );
 
-            this.log(
-                "Emulator PAUSE."
-            );
+            this.animationFrame =
+                null;
 
         }
 
@@ -1035,11 +1179,67 @@ export default class GameBoyEmulator {
 
     /*
      * ========================================================
-     * LOOP
+     * TOGGLE
      * ========================================================
      */
 
-    loop(timestamp) {
+    toggle() {
+
+        if (
+            this.running
+        ) {
+
+            this.pause();
+
+        } else {
+
+            this.start();
+
+        }
+
+    }
+
+
+    /*
+     * ========================================================
+     * MAIN LOOP
+     * ========================================================
+     */
+
+    scheduleFrame() {
+
+        if (
+            !this.running
+        ) {
+
+            return;
+
+        }
+
+
+        this.animationFrame =
+            requestAnimationFrame(
+                time => {
+
+                    this.mainLoop(
+                        time
+                    );
+
+                }
+            );
+
+    }
+
+
+    /*
+     * ========================================================
+     * MAIN LOOP
+     * ========================================================
+     */
+
+    mainLoop(
+        now
+    ) {
 
         if (
             !this.running
@@ -1051,20 +1251,22 @@ export default class GameBoyEmulator {
 
 
         let delta =
-            timestamp -
-            this.lastTimestamp;
+            now -
+            this.lastTime;
 
 
-        this.lastTimestamp =
-            timestamp;
+        this.lastTime =
+            now;
 
 
         /*
-         * Tab został uśpiony.
+         * Prevent huge jumps after
+         * browser tab switching.
          */
 
         if (
-            delta > 250
+            delta >
+            250
         ) {
 
             delta =
@@ -1073,87 +1275,109 @@ export default class GameBoyEmulator {
         }
 
 
+        this.accumulator +=
+            delta;
+
+
+        /*
+         * Execute enough CPU time to catch up.
+         */
+
+        const cpuMilliseconds =
+            1000 /
+            this.clock;
+
+
+        /*
+         * Maximum cycles per browser frame.
+         */
+
+        let cyclesToRun =
+            Math.floor(
+                (
+                    this.accumulator /
+                    cpuMilliseconds
+                )
+            );
+
+
+        /*
+         * Safety limit.
+         */
+
+        const maximumCycles =
+            70000;
+
+
         if (
-            delta < 0
+            cyclesToRun >
+            maximumCycles
         ) {
 
-            delta =
-                0;
+            cyclesToRun =
+                maximumCycles;
 
         }
 
 
-        /*
-         * Convert milliseconds
-         * to Game Boy CPU cycles.
-         */
-
-        this.accumulator +=
-            (
-                delta *
-                this.CLOCK
-            ) /
-            1000;
-
-
-        let cycles =
-            Math.floor(
-                this.accumulator
-            );
-
-
-        cycles =
-            Math.min(
-                cycles,
-                this.MAX_CYCLES_PER_UPDATE
-            );
-
-
         if (
-            cycles > 0
+            cyclesToRun >
+            0
         ) {
 
             this.runCycles(
-                cycles
+                cyclesToRun
             );
 
 
             this.accumulator -=
-                cycles;
+                cyclesToRun *
+                cpuMilliseconds;
 
         }
 
 
         /*
-         * Render frame.
+         * Render completed frames.
          */
 
         if (
-            this.ppu &&
-            typeof this.ppu.isFrameReady ===
-            "function"
+            this.ppu
         ) {
 
             if (
-                this.ppu.isFrameReady()
+                typeof this.ppu.isFrameReady ===
+                "function"
             ) {
 
-                this.ppu.render();
+                if (
+                    this.ppu.isFrameReady()
+                ) {
 
-                this.ppu.consumeFrame();
+                    this.ppu.render();
+
+
+                    if (
+                        typeof this.ppu.consumeFrame ===
+                        "function"
+                    ) {
+
+                        this.ppu.consumeFrame();
+
+                    }
+
+                }
+
+            } else {
+
+                this.ppu.render();
 
             }
 
         }
 
 
-        this.animationFrame =
-            requestAnimationFrame(
-                time =>
-                    this.loop(
-                        time
-                    )
-            );
+        this.scheduleFrame();
 
     }
 
@@ -1164,7 +1388,9 @@ export default class GameBoyEmulator {
      * ========================================================
      */
 
-    runCycles(cycles) {
+    runCycles(
+        cycles
+    ) {
 
         let remaining =
             cycles;
@@ -1174,12 +1400,13 @@ export default class GameBoyEmulator {
             remaining > 0
         ) {
 
-            let used =
+            const used =
                 this.stepCPU();
 
 
             /*
-             * CPU musi zwrócić liczbę cykli.
+             * Never allow a broken CPU implementation
+             * to create an infinite loop.
              */
 
             if (
@@ -1189,13 +1416,15 @@ export default class GameBoyEmulator {
                 used <= 0
             ) {
 
-                used =
-                    4;
+                remaining =
+                    0;
+
+                break;
 
             }
 
 
-            used =
+            const consumed =
                 Math.min(
                     used,
                     remaining
@@ -1213,7 +1442,7 @@ export default class GameBoyEmulator {
             ) {
 
                 this.ppu.step(
-                    used
+                    consumed
                 );
 
             }
@@ -1233,17 +1462,16 @@ export default class GameBoyEmulator {
                 ) {
 
                     this.timer.step(
-                        used
+                        consumed
                     );
 
-                }
-                else if (
+                } else if (
                     typeof this.timer.tick ===
                     "function"
                 ) {
 
                     this.timer.tick(
-                        used
+                        consumed
                     );
 
                 }
@@ -1265,17 +1493,16 @@ export default class GameBoyEmulator {
                 ) {
 
                     this.audio.step(
-                        used
+                        consumed
                     );
 
-                }
-                else if (
+                } else if (
                     typeof this.audio.tick ===
                     "function"
                 ) {
 
                     this.audio.tick(
-                        used
+                        consumed
                     );
 
                 }
@@ -1283,12 +1510,29 @@ export default class GameBoyEmulator {
             }
 
 
-            this.totalCycles +=
-                used;
+            this.cycles +=
+                consumed;
 
 
             remaining -=
-                used;
+                consumed;
+
+        }
+
+
+        /*
+         * Frame count follows PPU.
+         */
+
+        if (
+            this.ppu &&
+            Number.isFinite(
+                this.ppu.frameCount
+            )
+        ) {
+
+            this.frame =
+                this.ppu.frameCount;
 
         }
 
@@ -1297,7 +1541,7 @@ export default class GameBoyEmulator {
 
     /*
      * ========================================================
-     * CPU STEP
+     * STEP CPU
      * ========================================================
      */
 
@@ -1312,66 +1556,678 @@ export default class GameBoyEmulator {
         }
 
 
+        let used;
+
+
+        /*
+         * Preferred API.
+         */
+
         if (
             typeof this.cpu.step ===
             "function"
         ) {
 
-            const result =
+            used =
                 this.cpu.step();
 
+        }
+
+
+        /*
+         * Alternative API.
+         */
+
+        else if (
+            typeof this.cpu.tick ===
+            "function"
+        ) {
+
+            used =
+                this.cpu.tick();
+
+        }
+
+
+        else if (
+            typeof this.cpu.execute ===
+            "function"
+        ) {
+
+            used =
+                this.cpu.execute();
+
+        }
+
+
+        else if (
+            typeof this.cpu.runInstruction ===
+            "function"
+        ) {
+
+            used =
+                this.cpu.runInstruction();
+
+        }
+
+
+        else {
+
+            /*
+             * Temporary fallback.
+             *
+             * This keeps PPU/timing alive even if
+             * CPU.js is currently incomplete.
+             */
+
+            used =
+                4;
+
+        }
+
+
+        /*
+         * Some CPUs return an object.
+         */
+
+        if (
+            used &&
+            typeof used ===
+            "object"
+        ) {
 
             if (
-                typeof result ===
-                "number"
+                Number.isFinite(
+                    used.cycles
+                )
             ) {
 
-                return result;
+                used =
+                    used.cycles;
+
+            } else if (
+                Number.isFinite(
+                    used.cycleCount
+                )
+            ) {
+
+                used =
+                    used.cycleCount;
 
             }
 
+        }
+
+
+        /*
+         * Some CPU implementations return
+         * undefined while exposing cycles.
+         */
+
+        if (
+            !Number.isFinite(
+                used
+            )
+        ) {
 
             if (
-                result &&
-                typeof result.cycles ===
-                "number"
+                Number.isFinite(
+                    this.cpu.lastCycles
+                )
             ) {
 
-                return result.cycles;
+                used =
+                    this.cpu.lastCycles;
+
+            } else if (
+                Number.isFinite(
+                    this.cpu.cyclesLast
+                )
+            ) {
+
+                used =
+                    this.cpu.cyclesLast;
+
+            } else {
+
+                used =
+                    4;
 
             }
 
+        }
 
-            return 4;
+
+        /*
+         * Game Boy machine cycles are normally
+         * multiples of 4.
+         */
+
+        used =
+            Math.max(
+                1,
+                Math.floor(
+                    used
+                )
+            );
+
+
+        return used;
+
+    }
+
+
+    /*
+     * ========================================================
+     * GET CARTRIDGE INFO
+     * ========================================================
+     */
+
+    getCartridgeInfo() {
+
+        const cartridge =
+            this.cartridge;
+
+
+        if (
+            !cartridge
+        ) {
+
+            return {
+
+                title:
+                    "—",
+
+                mbc:
+                    "—",
+
+                romSize:
+                    0,
+
+                ramSize:
+                    0,
+
+                romBank:
+                    1
+
+            };
+
+        }
+
+
+        const rom =
+            cartridge.rom;
+
+
+        const ram =
+            cartridge.ram;
+
+
+        let title =
+            cartridge.title ??
+            cartridge.name ??
+            "—";
+
+
+        let mbc =
+            cartridge.mbcType ??
+            cartridge.mbc ??
+            cartridge.mapper ??
+            "—";
+
+
+        let romSize =
+            0;
+
+
+        if (
+            rom &&
+            Number.isFinite(
+                rom.length
+            )
+        ) {
+
+            romSize =
+                rom.length;
+
+        } else if (
+            Number.isFinite(
+                cartridge.romSize
+            )
+        ) {
+
+            romSize =
+                cartridge.romSize;
+
+        }
+
+
+        let ramSize =
+            0;
+
+
+        if (
+            ram &&
+            Number.isFinite(
+                ram.length
+            )
+        ) {
+
+            ramSize =
+                ram.length;
+
+        } else if (
+            Number.isFinite(
+                cartridge.ramSize
+            )
+        ) {
+
+            ramSize =
+                cartridge.ramSize;
+
+        }
+
+
+        let romBank =
+            cartridge.romBank ??
+            cartridge.currentROMBank ??
+            cartridge.bank ??
+            1;
+
+
+        /*
+         * Cartridge may expose information
+         * through getInfo().
+         */
+
+        if (
+            typeof cartridge.getInfo ===
+            "function"
+        ) {
+
+            try {
+
+                const info =
+                    cartridge.getInfo();
+
+
+                if (
+                    info
+                ) {
+
+                    title =
+                        info.title ??
+                        title;
+
+                    mbc =
+                        info.mbc ??
+                        info.mbcType ??
+                        mbc;
+
+                    romSize =
+                        info.romSize ??
+                        romSize;
+
+                    ramSize =
+                        info.ramSize ??
+                        ramSize;
+
+                    romBank =
+                        info.romBank ??
+                        romBank;
+
+                }
+
+            } catch (
+                error
+            ) {
+
+                console.warn(
+                    "Cartridge getInfo error:",
+                    error
+                );
+
+            }
+
+        }
+
+
+        return {
+
+            title:
+                String(
+                    title
+                ),
+
+            mbc:
+                String(
+                    mbc
+                ),
+
+            romSize:
+                Number(
+                    romSize
+                ) || 0,
+
+            ramSize:
+                Number(
+                    ramSize
+                ) || 0,
+
+            romBank:
+                Number(
+                    romBank
+                ) || 1
+
+        };
+
+    }
+
+
+    /*
+     * ========================================================
+     * GET INFO
+     * ========================================================
+     *
+     * Used by gameboy/index.html.
+     *
+     * ========================================================
+     */
+
+    getInfo() {
+
+        const cartridge =
+            this.getCartridgeInfo();
+
+
+        let cpuCycles =
+            this.cycles;
+
+
+        /*
+         * Prefer CPU's internal counter if available.
+         */
+
+        if (
+            this.cpu
+        ) {
+
+            if (
+                Number.isFinite(
+                    this.cpu.totalCycles
+                )
+            ) {
+
+                cpuCycles =
+                    this.cpu.totalCycles;
+
+            } else if (
+                Number.isFinite(
+                    this.cpu.cycles
+                )
+            ) {
+
+                cpuCycles =
+                    this.cpu.cycles;
+
+            }
+
+        }
+
+
+        let frame =
+            this.frame;
+
+
+        if (
+            this.ppu &&
+            Number.isFinite(
+                this.ppu.frameCount
+            )
+        ) {
+
+            frame =
+                this.ppu.frameCount;
+
+        }
+
+
+        return {
+
+            cpu:
+                "LR35902",
+
+            clock:
+                4194304,
+
+            fps:
+                59.73,
+
+            frame:
+                frame,
+
+            cycles:
+                cpuCycles,
+
+            running:
+                this.running,
+
+            paused:
+                this.paused,
+
+            started:
+                this.started,
+
+            romLoaded:
+                Boolean(
+                    this.cartridge
+                ),
+
+            cartridge:
+                cartridge,
+
+            title:
+                cartridge.title,
+
+            mbc:
+                cartridge.mbc,
+
+            romSize:
+                cartridge.romSize,
+
+            ramSize:
+                cartridge.ramSize,
+
+            romBank:
+                cartridge.romBank,
+
+            ppu:
+                this.ppu &&
+                typeof this.ppu.getState ===
+                "function"
+                    ? this.ppu.getState()
+                    : null
+
+        };
+
+    }
+
+
+    /*
+     * ========================================================
+     * GET STATE
+     * ========================================================
+     */
+
+    getState() {
+
+        return {
+
+            running:
+                this.running,
+
+            paused:
+                this.paused,
+
+            started:
+                this.started,
+
+            cycles:
+                this.cycles,
+
+            frame:
+                this.frame,
+
+            cartridge:
+                this.getCartridgeInfo(),
+
+            cpu:
+                this.cpuState(),
+
+            ppu:
+                this.ppuState()
+
+        };
+
+    }
+
+
+    /*
+     * ========================================================
+     * CPU STATE
+     * ========================================================
+     */
+
+    cpuState() {
+
+        if (
+            !this.cpu
+        ) {
+
+            return null;
 
         }
 
 
         if (
-            typeof this.cpu.executeInstruction ===
+            typeof this.cpu.getState ===
             "function"
         ) {
 
-            const result =
-                this.cpu.executeInstruction();
+            try {
 
+                return this.cpu.getState();
 
-            if (
-                typeof result ===
-                "number"
+            } catch (
+                error
             ) {
 
-                return result;
+                return null;
 
             }
-
-
-            return 4;
 
         }
 
 
-        return 4;
+        return {
+
+            pc:
+                this.cpu.pc ??
+                0,
+
+            sp:
+                this.cpu.sp ??
+                0,
+
+            a:
+                this.cpu.a ??
+                0,
+
+            f:
+                this.cpu.f ??
+                0,
+
+            b:
+                this.cpu.b ??
+                0,
+
+            c:
+                this.cpu.c ??
+                0,
+
+            d:
+                this.cpu.d ??
+                0,
+
+            e:
+                this.cpu.e ??
+                0,
+
+            h:
+                this.cpu.h ??
+                0,
+
+            l:
+                this.cpu.l ??
+                0
+
+        };
+
+    }
+
+
+    /*
+     * ========================================================
+     * PPU STATE
+     * ========================================================
+     */
+
+    ppuState() {
+
+        if (
+            !this.ppu
+        ) {
+
+            return null;
+
+        }
+
+
+        if (
+            typeof this.ppu.getState ===
+            "function"
+        ) {
+
+            try {
+
+                return this.ppu.getState();
+
+            } catch (
+                error
+            ) {
+
+                return null;
+
+            }
+
+        }
+
+
+        return {
+
+            mode:
+                this.ppu.mode ??
+                0,
+
+            ly:
+                this.ppu.ly ??
+                0,
+
+            frame:
+                this.ppu.frameCount ??
+                0
+
+        };
 
     }
 
@@ -1385,10 +2241,10 @@ export default class GameBoyEmulator {
     save() {
 
         if (
-            !this.romLoaded
+            !this.cartridge
         ) {
 
-            return false;
+            return null;
 
         }
 
@@ -1398,6 +2254,14 @@ export default class GameBoyEmulator {
 
 
         if (
+            typeof this.cartridge.save ===
+            "function"
+        ) {
+
+            data =
+                this.cartridge.save();
+
+        } else if (
             typeof this.cartridge.getSaveData ===
             "function"
         ) {
@@ -1405,78 +2269,52 @@ export default class GameBoyEmulator {
             data =
                 this.cartridge.getSaveData();
 
-        }
-        else if (
-            typeof this.cartridge.getRAM ===
-            "function"
-        ) {
-
-            data =
-                this.cartridge.getRAM();
-
-        }
-        else if (
+        } else if (
             this.cartridge.ram
         ) {
 
             data =
-                this.cartridge.ram;
+                new Uint8Array(
+                    this.cartridge.ram
+                );
 
         }
 
 
         if (
-            !data
+            data
         ) {
 
-            this.log(
-                "Brak RAM Save."
-            );
+            try {
 
-            return false;
+                localStorage.setItem(
+                    "webbktx-gameboy-save",
+                    JSON.stringify(
+                        Array.from(
+                            data
+                        )
+                    )
+                );
 
-        }
+                this.log(
+                    "Save zapisany."
+                );
 
-
-        const bytes =
-            data instanceof Uint8Array
-                ? data
-                : new Uint8Array(data);
-
-
-        try {
-
-            localStorage.setItem(
-                this.getSaveKey(),
-                this.bytesToBase64(
-                    bytes
-                )
-            );
-
-
-            this.log(
-                "Save zapisany."
-            );
-
-
-            return true;
-
-        }
-        catch (error) {
-
-            console.error(
+            } catch (
                 error
-            );
+            ) {
 
+                console.warn(
+                    "Save error:",
+                    error
+                );
 
-            this.log(
-                "Błąd zapisu Save."
-            );
-
-
-            return false;
+            }
 
         }
+
+
+        return data;
 
     }
 
@@ -1490,7 +2328,7 @@ export default class GameBoyEmulator {
     loadSave() {
 
         if (
-            !this.romLoaded
+            !this.cartridge
         ) {
 
             return false;
@@ -1500,14 +2338,14 @@ export default class GameBoyEmulator {
 
         try {
 
-            const encoded =
+            const raw =
                 localStorage.getItem(
-                    this.getSaveKey()
+                    "webbktx-gameboy-save"
                 );
 
 
             if (
-                !encoded
+                !raw
             ) {
 
                 return false;
@@ -1516,32 +2354,32 @@ export default class GameBoyEmulator {
 
 
             const data =
-                this.base64ToBytes(
-                    encoded
+                new Uint8Array(
+                    JSON.parse(
+                        raw
+                    )
                 );
 
 
             if (
-                typeof this.cartridge.loadSaveData ===
+                typeof this.cartridge.loadSave ===
                 "function"
             ) {
 
-                this.cartridge.loadSaveData(
+                this.cartridge.loadSave(
                     data
                 );
 
-            }
-            else if (
-                typeof this.cartridge.loadRAM ===
+            } else if (
+                typeof this.cartridge.setSaveData ===
                 "function"
             ) {
 
-                this.cartridge.loadRAM(
+                this.cartridge.setSaveData(
                     data
                 );
 
-            }
-            else if (
+            } else if (
                 this.cartridge.ram
             ) {
 
@@ -1562,120 +2400,19 @@ export default class GameBoyEmulator {
 
             return true;
 
-        }
-        catch (error) {
+        } catch (
+            error
+        ) {
 
-            console.error(
+            console.warn(
+                "Load save error:",
                 error
             );
+
 
             return false;
 
         }
-
-    }
-
-
-    /*
-     * ========================================================
-     * SAVE KEY
-     * ========================================================
-     */
-
-    getSaveKey() {
-
-        const title =
-            this.getROMTitle();
-
-
-        return (
-            "webbktx.gb." +
-            title
-                .replace(
-                    /[^a-z0-9]/gi,
-                    "_"
-                )
-                .toLowerCase() +
-            ".save"
-        );
-
-    }
-
-
-    /*
-     * ========================================================
-     * BASE64
-     * ========================================================
-     */
-
-    bytesToBase64(bytes) {
-
-        let binary =
-            "";
-
-
-        const chunk =
-            0x8000;
-
-
-        for (
-            let i = 0;
-            i < bytes.length;
-            i += chunk
-        ) {
-
-            const part =
-                bytes.subarray(
-                    i,
-                    Math.min(
-                        i + chunk,
-                        bytes.length
-                    )
-                );
-
-
-            binary +=
-                String.fromCharCode(
-                    ...part
-                );
-
-        }
-
-
-        return btoa(
-            binary
-        );
-
-    }
-
-
-    base64ToBytes(value) {
-
-        const binary =
-            atob(
-                value
-            );
-
-
-        const bytes =
-            new Uint8Array(
-                binary.length
-            );
-
-
-        for (
-            let i = 0;
-            i < binary.length;
-            i++
-        ) {
-
-            bytes[i] =
-                binary.charCodeAt(i);
-
-        }
-
-
-        return bytes;
 
     }
 
@@ -1692,32 +2429,39 @@ export default class GameBoyEmulator {
             !this.canvas
         ) {
 
-            return;
+            return false;
 
         }
 
 
-        const element =
-            this.canvas.parentElement ||
-            this.canvas;
+        try {
+
+            if (
+                document.fullscreenElement
+            ) {
+
+                await document.exitFullscreen();
+
+            } else {
+
+                await this.canvas.requestFullscreen();
+
+            }
 
 
-        if (
-            document.fullscreenElement
+            return true;
+
+        } catch (
+            error
         ) {
 
-            await document.exitFullscreen();
+            console.warn(
+                "Fullscreen error:",
+                error
+            );
 
-            return;
 
-        }
-
-
-        if (
-            element.requestFullscreen
-        ) {
-
-            await element.requestFullscreen();
+            return false;
 
         }
 
@@ -1726,57 +2470,128 @@ export default class GameBoyEmulator {
 
     /*
      * ========================================================
-     * STATE
+     * GET LOGS
      * ========================================================
      */
 
-    getState() {
+    getLogs() {
 
-        return {
+        return [
+            ...this.logs
+        ];
 
-            running:
-                this.running,
+    }
 
-            paused:
-                this.paused,
 
-            romLoaded:
-                this.romLoaded,
+    /*
+     * ========================================================
+     * GET LAST LOG
+     * ========================================================
+     */
 
-            frame:
-                this.frame,
+    getLastLog() {
 
-            cycles:
-                this.totalCycles,
+        if (
+            this.logs.length ===
+            0
+        ) {
 
-            clock:
-                this.CLOCK,
+            return null;
 
-            fps:
-                this.FRAME_RATE,
+        }
 
-            cpu:
-                this.cpu &&
-                typeof this.cpu.getState ===
-                "function"
-                    ? this.cpu.getState()
-                    : {},
 
-            ppu:
-                this.ppu &&
-                typeof this.ppu.getState ===
-                "function"
-                    ? this.ppu.getState()
-                    : {},
+        return this.logs[
+            this.logs.length - 1
+        ];
 
-            cartridge:
-                this.cartridge &&
-                typeof this.cartridge.getState ===
-                "function"
-                    ? this.cartridge.getState()
-                    : {}
+    }
 
-        };
+
+    /*
+     * ========================================================
+     * IS RUNNING
+     * ========================================================
+     */
+
+    isRunning() {
+
+        return this.running;
+
+    }
+
+
+    /*
+     * ========================================================
+     * IS PAUSED
+     * ========================================================
+     */
+
+    isPaused() {
+
+        return this.paused;
+
+    }
+
+
+    /*
+     * ========================================================
+     * GET CPU CYCLES
+     * ========================================================
+     */
+
+    getCycles() {
+
+        if (
+            this.cpu &&
+            Number.isFinite(
+                this.cpu.totalCycles
+            )
+        ) {
+
+            return this.cpu.totalCycles;
+
+        }
+
+
+        if (
+            this.cpu &&
+            Number.isFinite(
+                this.cpu.cycles
+            )
+        ) {
+
+            return this.cpu.cycles;
+
+        }
+
+
+        return this.cycles;
+
+    }
+
+
+    /*
+     * ========================================================
+     * GET FRAME
+     * ========================================================
+     */
+
+    getFrame() {
+
+        if (
+            this.ppu &&
+            Number.isFinite(
+                this.ppu.frameCount
+            )
+        ) {
+
+            return this.ppu.frameCount;
+
+        }
+
+
+        return this.frame;
 
     }
 
@@ -1789,7 +2604,7 @@ export default class GameBoyEmulator {
 
     destroy() {
 
-        this.pause();
+        this.stop();
 
 
         if (
@@ -1824,6 +2639,47 @@ export default class GameBoyEmulator {
 
         }
 
+
+        this.canvas =
+            null;
+
+        this.context =
+            null;
+
+        this.cartridge =
+            null;
+
+        this.destroyed =
+            true;
+
+
+        this.log(
+            "Emulator zniszczony."
+        );
+
     }
+
+}
+
+
+/*
+ * ============================================================
+ * GLOBAL HELPER
+ * ============================================================
+ *
+ * Allows:
+ *
+ *   window.WebBktxGameBoy
+ *
+ * ============================================================
+ */
+
+if (
+    typeof window !==
+    "undefined"
+) {
+
+    window.WebBktxGameBoy =
+        GameBoyEmulator;
 
 }
